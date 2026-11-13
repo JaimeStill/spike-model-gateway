@@ -314,6 +314,12 @@ under 2 s. Counted from 11:27:23, when polling started, each row answered health
 - **The UI** through `ssh -N -L 3001:127.0.0.1:3001 gb10-2`, over Tailscale SSH, shows the
   read-only mode banner, the warning "UI is exposed without authentication", 2 gateways, and 4
   routes.
+- **Restart, unattended: configured, not shown.** Read at 15:19:03, after the slices, at review:
+  `docker inspect` on gb10-2 gives image `cr.agentgateway.dev/agentgateway:v1.7.0`,
+  `restart=unless-stopped`, and `started=2026-11-13T18:29:58Z` (the deploy at 13:29:58);
+  `systemctl is-enabled docker` gives `enabled`; and gb10-2 booted at 11:25:03, before the deploy.
+  So the restart policy is set and Docker starts at boot, but gb10-2 hasn't rebooted since the
+  deploy: no reboot has shown the gateway coming back unattended.
 
 **Gap: the UI has no authentication of its own.** Access to it rests on gb10-2's loopback and SSH
 to gb10-2, nothing else. Authenticating the UI with JWT or OIDC is on the paper list for slice 3's
@@ -335,6 +341,17 @@ inventory.
 - **No crossing aliases.** A chat naming `vision` sent to `/agent/v1` reached the agent row, which
   refused it: "The model `vision` does not exist. Valid aliases: agent." The route decides the row,
   and the row serves only its alias.
+- **Direct, at review.** The same requests sent direct to the rows, with no key, ran at
+  15:18:56–15:19:03, after the slices, at review. Each answered as through the gateway:
+  - agent chat: "Hello, how are you today?", 163 tokens;
+  - agent stream: 43 `data:` events, the same as through the gateway;
+  - Messages: "Red.", `end_turn`;
+  - Responses: "Mars.", `completed`;
+  - vision: "GATEWAY 7319", 300 tokens, the same as through the gateway;
+  - embedding: 2 vectors of 768.
+
+  The agent's replies and token counts differ from the gateway's in wording and in the reasoning
+  tokens sampled, as any two runs do. Audio was compared direct at 13:37:23, above.
 - **Usage read by detect.** The gateway's log line for the walk's chat carries `protocol=llm`,
   `op=chat`, `model=agent`, and the token usage read from the reply: 73 in, 198 out, 181
   reasoning, in 5,576 ms. The `/models` request's line names `route=default/agent` and
@@ -1064,7 +1081,19 @@ not touched. `infer_install` installed infer v0.1.0 with `go install` into
 - `chat` on agent answered "Mars.", completed, 112 tokens, 29 of them reasoning; on vision, "Hello
   to you!"; on audio, "Hello there now.".
 - `embed` on embedding returned two vectors of 768. The session's `jq` summary of the output hit a
-  parse error on one line of infer's output; the format of that line was not recorded.
+  parse error on one line of infer's output, explained by the recapture below.
+
+Recaptured at 15:19:10–15:19:12, after the slices, at review, with output and errors together
+(`2>&1`) in `.state/agentgateway/clients/infer-cli-1519.txt`, which holds no key:
+
+- `models` on each alias listed only that alias.
+- `chat` on agent answered "Mars.", completed, 122 tokens, 39 of them reasoning.
+- `embed` printed two JSON arrays of 768, one per line, then a plain line, `usage: 8 input tokens,
+  8 total tokens`. That line isn't JSON: it is the line `jq` failed to parse.
+
+**Note for v1.ai.client:** whether infer writes the `usage:` line to stdout or stderr is unverified,
+since the capture took both. If it is stdout, a JSON consumer piping `infer embed` breaks on it. This
+is a note, not a verified fix.
 
 **Behavior 12** did not trigger: both tiers and the CLI carried the key, in Bearer and in the
 header, so behaviors 10 and 11 stay in this task.
@@ -1154,16 +1183,17 @@ spike's mode.
 | infer with retries | waits the Retry-After, then 200, exit 0 | As expected: two 429s with `retry_after="1"`, about 1 s waited after each, then 200; 3.1 s, exit 0 |
 | Cap cells | only 2xx; `num_requests_waiting` above 0 past each cap; no Retry-After | Only 200s and no Retry-After in all four cells; waiting above 0 past the cap on agent, vision, and audio (the embedding row's gauges read 0 throughout). vLLM queues past every cap and never refuses, so a full row triggers no eviction |
 
-**The requirements.** Per requirement: native, partial, or gap, and what could fill it, native or
-existing tools first and an authored extension or callout last.
+**The requirements.** Per requirement, the brief's mark, `gap` or `none` (`none` when a native
+mechanism covers it, named in the notes), and what could fill it, native or existing tools first
+and an authored extension or callout last, with any partial cover noted there.
 
-| Requirement | agentgateway v1.7.0 | Mark | What could fill it |
+| Requirement | agentgateway v1.7.0 | Mark | What could fill it, and notes |
 | --- | --- | --- | --- |
 | Admission on `/metrics` per purpose floor: refuse or redirect a request when the row's live load (running, waiting, KV cache) passes a floor set per purpose | Nothing reads a backend's `/metrics`. The endpoint picker does, outside agentgateway, and it chooses among replicas of one model; its standard pickers score by queue and KV cache, not per-purpose floors. The in-flight limit is one count per port, not per purpose or row; a per-route rate limit counts requests a second, not concurrency | gap | 1. A per-row in-flight count set to each row's cap, if one could be scoped per route: v1.7.0 has none, so it is a gap even before metrics. 2. An existing EPP (the Inference Extension's) with its saturation thresholds, as a sidecar in standalone mode, on a `service` backend per row: native wiring, existing tool, but replica selection, not purpose admission. 3. An `extAuthz` or `extProc` service that reads `/metrics` and refuses past the floor (authored, last resort). |
 | Queueing past caps: hold requests at the gateway when a row is full, rather than pass them on or refuse | Nothing queues: the in-flight limit refuses at once (503), and vLLM queues behind it. The row's own queue is the only one | gap | vLLM's queue is the native one (`num_requests_waiting`), bounded only by its timeouts; a gateway-side queue would be authored. The cap cells measure how vLLM's queue grows. |
-| Capacity overflow to Foundry on GPU pressure or max sessions | Failover moves traffic only when a group is evicted, and eviction sees only unhealthy replies. A full vLLM row answers 200 slowly, so pressure never evicts it. With a gateway refusal in front (an in-flight or rate limit), the refusal is answered before backend selection, so it can't spill over either. A conditional virtual model routes on request attributes, not row load; a callout could route on load, but would need the load from elsewhere | gap (partial with a callout) | 1. Make the row refuse when full, so eviction can act: a vLLM-side limit that answers 429 or 503 with Retry-After past max sessions, then `unhealthyExpression` on 429 and Retry-After eviction move the next requests to a Foundry group (all native once the row refuses; whether vLLM can be made to refuse is for `priority`). 2. A virtual model's `callout` to a small service reading `/metrics` that names the local or Foundry model (native hook, authored service). 3. Route retries can't carry it: they don't wait out Retry-After and skip bodies over 64 KiB. All in the `llm` section, so all need one shared prefix. |
-| Overflow on host down | A down row gives connection failures or 5xx, which evict by default; with the row and Foundry in priority groups, traffic moves to Foundry until the eviction ends, then returns; a route retry sends the failed request on. For the routing form, `ai.groups` provides this without the `llm` section | native | Priority groups with eviction (routing form `ai.groups`, or a failover virtual model), plus a route retry on 502, 503, 504 and connection failure for the request that met the failure. Probed live in `priority`. |
-| Per-key token budgets on streamed traffic: count each key's tokens on streams as on other requests | Budgets and `tokens` rate limits count the usage read from the reply. On detect pass-through a stream carries usage only if the client sent `stream_options.include_usage`, so a stream without it counts no tokens (slice 4's streamed chat logged none). The `completions` route type sets it on every stream, but this config's `"*": detect` skips that | partial | 1. Clients send `include_usage` (GuideLLM already does). 2. An `ai` policy `transformations` entry that sets `stream_options` on streamed requests under detect (native, unverified). 3. Map `/v1/chat/completions` to the `completions` route type, which injects it (native; vision and audio content through it unverified). Details under slice 4's "Results". |
+| Capacity overflow to Foundry on GPU pressure or max sessions | Failover moves traffic only when a group is evicted, and eviction sees only unhealthy replies. A full vLLM row answers 200 slowly, so pressure never evicts it. With a gateway refusal in front (an in-flight or rate limit), the refusal is answered before backend selection, so it can't spill over either. A conditional virtual model routes on request attributes, not row load; a callout could route on load, but would need the load from elsewhere | gap | Partial with a callout (2. below). 1. Make the row refuse when full, so eviction can act: a vLLM-side limit that answers 429 or 503 with Retry-After past max sessions, then `unhealthyExpression` on 429 and Retry-After eviction move the next requests to a Foundry group (all native once the row refuses; whether vLLM can be made to refuse is for `priority`). 2. A virtual model's `callout` to a small service reading `/metrics` that names the local or Foundry model (native hook, authored service). 3. Route retries can't carry it: they don't wait out Retry-After and skip bodies over 64 KiB. All in the `llm` section, so all need one shared prefix. |
+| Overflow on host down | A down row gives connection failures or 5xx, which evict by default; with the row and Foundry in priority groups, traffic moves to Foundry until the eviction ends, then returns; a route retry sends the failed request on. For the routing form, `ai.groups` provides this without the `llm` section | none | Native: priority groups with eviction (routing form `ai.groups`, or a failover virtual model), plus a route retry on 502, 503, 504 and connection failure for the request that met the failure. Probed live in `priority`. |
+| Per-key token budgets on streamed traffic: count each key's tokens on streams as on other requests | Budgets and `tokens` rate limits count the usage read from the reply. On detect pass-through a stream carries usage only if the client sent `stream_options.include_usage`, so a stream without it counts no tokens (slice 4's streamed chat logged none). The `completions` route type sets it on every stream, but this config's `"*": detect` skips that | gap | Partial: a stream is counted only when its client sends `include_usage`. 1. Clients send `include_usage` (GuideLLM already does). 2. An `ai` policy `transformations` entry that sets `stream_options` on streamed requests under detect (native, unverified). 3. Map `/v1/chat/completions` to the `completions` route type, which injects it (native; vision and audio content through it unverified). Details under slice 4's "Results". |
 
 **What `priority` inherits.** The live overflow cells (Foundry, capped) depend on the shared
 prefix question: virtual models and callout are `llm`-section only; `ai.groups` priority groups
@@ -1286,8 +1316,8 @@ redacted. Steps 2 to 7 went as expected; step 8 was not run.
   gateway. The session pointed to the evidence so far: slice 1's streamed chat and revocation
   stream, and the streamed GuideLLM cells of slices 2 and 3. It then gave a streamed chat on agent
   (`curl -N`, `"stream": true`, `max_tokens` 300), which the architect ran: it streamed, and the
-  gateway logged it at 20:07:28Z with status 200 in 1,352 ms, but with no `gen_ai.usage` fields.
-  See the finding below.
+  gateway logged it at 20:07:28Z with status 200 in 1,352 ms, but with no `gen_ai.usage` fields
+  (the command is quoted under "Commands as run"). See the finding below.
 - **Step 5: the revoked key.** `401`; the log line reads "api key authentication failure: invalid
   credentials".
 - **Step 6: an unrouted path.** `404`, route not found.
@@ -1306,6 +1336,10 @@ redacted. Steps 2 to 7 went as expected; step 8 was not run.
 
 - **Step 8: not run.** It was optional, and slice 3 already showed the 429 live (the rate-limit
   probe under slice 3's "Results").
+- **Keys in argv.** The walk's commands, slice 1's and this one's, pass a key as
+  `-H "Authorization: Bearer $(cat …)"`, which puts the key in curl's argv on the laptop while it
+  runs; nothing reached the repository. Future walks should feed the header on stdin with
+  `curl -K -`, as the client helpers do.
 
 **Finding: a streamed request carries no token usage in the gateway's log unless the client sends
 `stream_options: {"include_usage": true}`.** vLLM adds a usage chunk to a stream only when the
@@ -1343,15 +1377,27 @@ the docs and source at `v1.7.0` and neither tried live:
 ## Commands as run
 
 Every command the logs hold, exactly as logged, with its time, from
-`.state/agentgateway/commands-*.log`; the output stays there, untracked. The architect's walks are
-under their slices' sections, slice 1's under "The walk" and slice 4's in its steps. A command that
-no log holds is named, not quoted, in its section: slice 3's commands run outside the helpers, and
-the streamed chat the architect ran during slice 4's walkthrough (its form is under that slice's
-"Results").
+`.state/agentgateway/commands-*.log`, in lines that start `+`; the output stays there, untracked.
+The commands that never reached the log are quoted too, in lines that start `~`, under a heading
+that says they were recovered from the session's transcript, not from the command log. Their text
+is verbatim from the transcript. Their times come from the session's tool output (local time) or
+from the gateway's access log (UTC, marked `Z`), and otherwise read "time not recorded". Where the
+recovery shortened a command with `...`, the line is quoted as given and marked "shortened in the
+recovery". The architect's walks are also under their slices' sections, slice 1's under "The walk"
+and slice 4's in its steps.
 
 ### 2026-11-13 · host updates and row restarts
 
-The architect's root steps, before the session's: on gb10-1 and gb10-2, in tmux,
+**Recovered from the session's transcript, not from the command log**: the session's read of the
+stack at session start, and of the hosts' engines clones, from the laptop:
+
+```text
+~ 11:09:06, laptop: { date -Is; for h in gb10-1 gb10-2; do echo "== $h"; timeout 60 ssh -o BatchMode=yes $h 'apt list --upgradable 2>/dev/null | grep -vc "^Listing"; uname -r; nvidia-smi --query-gpu=driver_version --format=csv,noheader; docker --version; ls /var/run/reboot-required 2>&1 | tail -1; docker ps --format "{{.Names}} {{.Image}} {{.Status}}"; git -C ~/spike-model-engines log --oneline -1 2>/dev/null || ls ~ | head'; done; echo "== framework"; timeout 60 ssh -o BatchMode=yes framework 'checkupdates 2>/dev/null | wc -l; uname -r; pacman -Q docker 2>/dev/null; docker ps --format "{{.Names}} {{.Image}} {{.Status}}"; git -C ~/spike-model-engines log --oneline -1 2>/dev/null || ls ~ | head'; for h in gb10-1 gb10-2 framework; do tailscale ping -c 1 $h | sed -E "s/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?/<addr>/g"; done; } 2>&1 | tee .state/agentgateway/stack-$(date +%F).txt
+~ time not recorded (11:1x), laptop: for h in gb10-1 gb10-2 framework; do echo "== $h"; ssh -o BatchMode=yes $h 'git -C ~/repos/spike-model-engines log --oneline -1; git -C ~/repos/spike-model-engines status -sb | head -2; cat ~/repos/spike-model-engines/host/vllm.env 2>/dev/null | grep -E "^VLLM_MODEL"'; done
+```
+
+The architect's root steps, recovered from the session's transcript as the architect ran them,
+times not recorded (between 11:10 and 11:25): on gb10-1 and gb10-2, in tmux,
 
 ```sh
 sudo apt update && sudo apt full-upgrade -y && sudo apt autoremove -y && cat /var/run/reboot-required 2>/dev/null; echo "exit $?"
@@ -1374,12 +1420,30 @@ reboot. The session's, once spike-model-engines' pull request #17 was merged:
 Each host's checkout came to `261879e`, and each update restarted its row's container under the
 row's new flags, exiting 0.
 
+**Recovered from the session's transcript, not from the command log**: the post-update read before
+the row restarts, the readiness poll after them (its first line at 11:27:23), and the row health
+check, from the laptop:
+
+```text
+~ 11:26:08, laptop: { date -Is; for h in gb10-1 gb10-2; do echo "== $h"; timeout 60 ssh -o BatchMode=yes $h 'uptime -p; apt list --upgradable 2>/dev/null | grep -vc "^Listing"; uname -r; tailscale version | head -1; docker ps --format "{{.Names}} {{.Image}} {{.Status}}"'; done; echo "== framework"; timeout 60 ssh -o BatchMode=yes framework 'checkupdates 2>/dev/null | wc -l; uname -r; tailscale version | head -1; docker ps --format "{{.Names}} {{.Image}} {{.Status}}"'; for hp in gb10-1:8000 gb10-2:8000 framework:8001 framework:8002; do printf "%s health " $hp; curl -s -o /dev/null -w "%{http_code}\n" --max-time 5 http://$hp/health; done; for h in gb10-1 gb10-2 framework; do tailscale ping -c 1 $h | sed -E "s/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?/<addr>/g"; done; } 2>&1 | tee .state/agentgateway/stack-after-$(date +%F).txt
+~ after 11:26:08, laptop: ssh -o BatchMode=yes gb10-1 'apt list --upgradable 2>/dev/null | grep -v ^Listing'
+~ about 11:27:20, laptop: start=$(date +%s); declare -A up; while [ ${#up[@]} -lt 4 ] && [ $(( $(date +%s)-start )) -lt 1500 ]; do for hp in gb10-1:8000 gb10-2:8000 framework:8001 framework:8002; do [ -n "${up[$hp]:-}" ] && continue; if [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://$hp/health)" = 200 ]; then up[$hp]=1; echo "$(date -Is) $hp healthy after $(( $(date +%s)-start ))s of polling: $(curl -s --max-time 5 http://$hp/v1/models | jq -c '[.data[].id]')"; fi; done; sleep 10; done | tee -a .state/agentgateway/rows-ready-$(date +%F).txt
+~ time not recorded (about 11:38), laptop: for hp in gb10-1:8000 gb10-2:8000 framework:8001 framework:8002; do printf "%s health %s models " $hp "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://$hp/health)"; curl -s --max-time 5 http://$hp/v1/models | jq -c '[.data[].id]'; done
+```
+
 ### 2026-11-13 · short names, the deploy, and the walk
 
 Whether a container on gb10-2 resolves the rows' short names (none does):
 
 ```text
 + 2026-11-13T11:39:44-05:00 gb10-2: for h in gb10-1 gb10-2 framework; do docker run --rm --entrypoint getent vllm/vllm-openai:v0.33.0 hosts "$h" >/dev/null && echo "$h resolves" || echo "$h does not resolve"; done; grep -E "^(nameserver|search)" /etc/resolv.conf | sed -E "s/[0-9.]+$/<ns>/; s/search .*/search <tailnet domains>/"
+```
+
+**Recovered from the session's transcript, not from the command log**: the resolver check behind
+`--add-host`, from the laptop:
+
+```text
+~ time not recorded (about 13:00), laptop: ssh -o BatchMode=yes gb10-2 'grep -c "^nameserver 127.0.0.53" /etc/resolv.conf; docker run --rm --entrypoint cat vllm/vllm-openai:v0.33.0 /etc/resolv.conf | grep -E "^nameserver" | sed -E "s/[0-9.]+$/<ns>/"; for h in gb10-1 framework; do tailscale ip -4 $h >/dev/null && echo "$h: tailscale ip ok"; done'
 ```
 
 The architect's walk, step 1, from the laptop: `mise run agentgateway-deploy`, which logs
@@ -1397,9 +1461,22 @@ keys, and runs:
 + 2026-11-13T13:29:58-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
 ```
 
-The walk's further steps, `docker logs` and `docker port` on gb10-2, the first requests, the
-key search, the 404 and refused probes, and the UI tunnel, are the commands under "The walk" above,
-run by the architect as written there.
+**Recovered from the session's transcript, not from the command log**: the architect's walk from the
+laptop, the deploy's invocation first (its commands are the `+` lines above), with times from the
+gateway's access log:
+
+```text
+~ 18:29:53Z-18:29:58Z (13:29:53 local), laptop: mise run agentgateway-deploy 2>&1 | tee -a .state/agentgateway/commands-$(date +%F).log
+~ time not recorded, gb10-2: docker logs agentgateway ; docker port agentgateway | sed "s/$(tailscale ip -4)/<tailnet>/"
+~ 18:32:41Z (13:32:41 local), laptop: curl -sS -o /dev/null -w '%{http_code}\n' http://gb10-2:3000/agent/v1/models
+~ 18:32:52Z (13:32:52 local), laptop: curl -sS -H "Authorization: Bearer $(cat .state/agentgateway/keys/architect)" http://gb10-2:3000/agent/v1/models | jq -r '.data[].id'
+~ 18:33:07Z (13:33:07 local), laptop: curl -sS -H "Authorization: Bearer $(cat .state/agentgateway/keys/architect)" -H 'Content-Type: application/json' -d '{"model":"agent","messages":[{"role":"user","content":"Say hello in five words."}],"max_tokens":256}' http://gb10-2:3000/agent/v1/chat/completions | jq '{model, content: .choices[0].message.content, usage}'
+~ time not recorded, laptop: ssh gb10-2 docker logs --tail 3 agentgateway
+~ time not recorded, laptop: ssh gb10-2 docker logs agentgateway 2>&1 | grep -F "$(cut -c1-8 .state/agentgateway/keys/architect)"
+~ time not recorded, laptop: curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat .state/agentgateway/keys/architect)" http://gb10-2:3000/ui
+~ time not recorded, laptop: curl -sS -m 5 -o /dev/null -w '%{http_code}\n' http://gb10-2:15000/ui
+~ time not recorded, laptop: ssh -N -L 3001:127.0.0.1:3001 gb10-2
+```
 
 ### 2026-11-13 · pass-through, refusals, and unrouted paths
 
@@ -1454,6 +1531,13 @@ with `--rawfile`, through the gateway and direct to the row.
 + 2026-11-13T13:37:38-05:00 laptop: curl -sS -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d '{"model":"vision","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' $GW/agent/v1/chat/completions | jq -c '{error: .error.message}'
 ```
 
+**Recovered from the session's transcript, not from the command log**: the read of the gateway's log
+after these requests:
+
+```text
+~ 13:37:38 or after, laptop: ssh -o BatchMode=yes gb10-2 'docker logs --since 2m agentgateway 2>&1' | grep -E "metrics|AGENT" | sed -E 's/src\.addr=[^ ]+/src.addr=<laptop>/' | cut -c1-260
+```
+
 ### 2026-11-13 · revocation
 
 From the laptop, with `$R` revoke-test's key. The 13:39:15 stream is the 13:38:00 request
@@ -1476,6 +1560,14 @@ again, logged abbreviated; it ran detached, and curl exited 0 at 13:39:53.
 + 2026-11-13T13:39:24-05:00 laptop: curl -sS -o /dev/null -w '%{http_code} revoke-test new request after revoke\n' -H "Authorization: Bearer $R" $GW/agent/v1/models
 + 2026-11-13T13:39:24-05:00 laptop: grep -c '^data: ' .state/agentgateway/revoke-stream.txt
 + 2026-11-13T13:39:53-05:00 laptop: grep -c '^data: ' .state/agentgateway/revoke-stream.txt; grep -o '"finish_reason":"[a-z]*"' .state/agentgateway/revoke-stream.txt | tail -1; tail -1 .state/agentgateway/revoke-stream.txt
+```
+
+**Recovered from the session's transcript, not from the command log**: the 13:39:15 stream exactly
+as run, which the log holds abbreviated, and the reads after the second revoke:
+
+```text
+~ 13:39:15, laptop: curl -sS -N -H "Authorization: Bearer $R" -H 'Content-Type: application/json' -d '{"model":"agent","stream":true,"messages":[{"role":"user","content":"Write a 600-word story about a lighthouse."}],"max_tokens":2000}' $GW/agent/v1/chat/completions > .state/agentgateway/revoke-stream.txt 2>&1 &
+~ about 13:40, laptop (shortened in the recovery): R=$(cat .state/agentgateway/keys/revoke-test); curl -sS -o /dev/null -w '%{http_code} revoke-test now\n' -H "Authorization: Bearer $R" http://gb10-2:3000/agent/v1/models; ssh -o BatchMode=yes gb10-2 'docker logs --since 5m agentgateway 2>&1 | grep -v "request gateway" | tail; ...'
 ```
 
 ### 2026-11-13 · the overhead cells
@@ -1534,6 +1626,20 @@ Each `cell` also ran `summarize`, whose lines are in the log, not here.
 + 2026-11-13T14:13:53-05:00 laptop: compare o-embed-d1 o-embed-g o-embed-d2
 ```
 
+### 2026-11-13 · the firewall reads
+
+**Recovered from the session's transcript, not from the command log**: between slices 2 and 3, about
+14:20–14:40, times not recorded, the session read the firewall state behind the fence the architect
+then removed (behavior 6), read-only and without root, from the laptop. The last command's output
+carried tailnet addresses unredacted, so no output of these reads is quoted here.
+
+```text
+~ time not recorded, laptop: gh release list -R chaifeng/ufw-docker --limit 3; ssh -o BatchMode=yes framework 'pacman -Qi ufw-docker 2>/dev/null | grep -E "^(Name|Version|Repository|URL)"; pacman -Qo $(command -v ufw-docker) 2>/dev/null; command -v ufw-docker'; for h in gb10-1 gb10-2; do ssh -o BatchMode=yes $h 'echo "== $(hostname)"; dpkg-query -W ufw 2>/dev/null || echo "ufw not installed"; command -v ufw-docker || echo "no ufw-docker"; systemctl is-enabled ufw 2>&1; systemctl is-active ufw 2>&1'; done
+~ time not recorded, laptop (shortened in the recovery): for h in gb10-1 gb10-2 framework; do ssh -o BatchMode=yes $h 'echo "== $(hostname)"; grep -E "^ENABLED" /etc/ufw/ufw.conf; grep -E "^DEFAULT_(INPUT|FORWARD|OUTPUT)_POLICY" /etc/default/ufw; ...'; done
+~ time not recorded, laptop: ssh -o BatchMode=yes framework 'grep -E "^### tuple|^-A" /etc/ufw/user.rules | grep "^### tuple"' | sed -E 's/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?/<v4>/g'
+~ time not recorded, laptop (shortened in the recovery): for h in gb10-1 gb10-2; do ssh -o BatchMode=yes $h 'echo "== $(hostname)"; ip -br link | awk "{print \$1, \$2}" | grep -v -E "^(veth|lo )"; ss -Hltn ...'; done
+```
+
 ### 2026-11-13 · the cap cells, probes, go-ai and infer
 
 From the laptop, from the repository root, `$(<.state/agentgateway/keys/<name>)` being the only
@@ -1541,11 +1647,8 @@ form in which a key appears. A deploy is logged by the commands it runs on gb10-
 `key <name>: existing` and `overlay <name>: applied` lines (in the log, not here): the access-log
 overlay at 14:43:38; `access-log rate-limit-agent` at 14:55:43; `in-flight-1` at 14:56:15; none at
 14:57:08; `key-header` at 14:58:46; and none at 14:58:50. `cell` logs the GuideLLM command it runs
-and its samplers, and `summarize`'s lines, printed twice for each run, stay in the log. The client
-helpers log the command each runs with its arguments joined, so the quoting of a curl's `-w` or
-`-d` argument is not shown. Commands run outside the helpers are not in the log and are not quoted:
-the 503 probe's keyless curl, the reads of the gateway's log in the 429 and 503 probes, and
-infer's `--retries 2` run against the in-flight limit.
+and its samplers, and `summarize`'s lines, printed twice for each run, stay in the log. The
+commands run outside the helpers follow the log's lines, recovered from the session's transcript.
 
 ```text
 + 2026-11-13T14:43:31-05:00 laptop: for row in agent:gb10-1:8000 vision:gb10-2:8000 audio:framework:8001 embedding:framework:8002; do printf "%s: " "${row%%:*}"; curl -sS --max-time 5 "http://${row#*:}/v1/models" | jq -c "[.data[].id]"; done; ssh gb10-2 docker stats --no-stream agentgateway; ssh gb10-2 head -1 "~/agentgateway/config.yaml"
@@ -1598,6 +1701,12 @@ infer's `--retries 2` run against the in-flight limit.
 + 2026-11-13T14:55:45-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models
 + 2026-11-13T14:55:45-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models
 + 2026-11-13T14:55:53-05:00 laptop: source scripts/clients-lib.sh
+```
+
+From here to 14:58:53, the client helpers log each command with its arguments joined, which loses
+curl's quoting: a `-w` format, a `-H` header, or a `-d` body shows without the quotes it ran with.
+
+```text
 + 2026-11-13T14:56:02-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -w %{http_code}\n http://gb10-2:3000/agent/v1/models
 + 2026-11-13T14:56:02-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -w %{http_code}\n http://gb10-2:3000/agent/v1/models
 + 2026-11-13T14:56:02-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/agent/v1 .state/agentgateway/bin/infer --retries 3 --retry-base-delay 500ms --retry-max-delay 15s chat Name a primary color.
@@ -1658,9 +1767,75 @@ infer's `--retries 2` run against the in-flight limit.
 = 2026-11-13T14:59:18-05:00 note: the clean-up ran as: git -C ~/architecture/go-ai worktree remove ~/experiments/spike-model-gateway/.state/agentgateway/go-ai
 ```
 
+**Recovered from the session's transcript, not from the command log**: the commands run outside the
+helpers. First the embedding cap cell's inspection, then the read of the gateway's log in the 429
+probe, the read after infer's retry run, the 503 probe as run, line by line (with the probe's
+keyless curl and infer's `--retries 2` run against the in-flight limit), and the header case's
+check:
+
+```text
+~ time not recorded (about 14:55), laptop (shortened in the recovery): grep -E "completed \||elapsed=" .state/agentgateway/cells/c-embed/guidellm.log ...; curl -s --max-time 5 http://framework:8002/metrics | grep -E "^vllm:num_requests_(running|waiting)" | head
+~ 14:55:45, laptop: ssh gb10-2 'docker logs --since 1m agentgateway 2>&1' | grep 'route=default/agent' | sed -E 's/src\.addr=[^ ]+/src.addr=<laptop>/' | tail -4 | cut -c1-330
+~ 14:56:05, laptop: ssh gb10-2 'docker logs --since 1m agentgateway 2>&1' | grep 'route=default/agent' | sed -E 's/src\.addr=[^ ]+/src.addr=<laptop>/' | tail -4 | grep -oE '^[^ ]+|http.path=[^ ]+|http.status=[0-9]+|endpoint=[^ ]+|retry_after="[0-9]+"' | paste -sd' ' | sed 's/ 2026/\n2026/g'
+~ 14:56:15, laptop: scripts/agentgateway-deploy.sh in-flight-1 2>&1 | tee -a $L | grep -E "overlay|valid|reloads|rror"; sleep 2
+~ 14:56:15, laptop: gw_curl architect -sS -N -o .state/agentgateway/inflight-stream.txt -H 'Content-Type: application/json' -d '{"model":"agent","stream":true,"messages":[{"role":"user","content":"Write a 400-word story about a lighthouse."}],"max_tokens":1500}' http://gb10-2:3000/agent/v1/chat/completions >/dev/null 2>&1 &
+~ 14:56:15, laptop: sleep 3
+~ 14:56:15, laptop: gw_curl architect -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models 2>&1 | grep -iE '^(HTTP|retry-after)'
+~ 14:56:15, laptop: curl -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models | grep -iE '^(HTTP|retry-after)'
+~ 14:56:15, laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/agent/v1 timeout 20 .state/agentgateway/bin/infer --retries 2 --retry-base-delay 500ms --retry-max-delay 2s models 2>&1 | tail -2
+~ 14:56:15, laptop: wait; echo "-- stream: $(grep -c '^data: ' .state/agentgateway/inflight-stream.txt) events, $(grep -o '"finish_reason":"[a-z]*"' .state/agentgateway/inflight-stream.txt | tail -1)"
+~ 14:56:15, laptop: echo "-- 503 lines in log: $(ssh gb10-2 'docker logs --since 2m agentgateway 2>&1' | grep -c 'http.status=503')"
+~ 14:58:5x, laptop: grep -E "^(=== RUN|--- (PASS|SKIP|FAIL)).*[Ee]mbed|^    --- .*[Ee]mbed|[Ee]mbed.*\([0-9.]+s\)" .state/agentgateway/clients/goai-tier-header.log | head; grep -E "^--- PASS" .state/agentgateway/clients/goai-tier-header.log | grep -v "(0.00s)"; ssh gb10-2 'docker logs --since 3m agentgateway 2>&1' | grep 'route=default/embedding' | grep -oE 'http.path=[^ ]+ http.version=[^ ]+ http.status=[0-9]+' | sort | uniq -c
+```
+
 The clean-up's `+` line is the planned form; the note after it records that the removal ran with
 the worktree's absolute path:
 
 ```sh
 git -C ~/architecture/go-ai worktree remove ~/experiments/spike-model-gateway/.state/agentgateway/go-ai
+```
+
+### 2026-11-13 · the walkthrough
+
+**Recovered from the session's transcript, not from the command log**, with times from the gateway's
+access log: the architect ran step 2's three commands joined on one line, time not recorded; steps 3
+to 7 as written under "Slice 4 · walkthrough" (step 3's loop, time not recorded; step 4's keyless
+chat at 20:06:49Z and keyed chat at 20:07:00Z; step 5's revoke-test at 20:07:44Z; step 6's
+`/metrics` at 20:08:04Z and again at 20:08:31Z; step 7's `docker stats` and `docker logs --tail 6`,
+time not recorded); and, between steps 4 and 5, the streamed chat the session gave in reply to the
+architect's question:
+
+```text
+~ time not recorded, laptop: ssh gb10-2 head -1 '~/agentgateway/config.yaml' ; ssh gb10-2 "docker ps --filter name=agentgateway --format '{{.Names}}  {{.Image}}  {{.Status}}'" ; ssh gb10-2 'docker port agentgateway | sed "s/$(tailscale ip -4)/<tailnet>/"'
+~ 20:07:28Z (15:07:28 local), laptop: curl -sS -N -H "Authorization: Bearer $(cat .state/agentgateway/keys/architect)" -H 'Content-Type: application/json' -d '{"model":"agent","stream":true,"messages":[{"role":"user","content":"Count from 1 to 10."}],"max_tokens":300}' http://gb10-2:3000/agent/v1/chat/completions
+```
+
+### 2026-11-13 · after the reviews
+
+From the laptop, after the slices, at review: behavior 3's requests direct to the rows and
+behavior 2's restart read-out (15:18:56–15:19:03), then the infer CLI recapture (15:19:10–15:19:12),
+whose helper logs each command with its arguments joined:
+
+```text
++ 2026-11-13T15:18:56-05:00 laptop: curl -sS -H 'Content-Type: application/json' -d '{"model":"agent","messages":[{"role":"user","content":"Say hello in five words."}],"max_tokens":256}' http://gb10-1:8000/v1/chat/completions | jq -c '{model, content: .choices[0].message.content, usage: .usage.total_tokens}'
++ 2026-11-13T15:18:59-05:00 laptop: curl -sS -N -H 'Content-Type: application/json' -d '{"model":"agent","stream":true,"messages":[{"role":"user","content":"Count from 1 to 5."}],"max_tokens":200}' http://gb10-1:8000/v1/chat/completions | grep -c '^data: '
++ 2026-11-13T15:19:00-05:00 laptop: curl -sS -H 'Content-Type: application/json' -d '{"model":"agent","max_tokens":300,"messages":[{"role":"user","content":"Name a primary color."}]}' http://gb10-1:8000/v1/messages | jq -c '{type, model, stop_reason, text: [.content[] | select(.type=="text") | .text], usage}'
++ 2026-11-13T15:19:01-05:00 laptop: curl -sS -H 'Content-Type: application/json' -d '{"model":"agent","max_output_tokens":300,"input":"Name a planet."}' http://gb10-1:8000/v1/responses | jq -c '{object, model, status, text: [.output[] | select(.type=="message") | .content[].text], usage: .usage.total_tokens}'
++ 2026-11-13T15:19:03-05:00 laptop: jq -n --arg img "data:image/jpeg;base64,$(base64 -w0 .state/agentgateway/assets/text.jpg)" '{model:"vision",max_tokens:100,messages:[{role:"user",content:[{type:"image_url",image_url:{url:$img}},{type:"text",text:"What text is in this image? Answer with the text only."}]}]}' | curl -sS -H 'Content-Type: application/json' -d @- http://gb10-2:8000/v1/chat/completions | jq -c '{model, text: .choices[0].message.content, usage: .usage.total_tokens}'
++ 2026-11-13T15:19:03-05:00 laptop: curl -sS -H 'Content-Type: application/json' -d '{"model":"embedding","input":["agentgateway passes requests through.","A second sentence."]}' http://framework:8002/v1/embeddings | jq -c '{model, n: (.data|length), dims: (.data[0].embedding|length), usage}'
++ 2026-11-13T15:19:03-05:00 laptop: ssh gb10-2 "docker inspect agentgateway --format '{{.Config.Image}} restart={{.HostConfig.RestartPolicy.Name}} started={{.State.StartedAt}}'; systemctl is-enabled docker; uptime -s"
++ 2026-11-13T15:19:10-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-13T15:19:10-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/agent/v1 .state/agentgateway/bin/infer models
++ 2026-11-13T15:19:10-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/vision/v1 .state/agentgateway/bin/infer models
++ 2026-11-13T15:19:10-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/audio/v1 .state/agentgateway/bin/infer models
++ 2026-11-13T15:19:10-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/embedding/v1 .state/agentgateway/bin/infer models
++ 2026-11-13T15:19:10-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/agent/v1 .state/agentgateway/bin/infer chat Name a planet.
++ 2026-11-13T15:19:12-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/embedding/v1 .state/agentgateway/bin/infer embed first passage second passage
+```
+
+**Recovered from the session's transcript, not from the command log**: the wrapper the recapture ran
+in, which wrote its output to `.state/agentgateway/clients/infer-cli-1519.txt`:
+
+```text
+~ 15:19, laptop: O=.state/agentgateway/clients/infer-cli-$(date +%H%M).txt; { for a in agent vision audio embedding; do echo "-- $a models"; infer_at "$a" models; done; echo "-- agent chat"; infer_at agent chat "Name a planet."; echo "-- embedding embed"; infer_at embedding embed "first passage" "second passage"; } > $O 2>&1
 ```
