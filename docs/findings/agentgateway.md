@@ -1172,8 +1172,104 @@ nor agentgateway gives on load.
 
 ## Slice 4 · walkthrough
 
-The architect's walkthrough from this finding: an alias's `/models`, a chat with and without a key,
-a revoked key, and the gateway container's read-outs. Pending.
+The architect's walkthrough of the gateway as it stands after slice 3, run on the laptop from the
+repository root, one step at a time. It changes nothing on the hosts except in step 8, which is
+optional and leaves the configuration as it found it. Results are recorded under "Results" below,
+filled after the walk.
+
+1. **What agentgateway is.** An open-source proxy for AI traffic, here one container on gb10-2
+   that serves each alias's base URL, `/<alias>/v1`, as a route to its row, admitting only
+   requests with a listed consumer key and reading each reply's model and token usage. It is set
+   up from one YAML file, deployed by `scripts/agentgateway-deploy.sh` and reloaded in place on
+   change; what it provides is under [agentgateway](#agentgateway-1), and how it is configured
+   under [The configuration](#the-configuration).
+
+2. **The live config and the container.** Purpose: confirm no probe overlay is live and the
+   container is up, with its consumer port on the tailnet and its UI port on loopback.
+
+   ```sh
+   ssh gb10-2 head -1 '~/agentgateway/config.yaml'
+   ssh gb10-2 "docker ps --filter name=agentgateway --format '{{.Names}}  {{.Image}}  {{.Status}}'"
+   ssh gb10-2 'docker port agentgateway | sed "s/$(tailscale ip -4)/<tailnet>/"'
+   ```
+
+   Expected: `# overlays: none`; one line, `agentgateway  cr.agentgateway.dev/agentgateway:v1.7.0
+   Up ...`; `3000/tcp -> <tailnet>:3000` and `3001/tcp -> 127.0.0.1:3001`, and nothing for 15000.
+   (`docker ps` is given a format without its ports column, which would show the tailnet address.)
+
+3. **Each alias's models.** Purpose: each base URL reaches its own row, which lists its alias
+   alone.
+
+   ```sh
+   for a in agent vision audio embedding; do
+     printf '%s: ' "$a"; curl -sS -H "Authorization: Bearer $(cat .state/agentgateway/keys/architect)" "http://gb10-2:3000/$a/v1/models" | jq -r '[.data[].id] | join(",")'
+   done
+   ```
+
+   Expected: `agent: agent`, `vision: vision`, `audio: audio`, `embedding: embedding`.
+
+4. **A chat on agent, without a key and with one.** Purpose: the key policy refuses a request
+   with no key, and passes a keyed one through with its usage.
+
+   ```sh
+   curl -sS -o /dev/null -w '%{http_code}\n' -H 'Content-Type: application/json' -d '{"model":"agent","messages":[{"role":"user","content":"Say hello in five words."}],"max_tokens":256}' http://gb10-2:3000/agent/v1/chat/completions
+   curl -sS -H "Authorization: Bearer $(cat .state/agentgateway/keys/architect)" -H 'Content-Type: application/json' -d '{"model":"agent","messages":[{"role":"user","content":"Say hello in five words."}],"max_tokens":256}' http://gb10-2:3000/agent/v1/chat/completions | jq '{model, content: .choices[0].message.content, usage}'
+   ```
+
+   Expected: `401`; then `model` `agent`, a short reply, and `usage` with its prompt, completion,
+   and total tokens.
+
+5. **The revoked key.** Purpose: a key whose entry was removed from the configuration is refused,
+   though its file is still on the laptop. `revoke-test` was revoked in slice 1.
+
+   ```sh
+   curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat .state/agentgateway/keys/revoke-test)" http://gb10-2:3000/agent/v1/models
+   ```
+
+   Expected: `401`.
+
+6. **An unrouted path.** Purpose: a valid key reaches only the alias routes; vLLM's `/metrics`
+   isn't one.
+
+   ```sh
+   curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat .state/agentgateway/keys/architect)" http://gb10-2:3000/metrics
+   ```
+
+   Expected: `404`, the gateway's "route not found": an alias's routes start at `/<alias>/v1`.
+
+7. **The gateway's read-outs.** Purpose: what the gateway costs at rest, and what it logged for
+   the walk's requests.
+
+   ```sh
+   ssh gb10-2 docker stats --no-stream agentgateway
+   ssh gb10-2 'docker logs --tail 6 agentgateway 2>&1' | sed -E 's/src\.addr=[^ ]+/src.addr=<laptop>/'
+   ```
+
+   Expected: one `docker stats` line with the container's CPU % near 0 and its memory use; then
+   the log's last lines, the walk's latest requests, each with its `http.status`: the agent
+   route's lines name `route=default/agent`, and the keyed chat's line its model and token usage.
+   Each reads `src.addr=<laptop>`, and none carries a key.
+
+8. **Optional: the 429 on demand.** Purpose: see a gateway refusal live, as v1.ai.client's
+   acceptance would; the steps are under
+   [On demand: the refusals for v1.ai.client's acceptance](#on-demand-the-refusals-for-v1aiclients-acceptance).
+   Apply the rate limit on agent (2 requests, refilled every 10 s), trip it with three requests
+   within 10 s, then deploy with no overlay to remove it.
+
+   ```sh
+   scripts/agentgateway-deploy.sh rate-limit-agent
+   for i in 1 2 3; do curl -sS -o /dev/null -D - -H "Authorization: Bearer $(cat .state/agentgateway/keys/architect)" http://gb10-2:3000/agent/v1/models | grep -iE '^(HTTP|retry-after)'; done
+   scripts/agentgateway-deploy.sh
+   ssh gb10-2 head -1 '~/agentgateway/config.yaml'
+   ```
+
+   Expected: the deploy prints `overlay rate-limit-agent: applied` and reloads in place; two
+   `HTTP/1.1 200`, then `HTTP/1.1 429` with a `retry-after` of 10 or less; after the second
+   deploy, `# overlays: none`.
+
+### Results
+
+Filled after the walk.
 
 ## Commands as run
 
