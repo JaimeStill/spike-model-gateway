@@ -7,7 +7,7 @@
 ## Tasks
 
 1. [x] agentgateway
-2. [ ] litellm
+2. [ ] routing
 3. [ ] priority
 4. [ ] answer
 
@@ -97,13 +97,22 @@
 - agentgateway: go-ai's and infer's tiers ran from a detached go-ai worktree at
   `tools/infer/v0.1.0`, since the `v0.1.0` tag's tier carries no credentials; go-ai's working tree
   is untouched.
+- plan: LiteLLM is dropped as a live candidate (architect, 2026-11-13): its supply-chain compromise
+  and 2026 advisories, a Python runtime whose Rust port isn't production-ready, and single-vendor
+  governance, where agentgateway and Agent Router are Agentic AI Foundation projects. It stays on
+  paper as the feature reference in `answer`'s gateway comparison, beside Bifrost, Agent Router,
+  Kong, Portkey, Helicone, and TensorZero (archived). Rejected: Bifrost live in litellm's place,
+  unless agentgateway can't close priority's gaps natively.
+- plan: task `routing` replaces `litellm`: agentgateway's config off the legacy inline `ai` route
+  form, the base-URL choice, and other config optimizations, before priority builds on it.
+- plan: `priority` runs on agentgateway alone and adds budgets counting streamed requests' usage;
+  the dot-segment hardening goes to `answer`'s gateway document as a requirement.
+- plan: the "only network path" pending edit is applied in this plan's coordinator pull request,
+  and v1.ai.client's acceptance now waits on agentgateway (shipped), not the whole spike.
+- plan: priority's brief is planned in its own `start` session, not here.
 
 ## Pending edits
 
-- coordinator · roadmap: `goals.experiment.hosting.spike-model-gateway`'s summary drops "and is
-  the only network path to the rows" as a dev requirement, noting that production's network
-  security belongs to the networking and platform teams; its `agentgateway` task's proof drops "a
-  direct tailnet request to a row fails" (architect, 2026-11-13).
 - coordinator · experiment.hosting intake: spike-model-engines' `docs/engines/vllm/api.md` and
   `models.md` are stale since its pull request #17: requests to the four standing rows now name the
   alias, while the guide's examples send the Hugging Face repository. This spike changes only

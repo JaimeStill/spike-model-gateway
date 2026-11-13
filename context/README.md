@@ -2,8 +2,8 @@
 
 spike-model-gateway settles the gateway that sits between consumers and the workstations' vLLM
 rows: gb10-1 serves the agent, gb10-2 vision, and the Framework audio and embedding, one row per
-purpose with no failover. agentgateway and LiteLLM are tried live from gb10-2. Agent Router, vLLM's
-production-stack router, and the rest are weighed on paper. It gives evidence for the gateway
+purpose with no failover. agentgateway, an Agentic AI Foundation project, is tried live from gb10-2.
+LiteLLM, Bifrost, Agent Router, vLLM's production-stack router, and the rest are weighed on paper. It gives evidence for the gateway
 v1.ai.hosting builds. The spike decides nothing itself.
 
 The spike is the sub-goal `experiment.hosting.spike-model-gateway` in the coordinator's roadmap,
@@ -42,7 +42,7 @@ The answer is in the top-level [`README.md`](../README.md#the-answer).
    production's concern, for the networking and platform teams.
 3. **Caps.** At each cap (agent 12, vision 16, audio 4, embedding 128): what queues, and what
    returns 429 or 503 with Retry-After, against go-ai's retry set.
-4. **Admission.** Admission on vLLM's `/metrics` against static caps: what each gateway does
+4. **Admission.** Admission on vLLM's `/metrics` against static caps: what agentgateway does
    natively.
 5. **Embedding limit.** Embedding held to 34 requests a second while audio holds RTFx ≥5.
 6. **Priority.** Per-consumer budgets, rate limits, and priority: chat holds its floor while a
@@ -52,8 +52,11 @@ The answer is in the top-level [`README.md`](../README.md#the-answer).
    leave the self-hosted machines.
 8. **go-ai.** go-ai's integration tier, unchanged, through the gateway, with each `AI_*_BASE_URL`
    set to its purpose URL, and the released `infer` CLI's one-listed-model fallback.
-9. **Traces.** Each gateway's OpenTelemetry traces.
-10. **On paper.** Agent Router, vLLM's production-stack router, Kubernetes portability, JWT/OIDC,
+9. **Traces.** agentgateway's OpenTelemetry traces.
+10. **On paper.** A gateway comparison with LiteLLM as the feature reference (not tried live: its
+    supply-chain compromise and 2026 advisories, a Python runtime, single-vendor governance),
+    Bifrost, Agent Router, Kong, Portkey, Helicone, and TensorZero (archived); vLLM's
+    production-stack router, Kubernetes portability, JWT/OIDC,
     production's Azure Container Apps routing, IL6, and a cheaper chat tier.
 11. **The decision.** Whether a gateway fronts the stack, which one, and its access control, with
     its configuration as requirements for v1.ai.hosting.
@@ -91,8 +94,8 @@ The experiment's rules, in `ai-hosting.md`, govern every session. In short:
   GuideLLM cells in [`bench/`](../bench/README.md), and
   [`scripts/clients-lib.sh`](../scripts/clients-lib.sh) runs go-ai's and infer's tiers, the infer
   CLI, and curl through the gateway, each with a key read from its file.
-- **Planned:** LiteLLM's bring-up, admission on `/metrics`, per-key priority and budgets,
-  embedding's rate limit, Azure AI Foundry overflow, OpenTelemetry traces through a Collector, and
+- **Planned:** agentgateway's config off the legacy route form, admission on `/metrics`, per-key
+  priority and budgets (streamed usage included), embedding's rate limit, Azure AI Foundry overflow, OpenTelemetry traces through a Collector, and
   the gateway document, the decision and its configuration as requirements for v1.ai.hosting.
 
 ## Path
@@ -102,12 +105,16 @@ The tasks, in the order they run, each with the evidence it proves:
 1. `agentgateway`: agentgateway v1.7.0 on gb10-2, with each row serving under its alias through a
    spike-model-engines `host/` pull request (evidence 1–4, 8). Its finding is
    [`docs/findings/agentgateway.md`](../docs/findings/agentgateway.md).
-2. `litellm`: LiteLLM with Postgres virtual keys, on the same cells, with an agentgateway anchor
-   cell (evidence 1–4, 8).
-3. `priority`: Azure AI Foundry overflow, with priority and budgets on both gateways in one session
-   (evidence 5–7).
-4. `answer`: traces through an OpenTelemetry Collector, the paper sections, the gateway document,
-   and the answer (evidence 9–11).
+2. `routing`: agentgateway's config off the inline `ai` route backends its UI labels "legacy",
+   to the `llm` section or another non-legacy form, with the per-alias base URLs kept or replaced
+   by one shared `/v1`, and other config optimizations; the tiers pass through the chosen form
+   (evidence 1, 8).
+3. `priority`: on agentgateway alone, in routing's form: Azure AI Foundry overflow, per-key
+   priority and budgets counting streamed usage, embedding's limit, the Framework down until
+   `/health` (evidence 5–7).
+4. `answer`: traces through an OpenTelemetry Collector, the paper sections with the gateway
+   comparison, the gateway document (dot-segment hardening among its requirements), and the
+   answer (evidence 9–11).
 
 ## References
 
