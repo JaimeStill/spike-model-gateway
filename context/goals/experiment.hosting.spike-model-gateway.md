@@ -242,6 +242,15 @@ slices 4/4 committed (slice 1: 48027e3; slice 2: 4b55cc6, 93405a0; slice 3: 64ce
   directly on the tailnet and the gateway is not the only network path. It supersedes round 2's
   ufw decision. Rejected: ufw with ufw-docker on the GB10s and narrowed Framework rules, as
   overhead the spike doesn't need.
+- agentgateway: behavior 15 amended (architect, 2026-11-13): the finding quotes every command the
+  command log holds and those recovered from the session's transcript; times that weren't recorded
+  read "time not recorded", 4 recovered lines are marked shortened, and the client helpers' lines
+  lose curl's quoting since the helpers log their arguments joined. Later tasks log every command,
+  the walks included, through the helpers.
+- agentgateway: behavior 2's unattended restart is shown by a reboot of gb10-2 (architect,
+  2026-11-13), not taken from the restart policy alone.
+- agentgateway: the brief's Door line follows behaviors 4 and 6 as amended (no ufw rules; a key is
+  revoked by removing its name and deploying).
 
 ## Pending edits
 
