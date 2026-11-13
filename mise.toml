@@ -14,3 +14,7 @@ run = "scripts/check.sh"
 description = "Report every pin behind its latest, exiting nonzero if any"
 run = "scripts/currency.sh"
 quiet = true
+
+[tasks.agentgateway-deploy]
+description = "Deploy agentgateway to gb10-2 over Tailscale SSH, idempotently, printing each command run"
+run = "scripts/agentgateway-deploy.sh"
