@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Deploys agentgateway to gb10-2 from the laptop over Tailscale SSH, from gateway/agentgateway/:
-# config.yaml and the image and ports of deploy.env. Idempotent. It copies the config beside the
-# live one, pulls the pinned image if gb10-2 lacks it, validates the copy with that image, and
-# moves it into place, where agentgateway reloads it with no restart. It then creates the container
-# again only when its image or flags changed, or starts it if it is stopped; otherwise the config
-# refresh is all a re-run does.
+# config.yaml and the image and ports of deploy.env. Idempotent. It creates any consumer key
+# config.yaml names that this machine lacks, renders the config with each key's hash, copies that
+# beside the live one, pulls the pinned image if gb10-2 lacks it, validates the copy with that
+# image, and moves it into place, where agentgateway reloads it with no restart. It then creates
+# the container again only when its image or flags changed, or starts it if it is stopped;
+# otherwise the config refresh is all a re-run does.
 #
 # Each command is printed to stderr before it runs, as `+ <time> <host>: <command>`, the form of
 # .state/<task>/commands-*.log, so a finding can quote it exactly. Commands run on gb10-2 are sent
@@ -24,11 +25,62 @@ on_host() {
   ssh "$host" "$1"
 }
 
+config=gateway/agentgateway/config.yaml
+state=.state/agentgateway
+keys=$state/keys
+
+# Keys. config.yaml commits each key's name only, as the marker `keyHash: sha256:@@<name>@@`; the
+# names are read from the markers, so adding an entry is all it takes to issue a key. A missing key
+# is created on this machine, 0600 in a 0700 directory, and an existing one is reused, so a re-run
+# changes nothing. Only names are printed: no key or hash reaches the terminal or the command log.
+umask 077
+mkdir -p "$keys"
+chmod 700 "$keys"
+mapfile -t names < <(grep -oP '^\s*- keyHash: sha256:@@\K[a-z0-9-]+(?=@@\s*$)' "$config")
+if ((${#names[@]} == 0)); then
+  echo "agentgateway: no key markers in $config" >&2
+  exit 1
+fi
+declare -A hashes
+for name in "${names[@]}"; do
+  if [[ -e $keys/$name ]]; then
+    echo "key $name: existing"
+  else
+    openssl rand -hex 32 >"$keys/$name"
+    echo "key $name: created"
+  fi
+  key=$(<"$keys/$name")
+  # agentgateway's hash of a presented key: sha256 of its exact characters, no newline, as lowercase
+  # hex (APIKeyHash::from_raw_key). printf is a builtin, so the key is never in a process's argv.
+  hash=$(printf %s "$key" | sha256sum)
+  hashes[$name]=${hash%% *}
+done
+
+# The copy sent to gb10-2: config.yaml with each marker replaced by its key's hash. It is written
+# only under .state/, which is untracked, and removed on exit. Replaced in bash, not by sed, so no
+# hash is in a command's argv either.
+rendered=$(mktemp "$state/config.rendered.XXXXXX.yaml")
+trap 'rm -f "$rendered"' EXIT
+marker='^(.*)sha256:@@([a-z0-9-]+)@@(.*)$'
+while IFS= read -r line || [[ -n $line ]]; do
+  if [[ $line =~ $marker && -n ${hashes[${BASH_REMATCH[2]}]+set} ]]; then
+    line="${BASH_REMATCH[1]}sha256:${hashes[${BASH_REMATCH[2]}]}${BASH_REMATCH[3]}"
+  fi
+  printf '%s\n' "$line"
+done <"$config" >"$rendered"
+# A marker left over, or a keyHash that isn't a full hash, would deploy a key list that admits no
+# one under that name; stop before anything is sent.
+if grep -qP '@@[a-z0-9-]+@@' "$rendered" ||
+  grep -P '^\s*- keyHash:' "$rendered" | grep -vqP '^\s*- keyHash: sha256:[0-9a-f]{64}\s*$'; then
+  echo "agentgateway: a key marker is left in the rendered config; nothing was sent" >&2
+  exit 1
+fi
+
 on_host 'mkdir -p ~/agentgateway'
 
 printf '+ %s laptop: %s\n' "$(date -Iseconds)" \
-  "ssh $host 'cat > ~/agentgateway/config.yaml.next' < gateway/agentgateway/config.yaml" >&2
-ssh "$host" 'cat > ~/agentgateway/config.yaml.next' <gateway/agentgateway/config.yaml
+  "ssh $host 'cat > ~/agentgateway/config.yaml.next' < $rendered" >&2
+ssh "$host" 'cat > ~/agentgateway/config.yaml.next' <"$rendered"
 
 on_host "docker image inspect $AGW_IMAGE >/dev/null 2>&1 || docker pull $AGW_IMAGE"
 

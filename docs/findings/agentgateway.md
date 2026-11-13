@@ -44,8 +44,9 @@ directory mounted read-only, and watches the file: a changed file is reloaded in
 restart, so deploying a config change (a route, a key revoked) never drops the connections that
 are running. Settings under `config:` are read once, at start. The image runs as the deploying
 user. [`scripts/agentgateway-deploy.sh`](../../scripts/agentgateway-deploy.sh)
-(`mise run agentgateway-deploy`) copies the file, validates it with the pinned image, moves it into
-place, and creates the container only when its image or flags change.
+(`mise run agentgateway-deploy`) fills each consumer key's hash into a copy of the file ("Keys"),
+copies that, validates it with the pinned image, moves it into place, and creates the container
+only when its image or flags change.
 
 **What it provides, as used in this task:**
 
@@ -133,28 +134,28 @@ still with no address written down.
 
 ## Keys
 
-Each consumer key is a random 256-bit value, written as 64 hex characters, and lives in the
-architect's keeper or in `.state/agentgateway/keys/`, untracked. Only its hash is committed, in
-`config.yaml`, as `keyHash: sha256:<hex>`: the lowercase hex sha256 of the key's exact characters,
-with no newline, which is how agentgateway hashes a presented key (`APIKeyHash::from_raw_key` in
+Each consumer key is a random 256-bit value, written as 64 hex characters, kept on the deploying
+machine in `.state/agentgateway/keys/<name>`, untracked (the directory 0700, each file 0600).
+Only the key names are committed. In `config.yaml` each entry's `keyHash` is the marker
+`sha256:@@<name>@@`, beside `metadata: name: <name>`, so the entries are the list of keys that
+exist. A consumer sends its key as `Authorization: Bearer <key>`.
+
+agentgateway lists a key by `keyHash: sha256:<hex>`: the lowercase hex sha256 of the key's exact
+characters, with no newline, which is how it hashes a presented key (`APIKeyHash::from_raw_key` in
 `crates/agentgateway/src/http/apikey.rs`). `sha256sum` of agentgateway's own test key gives the hash
-its tests expect. A consumer sends the key as `Authorization: Bearer <key>`.
+its tests expect.
 
-On the laptop, from the repository root, for each key named in `config.yaml`:
+[`scripts/agentgateway-deploy.sh`](../../scripts/agentgateway-deploy.sh) fills the hashes in on each
+deploy, before it sends anything. It reads the names from the markers, creates any key the machine
+lacks (`openssl rand -hex 32`) and reuses any it has, and renders a copy of `config.yaml` with each
+marker replaced by its key's `sha256:<hex>`, in a temporary file under `.state/agentgateway/`,
+removed on exit. It stops, sending nothing, if a marker or a `keyHash` that isn't a full hash is
+left in the copy. That copy, not the committed file, goes to gb10-2. It prints each name as
+`key <name>: created` or `key <name>: existing`, and no key or hash. Because existing keys are
+reused, a re-run renders the same copy.
 
-```sh
-mkdir -p .state/agentgateway/keys && chmod 700 .state/agentgateway/keys
-for name in architect bench go-ai revoke-test; do
-  key=.state/agentgateway/keys/$name
-  [ -e "$key" ] || (umask 077 && openssl rand -hex 32 > "$key")
-  printf '%s sha256:%s\n' "$name" "$(printf %s "$(cat "$key")" | sha256sum | cut -d' ' -f1)"
-done
-```
-
-A key file that exists is kept, so a rerun prints the same hashes. Each printed hash replaces its
-name's all-zero placeholder in `config.yaml`, which matches no key; the config is committed with
-the hashes, then deployed. To revoke a key, delete its entry and deploy: the reload takes effect
-with no restart, and requests already running finish.
+Adding an entry and deploying issues a key. Removing an entry and deploying revokes that key: the
+reload takes effect with no restart, and requests already running finish.
 
 ## Slice 1 · bring-up and pass-through
 
@@ -182,34 +183,44 @@ ssh gb10-2 'for h in gb10-1 gb10-2 framework; do docker run --rm --entrypoint ge
 
 ### The walk
 
-The architect's first walk of agentgateway, by hand, the steps `mise run agentgateway-deploy` takes
-afterwards. On the laptop, from the repository root, generate the keys and put their hashes in
-`config.yaml` ("Keys"), then:
+The architect's first walk of agentgateway. First read
+[`scripts/agentgateway-deploy.sh`](../../scripts/agentgateway-deploy.sh), then, on the laptop, from
+the repository root, run it once:
 
 ```sh
-ssh gb10-2
+mise run agentgateway-deploy
 ```
 
-On gb10-2:
+It prints `key <name>: created` for each of the four keys and each command it runs on gb10-2, and
+ends with the container's `docker ps` line.
+
+**What the deploy does underneath.** The same steps by hand, for reading the mechanics; the walk
+doesn't run them. On the laptop, for each name in `config.yaml`, create the key if it is missing,
+then render a copy with each marker replaced by its key's hash and send it:
 
 ```sh
-docker pull cr.agentgateway.dev/agentgateway:v1.7.0
-mkdir -p ~/agentgateway
+mkdir -p .state/agentgateway/keys && chmod 700 .state/agentgateway/keys
+name=architect; key=.state/agentgateway/keys/$name
+[ -e "$key" ] || (umask 077 && openssl rand -hex 32 > "$key")
+hash=$(printf %s "$(cat "$key")" | sha256sum | cut -d' ' -f1)
+# ...and so for each name, replacing sha256:@@<name>@@ with sha256:$hash in a copy under .state/
+ssh gb10-2 'mkdir -p ~/agentgateway && cat > ~/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.yaml
 ```
 
-On the laptop, copy the config:
+On gb10-2, pull the image, validate the copy with it, move it into place, and start the container.
+The label is the hash the deploy script gives these flags, so its next run finds this container
+current and only refreshes the config.
 
 ```sh
-ssh gb10-2 'cat > ~/agentgateway/config.yaml' < gateway/agentgateway/config.yaml
-```
-
-On gb10-2, validate it with the image, start the container, and read its log. The label is the
-hash the deploy script gives these flags, so its next run finds this container current and only
-refreshes the config.
-
-```sh
-docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml --validate-only
+docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
+docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
+mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml
 docker run --detach --name agentgateway --restart unless-stopped --user "$(id -u):$(id -g)" --publish "$(tailscale ip -4):3000:3000" --publish 127.0.0.1:3001:3001 --volume "$HOME/agentgateway:/config:ro" --add-host "gb10-1:$(tailscale ip -4 gb10-1)" --add-host "gb10-2:$(tailscale ip -4 gb10-2)" --add-host "framework:$(tailscale ip -4 framework)" --label spike.spec=e1d1d93a9f78 cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml
+```
+
+**Reading what it did.** On gb10-2:
+
+```sh
 docker logs agentgateway
 docker port agentgateway | sed "s/$(tailscale ip -4)/<tailnet>/"
 ```
@@ -229,6 +240,13 @@ curl -sS -H "Authorization: Bearer $(cat .state/agentgateway/keys/architect)" -H
 The first answers 401, the second `agent`, and the third a reply with its token usage. On gb10-2,
 `docker logs --tail 3 agentgateway` shows the chat's log line, with the model and the token usage
 that detect read from the reply.
+
+The key isn't logged, though the gateway has now read it in each request: on the laptop, search
+the container's log for the first 8 characters of the architect's key, which prints nothing.
+
+```sh
+ssh gb10-2 docker logs agentgateway 2>&1 | grep -F "$(cut -c1-8 .state/agentgateway/keys/architect)"
+```
 
 The admin UI, through an SSH tunnel to gb10-2's loopback, from the laptop; then open
 <http://localhost:3001/ui> in a browser and stop the tunnel with Ctrl-C when done:

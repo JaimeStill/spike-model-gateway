@@ -27,23 +27,25 @@ gateways:
     # is chosen: a missing, unknown, or revoked key gets 401, on alias routes and unrouted paths
     # alike. The key is removed before the request is forwarded, so no row sees it.
     #
-    # Each key is a random 256-bit value held by its consumer; only its sha256 is committed, as
-    # `sha256:<hex>`. Deleting an entry and deploying revokes that key with no restart. The all-zero
-    # placeholders below match no key: each is replaced with its key's hash as the key is issued
-    # (docs/findings/agentgateway.md, "Keys").
+    # Each key is a random 256-bit value kept on the deploying machine, under
+    # .state/agentgateway/keys/<name>, untracked. Only the key names are committed: each entry's
+    # keyHash is the marker `sha256:@@<name>@@`, and scripts/agentgateway-deploy.sh creates any
+    # missing key, then sends gb10-2 a copy of this file with each marker replaced by its key's
+    # `sha256:<hex>`; a marker never reaches gb10-2. Adding an entry and deploying issues a key;
+    # removing one and deploying revokes it with no restart (docs/findings/agentgateway.md, "Keys").
     apiKey:
       mode: strict
       keys:
-      - keyHash: sha256:0000000000000000000000000000000000000000000000000000000000000001
+      - keyHash: sha256:@@architect@@
         metadata:
           name: architect
-      - keyHash: sha256:0000000000000000000000000000000000000000000000000000000000000002
+      - keyHash: sha256:@@bench@@
         metadata:
           name: bench
-      - keyHash: sha256:0000000000000000000000000000000000000000000000000000000000000003
+      - keyHash: sha256:@@go-ai@@
         metadata:
           name: go-ai
-      - keyHash: sha256:0000000000000000000000000000000000000000000000000000000000000004
+      - keyHash: sha256:@@revoke-test@@
         metadata:
           name: revoke-test
   # The UI, read-only (config.storage), on its own port, published on gb10-2's loopback only and
