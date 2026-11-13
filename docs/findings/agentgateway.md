@@ -391,7 +391,7 @@ pin is current.
 ## Slice 2 · overhead
 
 Behavior 7: the overhead cells, direct, gateway, direct per purpose, while the laptop still reaches
-the rows. Planned; not yet run.
+the rows. Run on 2026-11-13 from 13:55 to 14:14; the results are under "Results" below.
 
 ### The plan
 
@@ -523,6 +523,109 @@ Untracked, under `.state/agentgateway/`:
 - `commands-<date>.log`: every helper call and command, and what `cell`, `summarize`, and
   `compare` printed.
 
+### Results
+
+Run on 2026-11-13: the pre-checks at 13:55:41, the twelve runs from 13:55:49 to 14:13:53, each
+cell's three back to back, purpose by purpose, as planned. Every command, as run, is under
+"Commands as run". The figures are `summarize`'s and `compare`'s, read again from each run's
+`result.json` after the session.
+
+**The pre-checks.** Each row listed exactly its alias, direct from the laptop: `["agent"]`,
+`["vision"]`, `["audio"]`, `["embedding"]`. The gateway container, idle, used 0.03% CPU and
+17.22 MiB of memory.
+
+**The runs.** All twelve exited 0, under the 10-minute cap, with no errored request. The bench key
+was in none of the four gateway runs' files (`cell`'s search, after each). Requests completed per
+run:
+
+| Cell | d1 | g | d2 | Note |
+| --- | --- | --- | --- | --- |
+| agent | 15 | 16 | 16 | 4 incomplete each, the sessions running when the 110 s ended |
+| vision | 72 | 80 | 80 | 4 incomplete each, as for agent |
+| audio | 64 | 64 | 64 | the 64-request limit, reached in under 30 s |
+| embedding | 2,041 | 2,040 | 2,041 | g: 1 incomplete at the end of the 60 s |
+
+**The figures.** Medians and p95s in ms. "Spread" is `|d1 − d2|`; "gateway adds" is
+`g − (d1 + d2) / 2`; the last column is `compare`'s reading.
+
+| Alias | Figure | d1 | g | d2 | Spread | Gateway adds | Reading |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| agent | TTFT median | 562.53 | 545.98 | 566.72 | 4.18 | −18.64 | beyond |
+| agent | TTFT p95 | 8,061.91 | 8,059.71 | 8,069.98 | 8.07 | −6.24 | within |
+| agent | ITL median | 48.49 | 46.98 | 46.69 | 1.81 | −0.61 | within |
+| agent | ITL p95 | 53.03 | 54.28 | 53.91 | 0.88 | 0.81 | within |
+| agent | latency median | 25,365.82 | 24,697.56 | 24,425.59 | 940.23 | −198.15 | within |
+| agent | latency p95 | 32,418.99 | 31,939.17 | 32,298.33 | 120.66 | −419.49 | beyond |
+| vision | TTFT median | 405.10 | 1,129.10 | 1,128.09 | 722.99 | 362.50 | within |
+| vision | TTFT p95 | 436.51 | 1,167.26 | 1,133.55 | 697.04 | 382.23 | within |
+| vision | ITL median | 41.61 | 33.53 | 33.72 | 7.89 | −4.14 | within |
+| vision | ITL p95 | 41.93 | 35.11 | 35.21 | 6.72 | −3.46 | within |
+| vision | latency median | 4,530.36 | 4,443.34 | 4,461.89 | 68.47 | −52.78 | within |
+| vision | latency p95 | 4,559.96 | 4,510.19 | 4,504.18 | 55.78 | −21.88 | within |
+| audio | TTFT median | 226.57 | 155.07 | 157.57 | 69.00 | −37.01 | within |
+| audio | TTFT p95 | 425.18 | 206.53 | 202.69 | 222.49 | −107.40 | within |
+| audio | ITL median | 52.20 | 45.61 | 45.55 | 6.65 | −3.27 | within |
+| audio | ITL p95 | 57.00 | 47.66 | 47.70 | 9.30 | −4.69 | within |
+| audio | latency median | 1,038.95 | 853.20 | 857.59 | 181.37 | −95.07 | within |
+| audio | latency p95 | 2,356.93 | 1,880.24 | 1,917.52 | 439.41 | −256.98 | within |
+| embedding | latency median | 10.17 | 13.53 | 10.05 | 0.12 | 3.42 | beyond |
+| embedding | latency p95 | 11.27 | 15.56 | 10.93 | 0.34 | 4.46 | beyond |
+
+**The gateway's CPU and memory**, from the samples inside each gateway run's benchmark (CPU in
+docker's figure, 100% being one of gb10-2's cores):
+
+| Gateway run | Samples | CPU % median / max | Memory MiB median / max |
+| --- | --- | --- | --- |
+| `o-agent-g` | 18 | 0.71 / 0.98 | 19.5 / 20.3 |
+| `o-vision-g` | 15 | 1.61 / 2.25 | 21.3 / 22.9 |
+| `o-audio-g` | 2 | 1.49 / 1.76 | 29.6 / 34.2 |
+| `o-embed-g` | 9 | 2.49 / 2.70 | 22.4 / 23.7 |
+
+No sample failed. The audio run's benchmark lasted 17 s, so its two samples are a glimpse, not a
+profile. At its most the gateway used under 3% of one core and under 35 MiB, against 0.03% and
+17.22 MiB idle.
+
+**Agent: nothing measurable.** Two figures fall "beyond the spread", the TTFT median (−18.64 ms
+against a 4.18 ms spread) and the request latency p95 (−419.49 ms against 120.66 ms), and both are
+negative: the gateway run was faster. They are run noise the two direct runs happened not to show,
+not a cost, and not a gain worth reading into. Every other
+figure is within the spread. As planned, the p95s rest on 15 or 16 requests a run; the medians are
+the reading, and the gateway's median TTFT and ITL sit at or below both direct runs'.
+
+**Vision: the direct runs disagree, so request latency is the reading.** `o-vision-d1` had a TTFT
+median of 405 ms and an ITL median of 41.6 ms; `o-vision-g` and `o-vision-d2` had about 1,128 ms and
+33.6 ms. Request latency was flat across all three: 4.53, 4.44, and 4.46 s. The token counts are the
+same in every run, 479 prompt and 100 output tokens a request, with no reasoning and no cached
+tokens, so the difference is among the direct runs themselves, not the gateway's: `compare` reads
+every figure "within", but against a TTFT spread of 723 ms that says little.
+
+The session's interpretation, not proven by these runs: at a fixed concurrency of 4 with requests of
+equal length, the four streams either stay staggered, each prefill interleaved with the others'
+decoding, which gives a lower TTFT and a higher ITL, or fall into lockstep, all four prefilling
+together and then decoding together, which gives a higher TTFT and a lower ITL. `o-vision-d1` ran
+staggered and the next two in lockstep; the request takes the same time either way. Request
+latency is therefore the stable vision figure: the gateway adds −53 ms to the median against a
+68 ms spread, and −22 ms to the p95 against 56 ms, so nothing measurable. The gateway shares gb10-2
+with the vision row, and its CPU there peaked at 2.25%.
+
+**Audio: all within the spread.** `o-audio-d1` was slower on every figure, and `o-audio-g` and
+`o-audio-d2` agree closely (latency median 853 against 858 ms). The audio clips come from a dataset
+and are the same in every run, so warm caches on the row likely favour the later runs, as the plan
+expected; that is the d1 to d2 spread, and it sets a wide band (69 ms on the TTFT median). Within
+it, the gateway run matches the direct run after it, so no cost shows at this load.
+
+**Embedding: the one measurable overhead.** On requests of about 10 ms, the gateway adds 3.42 ms to
+the median (spread 0.12 ms), about 34% of the direct mean, and 4.46 ms to the p95 (spread 0.34 ms),
+about 40%. That figure includes the extra network hop: direct, the laptop reaches the Framework;
+through the gateway, the laptop reaches gb10-2, which reaches the Framework. It is the cost of the
+gateway path, and so bounds agentgateway's own cost from above. On the other three purposes,
+whose requests take hundreds of ms to seconds, the same few ms are lost in the run noise.
+
+**What the cells settle.** Per the architect, these runs are a baseline and reject nothing. At
+these loads agentgateway adds no cost distinguishable from run noise to agent, vision, or audio,
+and at most 3.4 ms (median) to 4.5 ms (p95) to an embedding request, the hop included, for under
+3% of one core and under 35 MiB of memory.
+
 ## Slice 3 · fence, caps, probes, go-ai and infer, inventory
 
 Behaviors 6 and 8–13: the fence, the cap cells, the 429 and 503 probes, go-ai's integration tier and
@@ -652,4 +755,60 @@ again, logged abbreviated; it ran detached, and curl exited 0 at 13:39:53.
 + 2026-11-13T13:39:24-05:00 laptop: curl -sS -o /dev/null -w '%{http_code} revoke-test new request after revoke\n' -H "Authorization: Bearer $R" $GW/agent/v1/models
 + 2026-11-13T13:39:24-05:00 laptop: grep -c '^data: ' .state/agentgateway/revoke-stream.txt
 + 2026-11-13T13:39:53-05:00 laptop: grep -c '^data: ' .state/agentgateway/revoke-stream.txt; grep -o '"finish_reason":"[a-z]*"' .state/agentgateway/revoke-stream.txt | tail -1; tail -1 .state/agentgateway/revoke-stream.txt
+```
+
+### 2026-11-13 · the overhead cells
+
+From the laptop, from the repository root: the pre-checks, then the twelve runs and the four
+readings. Each `cell` line is followed by the GuideLLM command it ran, and on a gateway run the
+sampling of the container on gb10-2; the bench key appears only as the expression that reads it.
+Each `cell` also ran `summarize`, whose lines are in the log, not here.
+
+```text
++ 2026-11-13T13:55:41-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T13:55:41-05:00 laptop: curl -sS --max-time 5 http://gb10-1:8000/v1/models | jq -c '[.data[].id]'
++ 2026-11-13T13:55:41-05:00 laptop: curl -sS --max-time 5 http://gb10-2:8000/v1/models | jq -c '[.data[].id]'
++ 2026-11-13T13:55:41-05:00 laptop: curl -sS --max-time 5 http://framework:8001/v1/models | jq -c '[.data[].id]'
++ 2026-11-13T13:55:41-05:00 laptop: curl -sS --max-time 5 http://framework:8002/v1/models | jq -c '[.data[].id]'
++ 2026-11-13T13:55:41-05:00 laptop: ssh gb10-2 docker stats --no-stream agentgateway
++ 2026-11-13T13:55:49-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T13:55:49-05:00 laptop: cell o-agent-d1 overhead-agent direct agent
++ 2026-11-13T13:55:49-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-1:8000/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-agent.yaml --backend kind=openai_http,model=agent --tokenizer kind=huggingface_auto,model=openai/gpt-oss-120b --seed kind=static,value=2383091769 --output kind=json,path=.state/agentgateway/cells/o-agent-d1/result.json --disable-console-interactive > .state/agentgateway/cells/o-agent-d1/guidellm.log 2>&1
++ 2026-11-13T13:58:01-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T13:58:01-05:00 laptop: cell o-agent-g overhead-agent gateway agent
++ 2026-11-13T13:58:01-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/agent/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-agent.yaml --backend kind=openai_http,model=agent --tokenizer kind=huggingface_auto,model=openai/gpt-oss-120b --seed kind=static,value=3452232323 --output kind=json,path=.state/agentgateway/cells/o-agent-g/result.json --disable-console-interactive > .state/agentgateway/cells/o-agent-g/guidellm.log 2>&1
++ 2026-11-13T13:58:01-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/agentgateway/cells/o-agent-g/gateway-stats.tsv
++ 2026-11-13T14:00:15-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T14:00:15-05:00 laptop: cell o-agent-d2 overhead-agent direct agent
++ 2026-11-13T14:00:15-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-1:8000/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-agent.yaml --backend kind=openai_http,model=agent --tokenizer kind=huggingface_auto,model=openai/gpt-oss-120b --seed kind=static,value=4242556906 --output kind=json,path=.state/agentgateway/cells/o-agent-d2/result.json --disable-console-interactive > .state/agentgateway/cells/o-agent-d2/guidellm.log 2>&1
++ 2026-11-13T14:02:19-05:00 laptop: compare o-agent-d1 o-agent-g o-agent-d2
++ 2026-11-13T14:02:26-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T14:02:26-05:00 laptop: cell o-vision-d1 overhead-vision direct vision
++ 2026-11-13T14:02:26-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:8000/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-vision.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=2559911716 --output kind=json,path=.state/agentgateway/cells/o-vision-d1/result.json --disable-console-interactive > .state/agentgateway/cells/o-vision-d1/guidellm.log 2>&1
++ 2026-11-13T14:04:18-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T14:04:18-05:00 laptop: cell o-vision-g overhead-vision gateway vision
++ 2026-11-13T14:04:18-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/vision/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-vision.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=761397208 --output kind=json,path=.state/agentgateway/cells/o-vision-g/result.json --disable-console-interactive > .state/agentgateway/cells/o-vision-g/guidellm.log 2>&1
++ 2026-11-13T14:04:18-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/agentgateway/cells/o-vision-g/gateway-stats.tsv
++ 2026-11-13T14:06:19-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T14:06:19-05:00 laptop: cell o-vision-d2 overhead-vision direct vision
++ 2026-11-13T14:06:19-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:8000/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-vision.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=3934157047 --output kind=json,path=.state/agentgateway/cells/o-vision-d2/result.json --disable-console-interactive > .state/agentgateway/cells/o-vision-d2/guidellm.log 2>&1
++ 2026-11-13T14:08:03-05:00 laptop: compare o-vision-d1 o-vision-g o-vision-d2
++ 2026-11-13T14:08:29-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T14:08:29-05:00 laptop: cell o-audio-d1 overhead-audio direct audio
++ 2026-11-13T14:08:29-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://framework:8001/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-audio.yaml --backend kind=openai_http,model=audio --tokenizer kind=huggingface_auto,model=google/gemma-4-E4B-it --seed kind=static,value=2201218434 --output kind=json,path=.state/agentgateway/cells/o-audio-d1/result.json --disable-console-interactive > .state/agentgateway/cells/o-audio-d1/guidellm.log 2>&1
++ 2026-11-13T14:08:59-05:00 laptop: cell o-audio-g overhead-audio gateway audio
++ 2026-11-13T14:08:59-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/audio/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-audio.yaml --backend kind=openai_http,model=audio --tokenizer kind=huggingface_auto,model=google/gemma-4-E4B-it --seed kind=static,value=995812550 --output kind=json,path=.state/agentgateway/cells/o-audio-g/result.json --disable-console-interactive > .state/agentgateway/cells/o-audio-g/guidellm.log 2>&1
++ 2026-11-13T14:08:59-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/agentgateway/cells/o-audio-g/gateway-stats.tsv
++ 2026-11-13T14:09:30-05:00 laptop: cell o-audio-d2 overhead-audio direct audio
++ 2026-11-13T14:09:30-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://framework:8001/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-audio.yaml --backend kind=openai_http,model=audio --tokenizer kind=huggingface_auto,model=google/gemma-4-E4B-it --seed kind=static,value=4057510481 --output kind=json,path=.state/agentgateway/cells/o-audio-d2/result.json --disable-console-interactive > .state/agentgateway/cells/o-audio-d2/guidellm.log 2>&1
++ 2026-11-13T14:09:56-05:00 laptop: compare o-audio-d1 o-audio-g o-audio-d2
++ 2026-11-13T14:10:05-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T14:10:05-05:00 laptop: cell o-embed-d1 overhead-embed direct embedding
++ 2026-11-13T14:10:05-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://framework:8002/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-embed.yaml --backend kind=openai_http,model=embedding --tokenizer kind=huggingface_auto,model=ibm-granite/granite-embedding-english-r2 --seed kind=static,value=3070919766 --output kind=json,path=.state/agentgateway/cells/o-embed-d1/result.json --disable-console-interactive > .state/agentgateway/cells/o-embed-d1/guidellm.log 2>&1
++ 2026-11-13T14:11:19-05:00 laptop: cell o-embed-g overhead-embed gateway embedding
++ 2026-11-13T14:11:19-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/embedding/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-embed.yaml --backend kind=openai_http,model=embedding --tokenizer kind=huggingface_auto,model=ibm-granite/granite-embedding-english-r2 --seed kind=static,value=1713866626 --output kind=json,path=.state/agentgateway/cells/o-embed-g/result.json --disable-console-interactive > .state/agentgateway/cells/o-embed-g/guidellm.log 2>&1
++ 2026-11-13T14:11:19-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/agentgateway/cells/o-embed-g/gateway-stats.tsv
++ 2026-11-13T14:12:38-05:00 laptop: cell o-embed-d2 overhead-embed direct embedding
++ 2026-11-13T14:12:38-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://framework:8002/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-embed.yaml --backend kind=openai_http,model=embedding --tokenizer kind=huggingface_auto,model=ibm-granite/granite-embedding-english-r2 --seed kind=static,value=3319913349 --output kind=json,path=.state/agentgateway/cells/o-embed-d2/result.json --disable-console-interactive > .state/agentgateway/cells/o-embed-d2/guidellm.log 2>&1
++ 2026-11-13T14:13:53-05:00 laptop: compare o-embed-d1 o-embed-g o-embed-d2
 ```
