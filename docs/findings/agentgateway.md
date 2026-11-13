@@ -1163,6 +1163,7 @@ existing tools first and an authored extension or callout last.
 | Queueing past caps: hold requests at the gateway when a row is full, rather than pass them on or refuse | Nothing queues: the in-flight limit refuses at once (503), and vLLM queues behind it. The row's own queue is the only one | gap | vLLM's queue is the native one (`num_requests_waiting`), bounded only by its timeouts; a gateway-side queue would be authored. The cap cells measure how vLLM's queue grows. |
 | Capacity overflow to Foundry on GPU pressure or max sessions | Failover moves traffic only when a group is evicted, and eviction sees only unhealthy replies. A full vLLM row answers 200 slowly, so pressure never evicts it. With a gateway refusal in front (an in-flight or rate limit), the refusal is answered before backend selection, so it can't spill over either. A conditional virtual model routes on request attributes, not row load; a callout could route on load, but would need the load from elsewhere | gap (partial with a callout) | 1. Make the row refuse when full, so eviction can act: a vLLM-side limit that answers 429 or 503 with Retry-After past max sessions, then `unhealthyExpression` on 429 and Retry-After eviction move the next requests to a Foundry group (all native once the row refuses; whether vLLM can be made to refuse is for `priority`). 2. A virtual model's `callout` to a small service reading `/metrics` that names the local or Foundry model (native hook, authored service). 3. Route retries can't carry it: they don't wait out Retry-After and skip bodies over 64 KiB. All in the `llm` section, so all need one shared prefix. |
 | Overflow on host down | A down row gives connection failures or 5xx, which evict by default; with the row and Foundry in priority groups, traffic moves to Foundry until the eviction ends, then returns; a route retry sends the failed request on. For the routing form, `ai.groups` provides this without the `llm` section | native | Priority groups with eviction (routing form `ai.groups`, or a failover virtual model), plus a route retry on 502, 503, 504 and connection failure for the request that met the failure. Probed live in `priority`. |
+| Per-key token budgets on streamed traffic: count each key's tokens on streams as on other requests | Budgets and `tokens` rate limits count the usage read from the reply. On detect pass-through a stream carries usage only if the client sent `stream_options.include_usage`, so a stream without it counts no tokens (slice 4's streamed chat logged none). The `completions` route type sets it on every stream, but this config's `"*": detect` skips that | partial | 1. Clients send `include_usage` (GuideLLM already does). 2. An `ai` policy `transformations` entry that sets `stream_options` on streamed requests under detect (native, unverified). 3. Map `/v1/chat/completions` to the `completions` route type, which injects it (native; vision and audio content through it unverified). Details under slice 4's "Results". |
 
 **What `priority` inherits.** The live overflow cells (Foundry, capped) depend on the shared
 prefix question: virtual models and callout are `llm`-section only; `ai.groups` priority groups
@@ -1269,7 +1270,75 @@ filled after the walk.
 
 ### Results
 
-Filled after the walk.
+Run on 2026-11-13 by the architect, from about 15:05 to 15:09 local (20:05–20:09Z), on the laptop
+from the repository root. The outputs are as the architect pasted them, with the log's `src.addr`
+redacted. Steps 2 to 7 went as expected; step 8 was not run.
+
+- **Step 2: the live config and the container.** `# overlays: none`; one container,
+  `agentgateway  cr.agentgateway.dev/agentgateway:v1.7.0  Up 2 hours`; `3000/tcp -> <tailnet>:3000`
+  and `3001/tcp -> 127.0.0.1:3001`, and nothing for 15000.
+- **Step 3: each alias's models.** `agent: agent`, `vision: vision`, `audio: audio`,
+  `embedding: embedding`.
+- **Step 4: a chat on agent.** Without a key, `401`. With the architect's key, `model` `agent`, the
+  reply "Hello, wonderful friend! Welcome home.", and `usage` of 73 prompt, 200 completion, and 273
+  total tokens, 182 of them reasoning.
+- **The streaming question.** At step 4 the architect asked whether streams work through the
+  gateway. The session pointed to the evidence so far: slice 1's streamed chat and revocation
+  stream, and the streamed GuideLLM cells of slices 2 and 3. It then gave a streamed chat on agent
+  (`curl -N`, `"stream": true`, `max_tokens` 300), which the architect ran: it streamed, and the
+  gateway logged it at 20:07:28Z with status 200 in 1,352 ms, but with no `gen_ai.usage` fields.
+  See the finding below.
+- **Step 5: the revoked key.** `401`; the log line reads "api key authentication failure: invalid
+  credentials".
+- **Step 6: an unrouted path.** `404`, route not found.
+- **Step 7: the gateway's read-outs.** `docker stats`: 0.07% CPU, 57.63 MiB of memory, 353 MB in
+  and 360 MB out over the network since start, 29 processes. The last 6 log lines were the walk's
+  requests, each with `src.addr=<laptop>` and no key:
+
+  | Time (Z) | Status | Request | Log line |
+  | --- | --- | --- | --- |
+  | 20:06:49 | 401 | chat, no key | no API Key found |
+  | 20:07:00 | 200 | chat, keyed | `model=agent`, 73 in, 200 out, 182 reasoning, 5,590 ms |
+  | 20:07:28 | 200 | streamed chat, `max_tokens` 300 | 1,352 ms, no usage fields |
+  | 20:07:44 | 401 | revoke-test | invalid credentials |
+  | 20:08:04 | 404 | `/metrics` | route not found |
+  | 20:08:31 | 404 | `/metrics` | route not found |
+
+- **Step 8: not run.** It was optional, and slice 3 already showed the 429 live (the rate-limit
+  probe under slice 3's "Results").
+
+**Finding: a streamed request carries no token usage in the gateway's log unless the client sends
+`stream_options: {"include_usage": true}`.** vLLM adds a usage chunk to a stream only when the
+request asks for it, and detect pass-through forwards the body as sent and reads usage from the
+reply, so a stream that didn't ask has no usage for it to read. The architect's streamed chat at
+20:07:28Z sent no `stream_options` and logged no `gen_ai.usage` fields, while the non-streamed chat
+at 20:07:00Z logged its tokens. The streamed GuideLLM cells of slices 2 and 3 never met this case:
+GuideLLM 0.8.1 sends `stream_options` with `include_usage: true` on every streamed chat
+(`guidellm/backends/openai/request_handlers.py`), and every chat, vision, and audio cell's
+`result.json` records it on its requests.
+
+The consequence for `priority`: per-key token budgets and `tokens` rate limits count from the usage
+the gateway reads, so on streamed traffic they need `include_usage`, sent by every client or
+injected by the gateway. agentgateway v1.7.0 can inject it natively, by two routes, both read from
+the docs and source at `v1.7.0` and neither tried live:
+
+- **The `completions` route type injects it always.** `process_completions_request`
+  (`crates/agentgateway/src/llm/mod.rs`) sets `stream_options.include_usage` to true on every
+  streamed Chat Completions request, overriding a client's `false`, "because the token counts come
+  from the usage data" (`documentation/llm/api-types/completions.md`, "Usage in streamed replies";
+  the v1.7 release notes make it unconditional). This spike's routes map `"*": detect`, which skips
+  it; mapping `/v1/chat/completions` to `completions` ahead of `*` would bring it back, but the
+  request is then parsed and re-serialized as Chat Completions, and whether vision's and audio's
+  content parts pass through intact is unverified.
+- **On detect, an `ai` policy's `transformations` can set it.** `process_detect_request` applies the
+  policy's body mutations (`defaults`, `overrides`, `transformations`) to a JSON body
+  (`Policy::apply_request_body_mutations`, `crates/agentgateway/src/llm/policy/mod.rs`), and a
+  transformation is a CEL expression per top-level field over the body, `llmRequest`
+  (`documentation/llm/transformations.md`). A `stream_options` transformation conditioned on
+  `llmRequest.stream` would add it to streams only; `overrides` would add it to every request,
+  non-streamed ones too, which vLLM may refuse. The expression, and what it sends on a
+  non-streamed request, are unverified. Detect parses the body only when its `Content-Type` is
+  `application/json`.
 
 ## Commands as run
 
