@@ -1,0 +1,135 @@
+# O-audio, the agentgateway task's audio overhead cell (behavior 7): the audio row, E4B BF16
+# (gemma-4-E4B-it-audio-framework on the Framework's 8001), at 4 concurrent streams for 30 s or 64
+# requests, run three times, direct, then through the gateway, then direct. Copied from
+# spike-model-layout's bench/vllm-layout-audio-alone.yaml (A-alone), its requests and level
+# unchanged: one LibriSpeech clip as 16 kHz WAV in chat with the model card's transcription prompt,
+# the reply at most 256 tokens. Adapted: the model is the alias, audio, given on the command line
+# with its tokenizer (google/gemma-4-E4B-it) by `cell`, which sets the target, a base URL, in
+# GUIDELLM__SPEC__BACKEND__TARGET, and for a gateway run the key in
+# GUIDELLM__SPEC__BACKEND__API_KEY; and the backend check reads /v1/models (below). It needs
+# GuideLLM's audio extra, which mise.bench.toml installs. Run from the repository root.
+spec:
+  backend:
+    kind: openai_http
+    request_format: /v1/chat/completions
+    # GuideLLM checks the backend before a run with GET <target>/health, the target's /v1 cut off.
+    # Through the gateway that is /audio/health, which no route serves (404), so the check reads
+    # /v1/models instead, direct and through the gateway alike; through the gateway it also proves
+    # the key before any load is sent.
+    api_routes:
+      /health: v1/models
+    # A transcript is as long as its clip, so no request sets output tokens or ignore_eos; this
+    # caps each reply, sent as max_completion_tokens, should the model not stop.
+    max_tokens: 256
+  profile:
+    kind: concurrent
+    streams: [4]
+  # The two sources are read side by side, one row of each a request, and a level stops when
+  # either runs out. Source 0 is the prompt, from Gemma 4's card ("Transcribe the following speech
+  # segment in {LANGUAGE} into {LANGUAGE} text. ... Only output the transcription, with no
+  # newlines."), once a request: 73 of it, one a clip, where layout's footprint-l3.yaml's 32
+  # stopped the zip at its 32nd clip. Source 1 is hf-internal-testing/librispeech_asr_dummy, 73
+  # clips from LibriSpeech's clean validation split, about 9 MB fetched once from Hugging Face
+  # (the laptop's cache already holds it). Each level reads both sources from their start.
+  data:
+    - kind: in_memory_dict
+      data:
+        prompt:
+          - &prompt "Transcribe the following speech segment in English into English text. Only output the transcription, with no newlines."
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+          - *prompt
+    - kind: huggingface
+      source: hf-internal-testing/librispeech_asr_dummy
+      load_kwargs:
+        name: clean
+        split: validation
+  # Only the prompt and the clip: LibriSpeech's own text column is the reference transcript, which
+  # the mapper's defaults would otherwise send as the prompt.
+  data_column_mapper:
+    kind: generative_column_mapper
+    column_mappings:
+      text_column: 0.prompt
+      audio_column: 1.audio
+  # Every clip re-encoded as 16 kHz mono WAV, as layout's cells sent it; the source is FLAC.
+  data_preprocessors:
+    - kind: encode_media
+      audio_kwargs:
+        audio_format: wav
+        encode_sample_rate: 16000
+  # Each level stops at 30 s or its 64th request, whichever comes first; the requests in flight
+  # at 30 s are counted incomplete.
+  constraints:
+    - kind: max_duration
+      seconds: 30
+    - kind: max_requests
+      count: 64

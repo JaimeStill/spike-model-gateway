@@ -1,0 +1,13 @@
+# The 503 probe (behavior 9): the global in-flight limit, frontendPolicies.http.maxConcurrentRequests,
+# at 1, so a second request while one runs is refused. It counts per bind (each gateway's port),
+# HTTP/1 requests and HTTP/2 streams alike, and is checked as a request arrives on a connection,
+# before any key, route, or backend: the refusal is 503 "request limit exceeded" with no
+# Retry-After, and leaves no access log line, only the requests_shed metric
+# (crates/agentgateway/src/proxy/gateway.rs, request_admission; proxy/mod.rs). A connection takes
+# the frontend policies live when it opens, so the probe's curls, each a new connection, see it
+# once the reload lands. Applied by `scripts/agentgateway-deploy.sh in-flight-1`, removed by a
+# deploy without it. It can't be applied with access-log, which is also frontendPolicies.
+#@ append
+frontendPolicies:
+  http:
+    maxConcurrentRequests: 1

@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+#
+# agentgateway v1.7.0 in front of the four vLLM rows, run on gb10-2 by scripts/agentgateway-deploy.sh,
+# which mounts this file's directory read-only at /config. agentgateway watches the file and reloads
+# it in place, so a deploy that changes only this file needs no restart. Fields under `config` are
+# read once, at start.
+#
+# The routing form (gateways and routes) is used, not the simple `llm` section, which takes one path
+# prefix where the four aliases need four. Each alias has its own base URL, /<alias>/v1, rewritten to
+# its row's /v1 and passed through as is: the `detect` route type forwards the request unchanged,
+# including /v1/models, and still reads token usage from the reply. Nothing else on the port is
+# routed, so vLLM's root routes (/metrics, /health, /tokenize, /docs) answer 404.
+config:
+  # The admin API and its UI, on the container's own loopback: no published port reaches it.
+  adminAddr: localhost:15000
+  # This file is the only source of configuration. The UI reads it and can't write it: a save
+  # answers 403, so no key or route is ever created outside git.
+  storage:
+    mode: readOnly
+
+gateways:
+  # The consumer port, published on gb10-2's tailnet address. It isn't named `default`: the UI
+  # attaches itself to a gateway of that name when `ui.gateways` is unset.
+  consumer:
+    port: 3000
+    # Every request on the port needs a gateway-issued key, sent as a Bearer token, before any route
+    # is chosen: a missing, unknown, or revoked key gets 401, on alias routes and unrouted paths
+    # alike. The key is removed before the request is forwarded, so no row sees it.
+    #
+    # Each key is a random 256-bit value kept on the deploying machine, under
+    # .state/agentgateway/keys/<name>, untracked. Only the key names are committed: each entry's
+    # keyHash is the marker `sha256:@@<name>@@`, and scripts/agentgateway-deploy.sh creates any
+    # missing key, then sends gb10-2 a copy of this file with each marker replaced by its key's
+    # `sha256:<hex>`; a marker never reaches gb10-2. Adding an entry and deploying issues a key;
+    # removing one and deploying revokes it with no restart (docs/findings/agentgateway.md, "Keys").
+    apiKey:
+      mode: strict
+      keys:
+      - keyHash: sha256:@@architect@@
+        metadata:
+          name: architect
+      - keyHash: sha256:@@bench@@
+        metadata:
+          name: bench
+      - keyHash: sha256:@@go-ai@@
+        metadata:
+          name: go-ai
+  # The UI, read-only (config.storage), on its own port, published on gb10-2's loopback only and
+  # reached through an SSH tunnel. The admin API's debug and shutdown endpoints stay on adminAddr.
+  ui:
+    port: 3001
+
+ui:
+  gateways: ui
+
+# One route per alias. Each matches /<alias>/v1 and its subpaths only, rewrites that prefix to /v1,
+# and sends the request to its row by short host name, over plain HTTP on the tailnet. The custom
+# provider with no formats translates nothing; every path is the `detect` route type.
+routes:
+- name: agent
+  gateways: consumer
+  matches:
+  - path:
+      pathPrefix: /agent/v1
+  policies:
+    urlRewrite:
+      path:
+        prefix: /v1
+    ai:
+      routes:
+        "*": detect
+  backends:
+  - ai:
+      name: agent
+      hostOverride: gb10-1:8000
+      provider:
+        custom: {}
+- name: vision
+  gateways: consumer
+  matches:
+  - path:
+      pathPrefix: /vision/v1
+  policies:
+    urlRewrite:
+      path:
+        prefix: /v1
+    ai:
+      routes:
+        "*": detect
+  backends:
+  - ai:
+      name: vision
+      hostOverride: gb10-2:8000
+      provider:
+        custom: {}
+- name: audio
+  gateways: consumer
+  matches:
+  - path:
+      pathPrefix: /audio/v1
+  policies:
+    urlRewrite:
+      path:
+        prefix: /v1
+    ai:
+      routes:
+        "*": detect
+  backends:
+  - ai:
+      name: audio
+      hostOverride: framework:8001
+      provider:
+        custom: {}
+- name: embedding
+  gateways: consumer
+  matches:
+  - path:
+      pathPrefix: /embedding/v1
+  policies:
+    urlRewrite:
+      path:
+        prefix: /v1
+    ai:
+      routes:
+        "*": detect
+  backends:
+  - ai:
+      name: embedding
+      hostOverride: framework:8002
+      provider:
+        custom: {}

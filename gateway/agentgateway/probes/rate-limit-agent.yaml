@@ -1,0 +1,25 @@
+# The 429 probe (behavior 9): a local request-rate limit on the agent route alone, small enough
+# that a handful of requests trips it. Its bucket holds 2 requests and gets 2 back every 10 s, so
+# the third request within a 10 s window answers 429 with `retry-after` (the seconds to the next
+# refill, at least 1) and `x-ratelimit-limit`, `-remaining`, and `-reset`; an admitted reply
+# carries the `x-ratelimit-*` headers too (crates/agentgateway/src/proxy/mod.rs, ProxyError's
+# response; http/localratelimit.rs). No `key`, so every caller of the agent route shares the one
+# bucket. A top-level policy attached to the route, so config.yaml's route is untouched; the
+# route's name is `agent` in the `default` namespace, as the access log's `route=default/agent`
+# shows. Applied by `scripts/agentgateway-deploy.sh access-log rate-limit-agent`, removed by a
+# deploy without it.
+#@ append
+policies:
+- name:
+    name: probe-rate-limit-agent
+    namespace: default
+  target:
+    route:
+      name: agent
+      namespace: default
+  policy:
+    localRateLimit:
+    - type: requests
+      maxTokens: 2
+      tokensPerFill: 2
+      fillInterval: 10s

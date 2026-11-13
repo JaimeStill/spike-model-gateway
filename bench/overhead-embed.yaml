@@ -1,0 +1,31 @@
+# O-embed, the agentgateway task's embedding overhead cell (behavior 7): the embedding row, granite
+# (granite-embedding-english-r2-framework on the Framework's 8002), at a constant 34 requests a
+# second for 60 s, run three times, direct, then through the gateway, then direct. Copied from
+# spike-model-layout's bench/vllm-layout-embed-rate-4x.yaml, its requests and rate unchanged: 512
+# synthetic tokens to /v1/embeddings, 34 a second whatever the replies' latency (17,408 prompt
+# tok/s, four times layout's floor and the rate the layout admits at the gateway), so the requests
+# in flight follow the server. Adapted: 60 s, where layout ran 240 s beside audio; the model is the
+# alias, embedding, given on the command line with its tokenizer
+# (ibm-granite/granite-embedding-english-r2) by `cell`, which sets the target, a base URL, in
+# GUIDELLM__SPEC__BACKEND__TARGET, and for a gateway run the key in
+# GUIDELLM__SPEC__BACKEND__API_KEY; and the backend check reads /v1/models (below). Run from the
+# repository root.
+spec:
+  backend:
+    kind: openai_http
+    request_format: /v1/embeddings
+    # GuideLLM checks the backend before a run with GET <target>/health, the target's /v1 cut off.
+    # Through the gateway that is /embedding/health, which no route serves (404), so the check
+    # reads /v1/models instead, direct and through the gateway alike; through the gateway it also
+    # proves the key before any load is sent.
+    api_routes:
+      /health: v1/models
+  profile:
+    kind: constant
+    rate: [34]
+  data:
+    - kind: synthetic_text
+      prompt_tokens: 512
+  constraints:
+    - kind: max_duration
+      seconds: 60
