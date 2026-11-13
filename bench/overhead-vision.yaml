@@ -1,0 +1,34 @@
+# O-vision, the agentgateway task's vision overhead cell (behavior 7): the vision row, NVFP4
+# 26B-A4B (gemma-4-26B-A4B-NVFP4-vision-gb10 on gb10-2's 8000), at the vision target of 4
+# concurrent streams for 90 s, run three times, direct, then through the gateway, then direct.
+# Copied from spike-model-layout's bench/vllm-layout-vision-alone.yaml (V-alone), its requests and
+# level unchanged: one synthetic 1440p JPEG beside 200 synthetic text tokens, exactly 100 output
+# tokens. Adapted: the model is the alias, vision, given on the command line with its tokenizer
+# (google/gemma-4-26B-A4B-it) by `cell`, which sets the target, a base URL, in
+# GUIDELLM__SPEC__BACKEND__TARGET, and for a gateway run the key in
+# GUIDELLM__SPEC__BACKEND__API_KEY; and the backend check reads /v1/models (below). It needs
+# GuideLLM's vision extra, which mise.bench.toml installs. Run from the repository root.
+spec:
+  backend:
+    kind: openai_http
+    request_format: /v1/chat/completions
+    # GuideLLM checks the backend before a run with GET <target>/health, the target's /v1 cut off.
+    # Through the gateway that is /vision/health, which no route serves (404), so the check reads
+    # /v1/models instead, direct and through the gateway alike; through the gateway it also proves
+    # the key before any load is sent.
+    api_routes:
+      /health: v1/models
+  profile:
+    kind: concurrent
+    streams: [4]
+  data:
+    - kind: synthetic_text
+      prompt_tokens: 200
+    - kind: synthetic_image
+      resolution: 1440p
+      format: jpeg
+      output_tokens: 100
+  # The level stops at 90 s; the requests in flight then are counted incomplete.
+  constraints:
+    - kind: max_duration
+      seconds: 90

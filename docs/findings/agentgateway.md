@@ -391,7 +391,137 @@ pin is current.
 ## Slice 2 · overhead
 
 Behavior 7: the overhead cells, direct, gateway, direct per purpose, while the laptop still reaches
-the rows. Pending.
+the rows. Planned; not yet run.
+
+### The plan
+
+Four cells, one a purpose, each run three times in one session, purpose by purpose: direct to the
+row, then through the gateway, then direct again. Every run is GuideLLM 0.8.1 from the laptop, the
+model sent as the alias and its tokenizer given separately. The loads are spike-model-layout's
+targets, and the scenarios are copied from the files it ran them with
+([`bench/README.md`](../../bench/README.md)). The runs need the rows otherwise idle.
+
+| Run | Scenario | Target | Base URL | Load |
+| --- | --- | --- | --- | --- |
+| `o-agent-d1`, `o-agent-d2` | `overhead-agent` | direct | `http://gb10-1:8000/v1` | 4-turn synthetic sessions, 8,192 tokens then 512 a turn, 512 out a turn; 4 concurrent; 110 s |
+| `o-agent-g` | `overhead-agent` | gateway | `http://gb10-2:3000/agent/v1` | as above |
+| `o-vision-d1`, `o-vision-d2` | `overhead-vision` | direct | `http://gb10-2:8000/v1` | a synthetic 1440p JPEG and 200 text tokens, 100 out; 4 concurrent; 90 s |
+| `o-vision-g` | `overhead-vision` | gateway | `http://gb10-2:3000/vision/v1` | as above |
+| `o-audio-d1`, `o-audio-d2` | `overhead-audio` | direct | `http://framework:8001/v1` | LibriSpeech dummy clips as 16 kHz WAV in chat with the card's prompt, at most 256 out; 4 concurrent; 30 s or 64 requests |
+| `o-audio-g` | `overhead-audio` | gateway | `http://gb10-2:3000/audio/v1` | as above |
+| `o-embed-d1`, `o-embed-d2` | `overhead-embed` | direct | `http://framework:8002/v1` | 512 synthetic tokens; a constant 34 requests a second; 60 s |
+| `o-embed-g` | `overhead-embed` | gateway | `http://gb10-2:3000/embedding/v1` | as above |
+
+Twelve runs, about 15 minutes of load in all (agent 330 s, vision 270 s, audio at most 90 s,
+embedding 180 s), plus GuideLLM's start-up before each, its tokenizer and data read from the
+laptop's caches; each is capped at 10 minutes.
+
+**The helpers.** [`scripts/measure-lib.sh`](../../scripts/measure-lib.sh), adapted from
+spike-model-layout's: `cell` runs one scenario against one target, `summarize` reads a run, and
+`compare` reads a cell's three runs (below). Every helper call and the commands it runs are
+appended to `.state/agentgateway/commands-<date>.log`, the log "Commands as run" quotes.
+
+**The key.** A gateway run sends the `bench` key, which the deploy created in slice 1. `cell` reads
+it from `.state/agentgateway/keys/bench` with bash's `$(<file)`, inside the run's subshell with
+xtrace off, into GuideLLM's environment as `GUIDELLM__SPEC__BACKEND__API_KEY`. It is never in a
+process's argv, and the log shows only the expression. GuideLLM 0.8.1 reads that variable into its
+backend's `api_key`, a pydantic `SecretStr` (`schemas/backends/openai_http.py`), which every dump
+of the run's config writes as `"**********"`, the result JSON's and the console's alike; it adds
+the `Authorization: Bearer` header only as it sends each request (`backends/openai/http.py`,
+`_build_headers`), so no request record carries it. GuideLLM's own CLI flag,
+`--backend kind=openai_http,api_key=...`, would put the key in argv, so it is not used. After each
+gateway run, `cell` searches the run's files for the key, reading the pattern from the key file
+(`grep -F -f`), and prints whether it was found. A direct run sends no key.
+
+**Same requests both ways.** GuideLLM checks the backend before a run with `GET <target>/health`,
+the target's `/v1` cut off. Through the gateway that is `/<alias>/health`, which no route serves
+(404, slice 1), so each scenario points the check at `/v1/models`, direct and through the gateway
+alike; through the gateway it also proves the key before any load is sent. Each run has its own
+seed, from its name (`--seed kind=static,value=<cksum of the name>`): with GuideLLM's default seed
+every run would send the same synthetic prompts and images, and the row's prefix cache would serve
+the gateway run and the second direct run what the first sent. The audio clips come from a dataset
+and are the same in every run, so in O-audio the rows' prefix cache may favour the later runs;
+`o-audio-d2` against `o-audio-d1` shows how much.
+
+**Two things the cells share with the layout.** The gateway runs on gb10-2 beside the vision row,
+so in O-vision the gateway's CPU comes from the vision row's host. And the agent cell completes
+few requests in 110 s (spike-model-layout's run at 4 completed 12), so its p95s rest on few
+samples; its medians are the reading.
+
+### The steps
+
+The session runs these, one at a time, in the architect's view, on the laptop from the repository
+root, before the fence (slice 3). First, read-only: each row lists its alias, and the gateway
+container's idle CPU and memory.
+
+```sh
+for row in agent:gb10-1:8000 vision:gb10-2:8000 audio:framework:8001 embedding:framework:8002; do
+  printf '%s: ' "${row%%:*}"; curl -sS "http://${row#*:}/v1/models" | jq -r '[.data[].id] | join(",")'
+done
+ssh gb10-2 docker stats --no-stream agentgateway
+```
+
+Then the helpers, and the twelve runs, each cell's three back to back and read together:
+
+```sh
+source scripts/measure-lib.sh
+
+cell o-agent-d1 overhead-agent direct agent
+cell o-agent-g overhead-agent gateway agent
+cell o-agent-d2 overhead-agent direct agent
+compare o-agent-d1 o-agent-g o-agent-d2
+
+cell o-vision-d1 overhead-vision direct vision
+cell o-vision-g overhead-vision gateway vision
+cell o-vision-d2 overhead-vision direct vision
+compare o-vision-d1 o-vision-g o-vision-d2
+
+cell o-audio-d1 overhead-audio direct audio
+cell o-audio-g overhead-audio gateway audio
+cell o-audio-d2 overhead-audio direct audio
+compare o-audio-d1 o-audio-g o-audio-d2
+
+cell o-embed-d1 overhead-embed direct embedding
+cell o-embed-g overhead-embed gateway embedding
+cell o-embed-d2 overhead-embed direct embedding
+compare o-embed-d1 o-embed-g o-embed-d2
+```
+
+Each `cell` follows GuideLLM's output in the terminal and ends with its exit, the key check on a
+gateway run, and `summarize`. Ctrl-C stops a run; a stopped or failed run is rerun under a new
+name (`o-agent-g2`), since `cell` refuses a name it has used.
+
+### How the result is read
+
+Per behavior 7, the gateway's cost is read against run noise, figure by figure: the median and p95
+of TTFT, ITL, and request latency (embedding: request latency only, since an embedding has no
+tokens to stream). `compare` prints, for each:
+
+- **the spread**, `|d1 − d2|`, the two direct runs' difference: what the same load gives twice;
+- **what the gateway adds**, `g − (d1 + d2) / 2`, the gateway run against the mean of the direct
+  runs around it, so a drift across the three runs is split, not charged to the gateway;
+- **within** when what it adds is no larger than the spread: at this load the gateway's cost is
+  indistinguishable from run noise; **beyond** when it is larger: the finding states the added
+  figure as the gateway's cost, in ms and as a share of the direct mean.
+
+A run with errored requests, or a cell where the two direct runs disagree widely, is reported as
+such before any reading of it. Beside each gateway run, the container's CPU and memory during the
+benchmark: `summarize` gives the samples' median and maximum CPU (docker's figure, 100% being one
+of gb10-2's cores) and memory (MiB), counting only the samples inside the benchmark's own start
+and end, so GuideLLM's start-up, when the gateway idles, is left out.
+
+### Where the samples land
+
+Untracked, under `.state/agentgateway/`:
+
+- `cells/<run>/result.json`: GuideLLM's result, every request's timings;
+- `cells/<run>/guidellm.log`: GuideLLM's console output;
+- `cells/<run>/exit`: the run's exit status;
+- `cells/<run>/gateway-stats.tsv`, gateway runs only: one row each 5 s
+  (`MEASURE_STATS_EVERY`) from `docker stats --no-stream` on gb10-2: the epoch, the time, the
+  container's CPU and memory, a row of dashes where a read failed;
+- `commands-<date>.log`: every helper call and command, and what `cell`, `summarize`, and
+  `compare` printed.
 
 ## Slice 3 · fence, caps, probes, go-ai and infer, inventory
 
