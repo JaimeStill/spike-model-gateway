@@ -107,8 +107,10 @@
   form, the base-URL choice, and other config optimizations, before priority builds on it.
 - plan: `priority` runs on agentgateway alone and adds budgets counting streamed requests' usage;
   the dot-segment hardening goes to `answer`'s gateway document as a requirement.
-- plan: the "only network path" pending edit is applied in this plan's coordinator pull request,
-  and v1.ai.client's acceptance now waits on agentgateway (shipped), not the whole spike.
+- plan: the "only network path" pending edit is applied in this plan's coordinator pull request.
+- plan: v1.ai.client's acceptance waits on this spike's `priority` task, so the models are stable
+  before the client uses them again (architect, 2026-11-13; standards-lab org#155, reverting
+  org#154's change to that sentence).
 - plan: priority's brief is planned in its own `start` session, not here.
 
 ## Pending edits
