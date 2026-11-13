@@ -23,8 +23,7 @@ Problem       The four vLLM rows (gb10-1 agent, gb10-2 vision, the Framework aud
               repository. It gives path routes, consumer API keys, LLM
               pass-through that still reads token usage, and rate and in-flight
               limits. This task puts it in front of the rows with a per-purpose
-              base URL and gateway-issued keys, fences the rows behind it,
-              measures what it adds, and inventories what it lacks for admission
+              base URL and gateway-issued keys, measures what it adds, and inventories what it lacks for admission
               and overflow (evidence 1–4 and 8).
 Behaviors     1. spike-model-engines' host/ pull request serves each standing row
                  under its alias as its only model name: gpt-oss-120b-agent-fp8
@@ -58,21 +57,17 @@ Behaviors     1. spike-model-engines' host/ pull request serves each standing ro
                  /<alias>/v1. vLLM's root routes (metrics, health, tokenize, any
                  management or dev route) and agentgateway's admin API can't be
                  reached with a consumer key.
-              6. Once the fence is up, a direct request from the laptop to each
-                 row port times out or is refused: gb10-1:8000, gb10-2:8000,
-                 framework:8001, framework:8002. The gateway still serves all
-                 four aliases, and Tailscale SSH still reaches all three hosts.
-                 The fence is ufw with ufw-docker on each host, admitting the row
-                 ports on tailscale0 only from gb10-2. A recorded rule admits the
-                 laptop for a measuring session and a recorded command withdraws
-                 it; admitting makes a direct request answer, withdrawing makes
-                 it fail again.
-              7. The overhead cells run in one session, before the fence, purpose
+              6. (Removed by the architect, 2026-11-13: no host firewall. The
+                 rows stay reachable directly on the tailnet. This task proves
+                 traffic routes through the gateway; securing the path to the
+                 rows in production belongs to the networking and platform
+                 teams.)
+              7. The overhead cells run in one session, purpose
                  by purpose, each direct, gateway, direct. The finding gives the
                  gateway's added TTFT, ITL, and request latency (embedding:
                  latency only) against the spread between the two direct runs,
                  and the gateway container's CPU and memory during its runs.
-              8. The cap cells run through the gateway after the fence. The
+              8. The cap cells run through the gateway. The
                  finding records, per purpose and level, every reply's status and
                  any Retry-After, the row's running and waiting counts, and
                  latency growth past the cap. Observational: a starting point
@@ -133,14 +128,12 @@ Slices        No upgrade slice: this repository reports only Python, held at
                 root routes. The currency pin. (behaviors 1–5, 14)
               2 The overhead cells, direct, gateway, direct per purpose, while the
                 laptop still reaches the rows. (behavior 7)
-              3 The fence: the architect's ufw steps on all three hosts, the
-                laptop's admit and withdraw recorded, direct requests refused.
-                The cap cells; the 429 and 503 probes; go-ai's tier and infer
+              3 The cap cells; the 429 and 503 probes; go-ai's tier and infer
                 through the gateway, or their move to priority; the paper
-                inventory. (behaviors 6, 8–13)
+                inventory. (behaviors 8–13)
               4 The walkthrough the architect runs from the finding: an alias's
-                /models, a chat with and without a key, a revoked key, a direct
-                row request refused, the gateway's container read-outs.
+                /models, a chat with and without a key, a revoked key, the
+                gateway's container read-outs.
                 (behaviors 15, 16 hold throughout)
 Benchmarks    Every cell: GuideLLM 0.8.1 from the laptop, the model sent as the
               alias, its tokenizer given separately, built and run a step at a
@@ -163,11 +156,8 @@ Benchmarks    Every cell: GuideLLM 0.8.1 from the laptop, the model sent as the
                 C-audio: concurrent 4 and 8; 30 s or 64 requests a level.
                 C-embed: concurrent 128 and 160; 60 s a level.
               No other benchmark runs; a new or widened one is an escalation.
-Guided        The architect's: every ufw root step on gb10-1, gb10-2, and the
-              Framework (GB10s: install ufw and ufw-docker, allow Tailscale SSH on
-              tailscale0 before enabling; Framework: narrow its route rules to
-              gb10-2; the laptop's admit and withdraw); agentgateway's first walk
-              in slice 1; slice 4's walkthrough. The session runs over Tailscale
+Guided        The architect's: the session-start host updates (root);
+              agentgateway's first walk in slice 1; slice 4's walkthrough. The session runs over Tailscale
               SSH with no root: the image pull, container start and reloads, row
               restarts through host/, read-outs, cells and probes, each step in
               the architect's view.
@@ -246,7 +236,16 @@ slices 2/4 committed (slice 1: 48027e3; slice 2: 4b55cc6, 93405a0) · standards 
   virtual models: failover, weighted, conditional, callout) live in the `llm` section, which takes
   one path prefix. Slice 3's paper inventory records the risk and that `priority` may weigh
   per-alias base URLs against one shared `/v1` routed by model name.
+- agentgateway: behavior 6, the ufw fence, is removed (architect, 2026-11-13). This task proves
+  traffic routes through the gateway; securing the path to the rows in production belongs to the
+  networking and platform teams. No host firewall changes, so in dev the rows stay reachable
+  directly on the tailnet and the gateway is not the only network path. It supersedes round 2's
+  ufw decision. Rejected: ufw with ufw-docker on the GB10s and narrowed Framework rules, as
+  overhead the spike doesn't need.
 
 ## Pending edits
 
-(none)
+- coordinator · roadmap: `goals.experiment.hosting.spike-model-gateway`'s summary drops "and is
+  the only network path to the rows" as a dev requirement, noting that production's network
+  security belongs to the networking and platform teams; its `agentgateway` task's proof drops "a
+  direct tailnet request to a row fails" (architect, 2026-11-13).
