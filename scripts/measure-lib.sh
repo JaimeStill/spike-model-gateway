@@ -234,12 +234,14 @@ cell() {
       124) echo "$name: exit 124, the ${MEASURE_CELL_CAP:-10m} cap hit" ;;
       *) echo "$name: exit $rc" ;;
     esac
+    # grep's 1 is "not found"; any other failure is no answer, and says so.
     if [[ $target != direct ]]; then
-      if grep -rqsF -f "$MEASURE_ROOT/$MEASURE_KEY" "$MEASURE_ROOT/$dir"; then
-        echo "$name: THE KEY IS IN $dir; delete it before anything is shared"
-      else
-        echo "$name: the key is in none of $dir's files"
-      fi
+      grep -rqF -f "$MEASURE_ROOT/$MEASURE_KEY" "$MEASURE_ROOT/$dir" 2>/dev/null
+      case $? in
+        0) echo "$name: THE KEY IS IN $dir; delete it before anything is shared" ;;
+        1) echo "$name: the key is in none of $dir's files" ;;
+        *) echo "$name: THE KEY SEARCH FAILED in $dir; search it before anything is shared" ;;
+      esac
     fi
   } | _measure_say cell
   summarize "$name"

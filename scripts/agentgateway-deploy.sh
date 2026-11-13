@@ -147,7 +147,7 @@ marker='^(.*)sha256:@@([a-z0-9-]+)@@(.*)$'
 # one under that name; stop before anything is sent.
 if grep -qP '@@[a-z0-9-]+@@' "$rendered" ||
   grep -P '^\s*- keyHash:' "$rendered" | grep -vqP '^\s*- keyHash: sha256:[0-9a-f]{64}\s*$'; then
-  echo "agentgateway: a key marker is left in the rendered config; nothing was sent" >&2
+  echo "agentgateway: a key marker, or a keyHash that isn't a full hash, is in the rendered config; nothing was sent" >&2
   exit 1
 fi
 

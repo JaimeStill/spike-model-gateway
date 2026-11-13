@@ -176,11 +176,13 @@ _clients_tier() {
   rc=$?
   {
     echo "$name: exit $rc"
-    if grep -qsF -f "$CLIENTS_ROOT/$CLIENTS_STATE/keys/go-ai" "$CLIENTS_ROOT/$out"; then
-      echo "$name: THE KEY IS IN $out; delete it before anything is shared"
-    else
-      echo "$name: the key is not in $out"
-    fi
+    # grep's 1 is "not found"; any other failure is no answer, and says so.
+    grep -qF -f "$CLIENTS_ROOT/$CLIENTS_STATE/keys/go-ai" "$CLIENTS_ROOT/$out" 2>/dev/null
+    case $? in
+      0) echo "$name: THE KEY IS IN $out; delete it before anything is shared" ;;
+      1) echo "$name: the key is not in $out" ;;
+      *) echo "$name: THE KEY SEARCH FAILED on $out; search it before anything is shared" ;;
+    esac
     echo "$name: $(grep -c -- '^--- PASS' "$CLIENTS_ROOT/$out") passed, $(grep -c -- '^--- FAIL' "$CLIENTS_ROOT/$out") failed, $(grep -c -- '^--- SKIP' "$CLIENTS_ROOT/$out") skipped (top-level tests)"
   } | _clients_say "${kind}_tier"
   return "$rc"
