@@ -1,0 +1,5 @@
+# marathon working files.
+.claude/plans/
+.claude/briefs/
+# Untracked run state: benchmark scratch output before its findings are committed.
+.state/

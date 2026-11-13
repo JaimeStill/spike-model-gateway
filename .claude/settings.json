@@ -1,0 +1,15 @@
+{
+  "plansDirectory": "./.claude/plans",
+  "permissions": {
+    "allow": [
+      "Bash(gh issue view *)",
+      "Bash(gh pr view *)",
+      "Bash(mise run:*)",
+      "Bash(mise tasks:*)",
+      "Bash(tailscale ping -c 1 framework)",
+      "Bash(tailscale ping -c 1 gb10-1)",
+      "Bash(tailscale ping -c 1 gb10-2)",
+      "Skill(marathon:marathon)"
+    ]
+  }
+}

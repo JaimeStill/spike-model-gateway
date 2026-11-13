@@ -1,0 +1,11 @@
+# The tool the spike measures with from the laptop, GuideLLM, and the runtimes it needs. It lives
+# in its own environment, not mise.toml, so `mise run check` never installs it. Activate it with
+# MISE_ENV=bench: `MISE_ENV=bench mise install`, then `MISE_ENV=bench mise exec -- guidellm`.
+[tools]
+# Held on 3.14: torchcodec 0.17.0, which GuideLLM 0.8.1's audio extra needs, publishes no wheel or
+# sdist for Python 3.15 (cp315) yet, so currency reports Python behind its latest until it does.
+python = "3.14.10"
+# mise's pipx backend installs GuideLLM through uv, with its vision and audio extras, which the
+# vision and audio cells need.
+uv = "0.13.8"
+"pipx:guidellm" = { version = "0.8.1", extras = ["vision", "audio"] }

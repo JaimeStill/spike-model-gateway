@@ -1,0 +1,16 @@
+# Tasks never install a missing tool; `mise install` is the one step that reads the network.
+[settings]
+task.run_auto_install = false
+
+[tools]
+jq = "1.8.2"
+shellcheck = "0.11.0"
+
+[tasks.check]
+description = "Shellcheck every tracked shell script and resolve every relative Markdown link; reads no network, writes nothing"
+run = "scripts/check.sh"
+
+[tasks.currency]
+description = "Report every pin behind its latest, exiting nonzero if any"
+run = "scripts/currency.sh"
+quiet = true
