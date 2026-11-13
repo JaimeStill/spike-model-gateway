@@ -46,6 +46,12 @@ on_host 'mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml'
 flags="--restart unless-stopped $user"
 flags+=" --publish \"\$(tailscale ip -4):$AGW_PORT:$AGW_PORT\""
 flags+=" --publish 127.0.0.1:$AGW_UI_PORT:$AGW_UI_PORT $mount"
+# gb10-2 resolves names through systemd-resolved's stub (127.0.0.53), which a container can't
+# reach, so docker gives it an outside resolver that doesn't know the tailnet's short names. Each
+# row's host is added by its tailnet address, looked up on gb10-2 when the container is created.
+for h in gb10-1 gb10-2 framework; do
+  flags+=" --add-host \"$h:\$(tailscale ip -4 $h)\""
+done
 spec=$(printf '%s %s' "$flags" "$AGW_IMAGE" | sha256sum | cut -c1-12)
 
 current=$(on_host "docker container inspect agentgateway \

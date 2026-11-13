@@ -209,7 +209,7 @@ refreshes the config.
 
 ```sh
 docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml --validate-only
-docker run --detach --name agentgateway --restart unless-stopped --user "$(id -u):$(id -g)" --publish "$(tailscale ip -4):3000:3000" --publish 127.0.0.1:3001:3001 --volume "$HOME/agentgateway:/config:ro" --label spike.spec=898a2d857e7a cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml
+docker run --detach --name agentgateway --restart unless-stopped --user "$(id -u):$(id -g)" --publish "$(tailscale ip -4):3000:3000" --publish 127.0.0.1:3001:3001 --volume "$HOME/agentgateway:/config:ro" --add-host "gb10-1:$(tailscale ip -4 gb10-1)" --add-host "gb10-2:$(tailscale ip -4 gb10-2)" --add-host "framework:$(tailscale ip -4 framework)" --label spike.spec=e1d1d93a9f78 cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml
 docker logs agentgateway
 docker port agentgateway | sed "s/$(tailscale ip -4)/<tailnet>/"
 ```
