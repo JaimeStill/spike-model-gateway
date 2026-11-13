@@ -379,8 +379,8 @@ agent route and were forwarded to gb10-1 (log `route=default/agent endpoint=gb10
 routes, but that is what protects `/metrics` and the rest through the agent route, not the gateway.
 The paper inventory in slice 3 weighs the hardening: an authorization rule in agentgateway's native
 CEL, or a regex path match on each route, refusing `..` and its encodings (`%2e%2e`, `%2f`) before
-a request is routed. Behavior 6's firewall doesn't cover this: it admits the gateway as the rows'
-one source, and these requests come from the gateway.
+a request is routed. No network rule could cover it either, since these requests come from the
+gateway itself.
 
 **The key is never logged.** A search of the full container log for the first 8 characters of the
 architect's key, after the walk's requests, found nothing (grep exit 1).
@@ -390,8 +390,8 @@ pin is current.
 
 ## Slice 2 · overhead
 
-Behavior 7: the overhead cells, direct, gateway, direct per purpose, while the laptop still reaches
-the rows. Run on 2026-11-13 from 13:55 to 14:14; the results are under "Results" below.
+Behavior 7: the overhead cells, direct, gateway, direct per purpose, the direct runs sent from the
+laptop to each row. Run on 2026-11-13 from 13:55 to 14:14; the results are under "Results" below.
 
 ### The plan
 
@@ -451,7 +451,7 @@ samples; its medians are the reading.
 ### The steps
 
 The session runs these, one at a time, in the architect's view, on the laptop from the repository
-root, before the fence (slice 3). First, read-only: each row lists its alias, and the gateway
+root. First, read-only: each row lists its alias, and the gateway
 container's idle CPU and memory.
 
 ```sh
@@ -630,10 +630,12 @@ and at most 3.4 ms (median) to 4.5 ms (p95) to an embedding request, the hop inc
 
 Behaviors 8–13: the cap cells, the 429 and 503 probes, go-ai's integration tier and infer through
 the gateway, and the paper inventory of what agentgateway provides for overflow and for admission
-on vLLM's live metrics. Behavior 6, the fence, is removed (goal record, "Decisions"): the rows stay
-reachable directly, which the cap cells use to read each row's `/metrics`. Prepared; not yet run.
-The inventory below is drafted from v1.7.0's docs and source, with cells left for what the probes
-show.
+on vLLM's live metrics. Behavior 6 is removed: by the architect's decision of 2026-11-13 (goal
+record, "Decisions"), the rows stay reachable directly on the tailnet, and securing the path to
+them in production belongs to the networking and platform teams. The cap cells use that direct
+reach to read each row's `/metrics`. Run on 2026-11-13 from 14:43 to 14:59; the results are under
+"Results" below, and the inventory, drafted from v1.7.0's docs and source, has its probe cells
+filled from them.
 
 ### The cap cells
 
@@ -934,10 +936,175 @@ command, which "Commands as run" quotes.
   ../../../bin/infer ./cmd/infer`), the same code, whose `infer version` reports a development
   build.
 
+### Results
+
+Run on 2026-11-13: the pre-checks at 14:43:31, the access-log overlay deployed at 14:43:38, the cap
+cells from 14:43:46 to 14:54:45, the clients prepared at 14:55:29, the probes from 14:55:43 to
+14:57:11, the tiers and the header case from 14:57:16 to 14:58:53, the infer CLI at 14:59:05, and
+the clean-up at 14:59:14. Every command, as run, is under "Commands as run". The figures are
+`summarize`'s, read again from each run's files after the session; the probes' replies and log
+lines are as the session read them.
+
+**The pre-checks.** Each row listed exactly its alias, direct from the laptop: `["agent"]`,
+`["vision"]`, `["audio"]`, `["embedding"]`. The gateway container, idle, used 0.08% CPU and
+19.43 MiB of memory. The live config's first line was its schema comment, not an overlay line: it
+was deployed in slice 1, before the overlay mechanism existed. The `access-log` overlay was then
+deployed (`overlay access-log: applied`, "Configuration is valid!", reloaded in place).
+
+**Behavior 8: the cap cells.** All four runs exited 0, and the bench key was in none of their files.
+Every reply was 200: GuideLLM errored no request, the gateway logged no 429 or 503, and no reply
+carried a Retry-After. Nothing is refused at any cap: past the cap, requests wait inside vLLM, and
+the client sees only a longer wait. Per level, GuideLLM's requests, the gateway log's, and the
+row's counts from its `/metrics` samples (5 s apart, inside the level); latencies are medians in
+ms, with the p95 of request latency:
+
+| Cell | Level | GuideLLM ok / errored / incomplete | Gateway log | Running median (max) | Waiting median (max) | TTFT | ITL | Latency median / p95 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| agent | 12 | 16 / 0 / 12 | 200 ×28 | 12 (12) | 0 (9) | 9,821.64 | 91.97 | 65,477.57 / 70,028.32 |
+| agent | 16 | 12 / 0 / 16 | 200 ×28 | 12 (12) | 4 (14) | 15,765.00 | 108.28 | 72,518.57 / 75,447.90 |
+| vision | 16 | 96 / 0 / 16 | 200 ×112 | 14 (16) | 0 (0) | 2,466.96 | 64.08 | 9,272.73 / 9,374.53 |
+| vision | 20 | 96 / 0 / 20 | 200 ×116 | 15.5 (16) | 4 (4) | 3,249.00 | 72.27 | 10,395.23 / 16,418.35 |
+| audio | 4 | 64 / 0 / 0 | 200 ×64 | 3.5 (4) | 0 (0) | 153.42 | 45.66 | 856.63 / 1,922.13 |
+| audio | 8 | 64 / 0 / 0 | 200 ×64 | 3.5 (4) | 4 (4) | 962.75 | 45.80 | 1,808.29 / 3,268.97 |
+| embedding | 128 | 11,279 / 0 / 128 | 200 ×11,279; blank ×128 | 0 (0) | 0 (0) | — | — | 670.77 / 679.11 |
+| embedding | 160 | 5,434 / 0 / 0 | 200 ×5,434; blank ×2 | 0 (0) | 0 (0) | — | — | 21.65 / 752.86 |
+
+- **Agent** runs at its cap of 12 at the first level, with up to 9 waiting. At 16, 12 run and the
+  rest wait (median 4, up to 14): TTFT grows ×1.61, ITL ×1.18, to 108 ms, past the agent's 100 ms
+  floor, and request latency ×1.11. Each level completes few requests in 110 s, so the medians are
+  the reading.
+- **Vision** at 16 runs at most 16 with none waiting; its median latency, 9.27 s, is inside
+  vision's 10 s floor. At 20, 16 run and 4 wait: TTFT grows ×1.32, ITL ×1.13, and latency ×1.12,
+  to a median of 10.4 s and a p95 of 16.4 s.
+- **Audio** at 4 runs at most 4 with none waiting. At 8, 4 wait: TTFT grows ×6.28, to 963 ms, ITL
+  stays flat (45.8 ms), and latency grows ×2.11, to 1.81 s. The wait lands before the first token.
+- **Embedding** completed about 188 requests a second at 128 in flight, at 671 ms median and
+  679 ms p95. At 160 it completed 5,434, about 91 a second, at 21.65 ms median and 753 ms p95:
+  throughput halved and latency split in two, the opposite of a row past its cap. The session's
+  interpretation, not proven by these runs: the 160 level is bound by the client, GuideLLM on the
+  laptop not keeping 160 requests in flight, so it is no reading of the row. No other benchmark
+  was run to settle it.
+- **The embedding row's gauges.** `vllm:num_requests_running` and `vllm:num_requests_waiting` read
+  0 in every 5 s sample of both levels, although the row exposes both metrics, while 128 requests
+  were in flight. The likely reading, unproven: vLLM's pooling runner doesn't update those gauges
+  as the generate runner does. An admission rule on those gauges would see an idle embedding row.
+- **Cancelled requests in the gateway's log.** The requests GuideLLM cancels at a level's end, which
+  it counts incomplete, the gateway logged with a blank status on the embedding route (128 and
+  2). On agent and vision, whose replies stream, the gateway logged all of a level's requests as
+  200, the incomplete ones among them, their reply having begun.
+
+The gateway's CPU and memory, from the samples inside each run's benchmark:
+
+| Cap run | Samples | CPU % median / max | Memory MiB median / max |
+| --- | --- | --- | --- |
+| `c-agent` | 38 | 0.70 / 1.29 | 22.3 / 25.1 |
+| `c-vision` | 21 | 1.71 / 4.46 | 27.5 / 31.0 |
+| `c-audio` | 6 | 1.31 / 1.54 | 35.4 / 42.1 |
+| `c-embed` | 22 | 5.45 / 7.97 | 63.2 / 76.9 |
+
+No sample failed. At its busiest, about 188 embedding requests a second, the gateway used under 8%
+of one core and under 77 MiB.
+
+**The clients' preparation.** `goai_checkout` added a detached worktree of go-ai at
+`tools/infer/v0.1.0` (`84b41dd`) under `.state/agentgateway/go-ai`; go-ai's own working tree was
+not touched. `infer_install` installed infer v0.1.0 with `go install` into
+`.state/agentgateway/bin`, from the module proxy, so the fallback build was not needed.
+
+**Behavior 9: the probes.**
+
+- **429.** The `access-log` and `rate-limit-agent` overlays (2 requests, refilled every 10 s, on
+  route `default/agent`); the four requests in a row:
+  - Requests 1 and 2 got 200, with `x-ratelimit-limit` 2, `x-ratelimit-remaining` 1 and then 0, and
+    `x-ratelimit-reset` 8.
+  - Requests 3 and 4 got `429 Too Many Requests`, with `retry-after` 8 and the `x-ratelimit-*`
+    headers. The policy attached to the route named `default/agent`.
+  - The 429's log line carries `reason=RateLimit duration=0ms retry_after="8"` and no `endpoint=`:
+    no backend was selected, so a gateway refusal triggers no failover. The `retry_after` field
+    reads the header of a reply the gateway made itself.
+- **infer's retry run.** Against the drained bucket, infer with `--retries 3 --retry-base-delay
+  500ms --retry-max-delay 15s`: its `/models` request got 429 with `retry_after="1"` twice, and it
+  waited about 1 s each time; then 200 on `/models` and 200 on the chat, which answered "Red.",
+  completed. 3.1 s in all, exit 0. go-ai's retry honours the gateway's Retry-After.
+- **503.** The `in-flight-1` overlay alone. With the stream holding the one slot, a request with a
+  key and one without both got `503 Service Unavailable`, with no Retry-After: the limit is checked
+  before the key.
+  - infer with `--retries 2` stopped with `infer models: ai: models: 503 Service Unavailable:
+    request limit exceeded`. go-ai retries a 503 with its own backoff, since there is no
+    Retry-After to wait, and each attempt met the held slot.
+  - The stream ran on to 1,499 `data:` events and ended with `"finish_reason":"length"`.
+  - **Observability gap: a shed request is invisible in the log.** The access log had 0 lines for
+    the 503s. Only the `requests_shed` metric, per the source, counts them.
+- **Overlays removed** at 14:57:08: the live config's first line read `# overlays: none`, and a
+  request got 200 with no `x-ratelimit-*` header.
+
+**Behavior 10: go-ai's tier and infer's tier.**
+
+- **go-ai's tier**, through the gateway on agent, vision, audio, and embedding, each role's key in
+  `AI_<ROLE>_TOKEN`: 20 passed, 0 failed, 1 skipped (`TestTranscribeRoute`,
+  `AI_TRANSCRIPTION_BASE_URL` unset), in 51.9 s. It covered the function-call round trip,
+  streamed and not, in Chat Completions, Messages, and Responses; tool choice (a named function in
+  all three, allowed tools required, and `none`); reasoning round trips; structured output; the
+  image description; and `TestTranscribeChat`, the audio chat. The key was not in the log.
+- **infer's tier**: 13 passed, 0 failed, 1 skipped (`TestTranscribeRoute`; `TestModels`'
+  `AI_TRANSCRIPTION_BASE_URL` subtest skipped too), in 23.1 s, `TestCredentials` and
+  `TestEndpoint_MapsCredentials` among the passes. The key was not in the log.
+- **The header case.** The `key-header` overlay (the key read from `x-api-key`):
+  - A Bearer request got 401: the gateway reads the key from one location only.
+  - `CLIENTS_KEY_IN=header goai_tier goai-tier-header embedding` reported 18 passed, 0 failed, 3
+    skipped. Most of those 18 pass in 0.00 s: their roles are unset, so each skips inside its
+    subtests while the top-level test reports PASS, and four, the credentials tests, need no role's
+    endpoint. `TestEmbed` ran (0.03 s), and the gateway logged 5
+    `/embedding/v1/embeddings` and 7 `/embedding/v1/models` requests, all 200: the key went in
+    `x-api-key` through `AI_EMBEDDING_HEADER`.
+  - Bearer restored: `# overlays: none`, and a Bearer request got 200.
+
+**Behavior 11: the infer CLI**, with `INFER_TOKEN` and no `INFER_MODEL`:
+
+- `models` on each alias listed only that alias.
+- `chat` on agent answered "Mars.", completed, 112 tokens, 29 of them reasoning; on vision, "Hello
+  to you!"; on audio, "Hello there now.".
+- `embed` on embedding returned two vectors of 768. The session's `jq` summary of the output hit a
+  parse error on one line of infer's output; the format of that line was not recorded.
+
+**Behavior 12** did not trigger: both tiers and the CLI carried the key, in Bearer and in the
+header, so behaviors 10 and 11 stay in this task.
+
+**Behavior 13: the paper inventory**, below, with its probe cells filled from these results and
+its marks unchanged. What the probes add:
+
+- A gateway refusal, the rate limit's 429 or the in-flight limit's 503, is answered before backend
+  selection, with no endpoint, so it triggers no failover.
+- The in-flight limit's 503 is logged nowhere.
+- vLLM queues past every cap and never refuses (the cap cells), so a full row triggers no
+  eviction.
+
+**The clean-up.** The go-ai worktree was removed at 14:59:14, with the worktree's absolute path
+(under "Commands as run").
+
+**go-ai fixes for v1.ai.client** (item 7 of its readiness questions): none found. Both tiers and
+the CLI ran unchanged through the gateway, Bearer and header alike, and go-ai's retry handled the
+gateway's 429 as its Retry-After asks.
+
+### On demand: the refusals for v1.ai.client's acceptance
+
+v1.ai.client's acceptance can see a gateway refusal live with the same overlays, from the laptop
+at the repository root; each step reloads the gateway in place, with no restart.
+
+1. **Apply** one overlay: `scripts/agentgateway-deploy.sh access-log rate-limit-agent` for the
+   429, or `scripts/agentgateway-deploy.sh in-flight-1` for the 503 (the two don't combine, since
+   `access-log` and `in-flight-1` both set `frontendPolicies`). `ssh gb10-2 head -1
+   '~/agentgateway/config.yaml'` names what is live.
+2. **Trip** it. The 429: send three requests to `/agent/v1/models` within 10 s (step 4's `gw_curl`
+   loop); the third gets 429 with `retry-after`, and a client run against the drained bucket sees
+   it. The 503: hold the one slot with a long streamed chat (step 5's), then send the client's
+   request, with or without a key.
+3. **Remove** it: `scripts/agentgateway-deploy.sh` with no overlay; the first line reads
+   `# overlays: none`, and a request gets 200 with no `x-ratelimit-*` header (step 6).
+
 ### The paper inventory
 
 What agentgateway v1.7.0 provides for (a) capacity overflow to Azure AI Foundry and (b) admission
-on vLLM's live metrics, from its docs and source; the probe cells are filled when slice 3 runs.
+on vLLM's live metrics, from its docs and source, with the probe cells filled from slice 3's runs.
 Docs paths are under `website/content/docs/standalone/latest/` unless named otherwise, source
 paths under `crates/agentgateway/src/`, both at the `v1.7.0` tag. "Std" is standalone, this
 spike's mode.
@@ -960,7 +1127,8 @@ spike's mode.
   refusing `..` and its encodings before routing.
 - **A full row never refuses.** vLLM queues past `max-num-seqs` (`num_requests_waiting`) rather
   than answering 429 or 503, so nothing agentgateway classifies as unhealthy ever comes back from
-  a busy row; eviction and failover never see load, only failures. The cap cells measure this.
+  a busy row; eviction and failover never see load, only failures. The cap cells confirm it: only
+  200s past every cap.
 
 **The mechanisms.**
 
@@ -977,14 +1145,14 @@ spike's mode.
 | Rate limits | Local token buckets (`requests` or `tokens`, per CEL `key`, e.g. per consumer key), or Envoy's rate limit service; 429 with Retry-After and `x-ratelimit-*` | `localRateLimit`, `remoteRateLimit` on routes, `llm.policies`, top-level `policies` | `http/localratelimit.rs`, `http/remoteratelimit.rs`; `documentation/configuration/resiliency/rate-limits.md` |
 | Budgets | Per key, USD or tokens over an epoch-aligned window; `Block` answers 429 with Retry-After at the window's reset. Needs `config.database.url` | `apiKey.keys[].budgets[]` | `http/budget/mod.rs`; `documentation/llm/cost-controls/budget-limits/per-key.md` |
 
-**The probes, read into it** (filled when slice 3 runs):
+**The probes, read into it** (slice 3's runs, under "Results" above):
 
 | Probe | Expected from source | Seen |
 | --- | --- | --- |
-| Rate limit on agent | 429, `retry-after` ≤ 10, `x-ratelimit-*`; no `endpoint=` in the log | — |
-| In-flight limit 1 | 503, no Retry-After, also without a key; no log line | — |
-| infer with retries | waits the Retry-After, then 200, exit 0 | — |
-| Cap cells | only 2xx; `num_requests_waiting` above 0 past each cap; no Retry-After | — |
+| Rate limit on agent | 429, `retry-after` ≤ 10, `x-ratelimit-*`; no `endpoint=` in the log | As expected: `429 Too Many Requests` with `retry-after` 8 and `x-ratelimit-*`; the log line `reason=RateLimit duration=0ms retry_after="8"` with no `endpoint=`. The refusal is answered before backend selection, so it triggers no failover |
+| In-flight limit 1 | 503, no Retry-After, also without a key; no log line | As expected: `503 Service Unavailable` with no Retry-After, with a key and without; 0 access log lines. A shed request is logged nowhere |
+| infer with retries | waits the Retry-After, then 200, exit 0 | As expected: two 429s with `retry_after="1"`, about 1 s waited after each, then 200; 3.1 s, exit 0 |
+| Cap cells | only 2xx; `num_requests_waiting` above 0 past each cap; no Retry-After | Only 200s and no Retry-After in all four cells; waiting above 0 past the cap on agent, vision, and audio (the embedding row's gauges read 0 throughout). vLLM queues past every cap and never refuses, so a full row triggers no eviction |
 
 **The requirements.** Per requirement: native, partial, or gap, and what could fill it, native or
 existing tools first and an authored extension or callout last.
@@ -1181,4 +1349,135 @@ Each `cell` also ran `summarize`, whose lines are in the log, not here.
 + 2026-11-13T14:12:38-05:00 laptop: cell o-embed-d2 overhead-embed direct embedding
 + 2026-11-13T14:12:38-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://framework:8002/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-embed.yaml --backend kind=openai_http,model=embedding --tokenizer kind=huggingface_auto,model=ibm-granite/granite-embedding-english-r2 --seed kind=static,value=3319913349 --output kind=json,path=.state/agentgateway/cells/o-embed-d2/result.json --disable-console-interactive > .state/agentgateway/cells/o-embed-d2/guidellm.log 2>&1
 + 2026-11-13T14:13:53-05:00 laptop: compare o-embed-d1 o-embed-g o-embed-d2
+```
+
+### 2026-11-13 · the cap cells, probes, go-ai and infer
+
+From the laptop, from the repository root, `$(<.state/agentgateway/keys/<name>)` being the only
+form in which a key appears. A deploy is logged by the commands it runs on gb10-2, after its
+`key <name>: existing` and `overlay <name>: applied` lines (in the log, not here): the access-log
+overlay at 14:43:38; `access-log rate-limit-agent` at 14:55:43; `in-flight-1` at 14:56:15; none at
+14:57:08; `key-header` at 14:58:46; and none at 14:58:50. `cell` logs the GuideLLM command it runs
+and its samplers, and `summarize`'s lines, printed twice for each run, stay in the log. The client
+helpers log the command each runs with its arguments joined, so the quoting of a curl's `-w` or
+`-d` argument is not shown. Commands run outside the helpers are not in the log and are not quoted:
+the 503 probe's keyless curl, the reads of the gateway's log in the 429 and 503 probes, and
+infer's `--retries 2` run against the in-flight limit.
+
+```text
++ 2026-11-13T14:43:31-05:00 laptop: for row in agent:gb10-1:8000 vision:gb10-2:8000 audio:framework:8001 embedding:framework:8002; do printf "%s: " "${row%%:*}"; curl -sS --max-time 5 "http://${row#*:}/v1/models" | jq -c "[.data[].id]"; done; ssh gb10-2 docker stats --no-stream agentgateway; ssh gb10-2 head -1 "~/agentgateway/config.yaml"
++ 2026-11-13T14:43:38-05:00 gb10-2: mkdir -p ~/agentgateway
++ 2026-11-13T14:43:38-05:00 laptop: ssh gb10-2 'cat > ~/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.OpqmkN.yaml
++ 2026-11-13T14:43:38-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-13T14:43:38-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-13T14:43:38-05:00 gb10-2: mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml
++ 2026-11-13T14:43:38-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "spike.spec"}} {{.State.Running}}' 2>/dev/null || true
++ 2026-11-13T14:43:38-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
++ 2026-11-13T14:43:46-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T14:43:46-05:00 laptop: cell c-agent cap-agent cap agent
++ 2026-11-13T14:43:46-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/agent/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/cap-agent.yaml --backend kind=openai_http,model=agent --tokenizer kind=huggingface_auto,model=openai/gpt-oss-120b --seed kind=static,value=2489647318 --output kind=json,path=.state/agentgateway/cells/c-agent/result.json --disable-console-interactive > .state/agentgateway/cells/c-agent/guidellm.log 2>&1
++ 2026-11-13T14:43:46-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/agentgateway/cells/c-agent/gateway-stats.tsv
++ 2026-11-13T14:43:46-05:00 laptop: every 5 s while it runs: curl -sS --max-time 3 http://gb10-1:8000/metrics, the sums of vllm:num_requests_running and vllm:num_requests_waiting >> .state/agentgateway/cells/c-agent/row-metrics.tsv
++ 2026-11-13T14:47:58-05:00 laptop: ssh -n gb10-2 'docker logs --timestamps --since 1794599026 --until 1794599279 agentgateway 2>&1' | the lines of route=default/agent as time, status, path, retry_after > .state/agentgateway/cells/c-agent/gateway-requests.tsv
++ 2026-11-13T14:48:02-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T14:48:10-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T14:48:10-05:00 laptop: cell c-vision cap-vision cap vision
++ 2026-11-13T14:48:10-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/vision/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/cap-vision.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=1282260406 --output kind=json,path=.state/agentgateway/cells/c-vision/result.json --disable-console-interactive > .state/agentgateway/cells/c-vision/guidellm.log 2>&1
++ 2026-11-13T14:48:10-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/agentgateway/cells/c-vision/gateway-stats.tsv
++ 2026-11-13T14:48:10-05:00 laptop: every 5 s while it runs: curl -sS --max-time 3 http://gb10-2:8000/metrics, the sums of vllm:num_requests_running and vllm:num_requests_waiting >> .state/agentgateway/cells/c-vision/row-metrics.tsv
++ 2026-11-13T14:51:01-05:00 laptop: ssh -n gb10-2 'docker logs --timestamps --since 1794599290 --until 1794599462 agentgateway 2>&1' | the lines of route=default/vision as time, status, path, retry_after > .state/agentgateway/cells/c-vision/gateway-requests.tsv
++ 2026-11-13T14:51:09-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T14:51:09-05:00 laptop: cell c-audio cap-audio cap audio
++ 2026-11-13T14:51:09-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/audio/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/cap-audio.yaml --backend kind=openai_http,model=audio --tokenizer kind=huggingface_auto,model=google/gemma-4-E4B-it --seed kind=static,value=3023674224 --output kind=json,path=.state/agentgateway/cells/c-audio/result.json --disable-console-interactive > .state/agentgateway/cells/c-audio/guidellm.log 2>&1
++ 2026-11-13T14:51:09-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/agentgateway/cells/c-audio/gateway-stats.tsv
++ 2026-11-13T14:51:09-05:00 laptop: every 5 s while it runs: curl -sS --max-time 3 http://framework:8001/metrics, the sums of vllm:num_requests_running and vllm:num_requests_waiting >> .state/agentgateway/cells/c-audio/row-metrics.tsv
++ 2026-11-13T14:51:59-05:00 laptop: ssh -n gb10-2 'docker logs --timestamps --since 1794599469 --until 1794599520 agentgateway 2>&1' | the lines of route=default/audio as time, status, path, retry_after > .state/agentgateway/cells/c-audio/gateway-requests.tsv
++ 2026-11-13T14:52:07-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-13T14:52:07-05:00 laptop: cell c-embed cap-embed cap embedding
++ 2026-11-13T14:52:07-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/embedding/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/cap-embed.yaml --backend kind=openai_http,model=embedding --tokenizer kind=huggingface_auto,model=ibm-granite/granite-embedding-english-r2 --seed kind=static,value=726206947 --output kind=json,path=.state/agentgateway/cells/c-embed/result.json --disable-console-interactive > .state/agentgateway/cells/c-embed/guidellm.log 2>&1
++ 2026-11-13T14:52:07-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/agentgateway/cells/c-embed/gateway-stats.tsv
++ 2026-11-13T14:52:07-05:00 laptop: every 5 s while it runs: curl -sS --max-time 3 http://framework:8002/metrics, the sums of vllm:num_requests_running and vllm:num_requests_waiting >> .state/agentgateway/cells/c-embed/row-metrics.tsv
++ 2026-11-13T14:54:45-05:00 laptop: ssh -n gb10-2 'docker logs --timestamps --since 1794599527 --until 1794599686 agentgateway 2>&1' | the lines of route=default/embedding as time, status, path, retry_after > .state/agentgateway/cells/c-embed/gateway-requests.tsv
++ 2026-11-13T14:55:24-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-13T14:55:29-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-13T14:55:29-05:00 laptop: git -C ~/architecture/go-ai worktree add --detach .state/agentgateway/go-ai tools/infer/v0.1.0
++ 2026-11-13T14:55:29-05:00 laptop: GOBIN=.state/agentgateway/bin go install github.com/standards-lab/go-ai/tools/infer/cmd/infer@v0.1.0 && .state/agentgateway/bin/infer version
++ 2026-11-13T14:55:43-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-13T14:55:43-05:00 gb10-2: mkdir -p ~/agentgateway
++ 2026-11-13T14:55:43-05:00 laptop: ssh gb10-2 'cat > ~/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.O1B0Ki.yaml
++ 2026-11-13T14:55:43-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-13T14:55:43-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-13T14:55:43-05:00 gb10-2: mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml
++ 2026-11-13T14:55:43-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "spike.spec"}} {{.State.Running}}' 2>/dev/null || true
++ 2026-11-13T14:55:43-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
++ 2026-11-13T14:55:45-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models
++ 2026-11-13T14:55:45-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models
++ 2026-11-13T14:55:45-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models
++ 2026-11-13T14:55:45-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models
++ 2026-11-13T14:55:53-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-13T14:56:02-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -w %{http_code}\n http://gb10-2:3000/agent/v1/models
++ 2026-11-13T14:56:02-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -w %{http_code}\n http://gb10-2:3000/agent/v1/models
++ 2026-11-13T14:56:02-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/agent/v1 .state/agentgateway/bin/infer --retries 3 --retry-base-delay 500ms --retry-max-delay 15s chat Name a primary color.
++ 2026-11-13T14:56:15-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-13T14:56:15-05:00 gb10-2: mkdir -p ~/agentgateway
++ 2026-11-13T14:56:15-05:00 laptop: ssh gb10-2 'cat > ~/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.EGdhnk.yaml
++ 2026-11-13T14:56:15-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-13T14:56:15-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-13T14:56:15-05:00 gb10-2: mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml
++ 2026-11-13T14:56:15-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "spike.spec"}} {{.State.Running}}' 2>/dev/null || true
++ 2026-11-13T14:56:15-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
++ 2026-11-13T14:56:17-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -N -o .state/agentgateway/inflight-stream.txt -H Content-Type: application/json -d {"model":"agent","stream":true,"messages":[{"role":"user","content":"Write a 400-word story about a lighthouse."}],"max_tokens":1500} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-13T14:56:20-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models
++ 2026-11-13T14:57:08-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-13T14:57:08-05:00 gb10-2: mkdir -p ~/agentgateway
++ 2026-11-13T14:57:08-05:00 laptop: ssh gb10-2 'cat > ~/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.jSgSpz.yaml
++ 2026-11-13T14:57:08-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-13T14:57:08-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-13T14:57:09-05:00 gb10-2: mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml
++ 2026-11-13T14:57:09-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "spike.spec"}} {{.State.Running}}' 2>/dev/null || true
++ 2026-11-13T14:57:09-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
++ 2026-11-13T14:57:11-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models
++ 2026-11-13T14:57:16-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-13T14:57:16-05:00 laptop: goai_tier goai-tier agent vision audio embedding
++ 2026-11-13T14:57:16-05:00 laptop: cd .state/agentgateway/go-ai/. && AI_AGENT_BASE_URL=http://gb10-2:3000/agent/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_VISION_BASE_URL=http://gb10-2:3000/vision/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3000/embedding/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/agentgateway/clients/goai-tier.log
++ 2026-11-13T14:58:15-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-13T14:58:15-05:00 laptop: infer_tier infer-tier agent vision audio embedding
++ 2026-11-13T14:58:15-05:00 laptop: cd .state/agentgateway/go-ai/tools/infer && AI_AGENT_BASE_URL=http://gb10-2:3000/agent/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_VISION_BASE_URL=http://gb10-2:3000/vision/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3000/embedding/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/agentgateway/clients/infer-tier.log
++ 2026-11-13T14:58:46-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-13T14:58:46-05:00 gb10-2: mkdir -p ~/agentgateway
++ 2026-11-13T14:58:46-05:00 laptop: ssh gb10-2 'cat > ~/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.gAnnsL.yaml
++ 2026-11-13T14:58:46-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-13T14:58:46-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-13T14:58:46-05:00 gb10-2: mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml
++ 2026-11-13T14:58:46-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "spike.spec"}} {{.State.Running}}' 2>/dev/null || true
++ 2026-11-13T14:58:46-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
++ 2026-11-13T14:58:49-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -w %{http_code} bearer\n http://gb10-2:3000/embedding/v1/models
++ 2026-11-13T14:58:49-05:00 laptop: goai_tier goai-tier-header embedding
++ 2026-11-13T14:58:49-05:00 laptop: cd .state/agentgateway/go-ai/. && AI_EMBEDDING_BASE_URL=http://gb10-2:3000/embedding/v1 AI_EMBEDDING_HEADER='x-api-key: '$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/agentgateway/clients/goai-tier-header.log
++ 2026-11-13T14:58:50-05:00 gb10-2: mkdir -p ~/agentgateway
++ 2026-11-13T14:58:50-05:00 laptop: ssh gb10-2 'cat > ~/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.uAd7Du.yaml
++ 2026-11-13T14:58:50-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-13T14:58:50-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-13T14:58:50-05:00 gb10-2: mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml
++ 2026-11-13T14:58:50-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "spike.spec"}} {{.State.Running}}' 2>/dev/null || true
++ 2026-11-13T14:58:50-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
++ 2026-11-13T14:58:53-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -w %{http_code} bearer restored\n http://gb10-2:3000/embedding/v1/models
++ 2026-11-13T14:59:05-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-13T14:59:05-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/agent/v1 .state/agentgateway/bin/infer models
++ 2026-11-13T14:59:05-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/vision/v1 .state/agentgateway/bin/infer models
++ 2026-11-13T14:59:05-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/audio/v1 .state/agentgateway/bin/infer models
++ 2026-11-13T14:59:05-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/embedding/v1 .state/agentgateway/bin/infer models
++ 2026-11-13T14:59:05-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/agent/v1 .state/agentgateway/bin/infer chat Name a planet.
++ 2026-11-13T14:59:07-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/vision/v1 .state/agentgateway/bin/infer chat Say hello in three words.
++ 2026-11-13T14:59:07-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/audio/v1 .state/agentgateway/bin/infer chat Say hello in three words.
++ 2026-11-13T14:59:07-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/embedding/v1 .state/agentgateway/bin/infer embed first passage second passage
++ 2026-11-13T14:59:14-05:00 laptop: git -C ~/architecture/go-ai worktree remove .state/agentgateway/go-ai
+= 2026-11-13T14:59:18-05:00 note: the clean-up ran as: git -C ~/architecture/go-ai worktree remove ~/experiments/spike-model-gateway/.state/agentgateway/go-ai
+```
+
+The clean-up's `+` line is the planned form; the note after it records that the removal ran with
+the worktree's absolute path:
+
+```sh
+git -C ~/architecture/go-ai worktree remove ~/experiments/spike-model-gateway/.state/agentgateway/go-ai
 ```
