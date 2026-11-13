@@ -2,9 +2,9 @@
 
 What agentgateway v1.7.0 does in front of the four vLLM rows, run as a container on gb10-2. The
 finding covers pass-through under purpose aliases, gateway-issued keys, what the gateway adds to
-latency and what it costs in CPU and memory, the fence that leaves it the only path to the rows,
-what a client sees at each row's cap, and what agentgateway lacks for admission and overflow
-(evidence 1–4 and 8 of [`context/README.md`](../../context/README.md#the-evidence)).
+latency and what it costs in CPU and memory, what a client sees at each row's cap, and what
+agentgateway lacks for admission and overflow (evidence 1–4 and 8 of
+[`context/README.md`](../../context/README.md#the-evidence)).
 
 - **Measured:** from 2026-11-13. Each slice's section gives the date and time of its runs.
 - **Gateway:** agentgateway v1.7.0, the official image `cr.agentgateway.dev/agentgateway:v1.7.0`
@@ -626,16 +626,386 @@ these loads agentgateway adds no cost distinguishable from run noise to agent, v
 and at most 3.4 ms (median) to 4.5 ms (p95) to an embedding request, the hop included, for under
 3% of one core and under 35 MiB of memory.
 
-## Slice 3 · fence, caps, probes, go-ai and infer, inventory
+## Slice 3 · caps, probes, go-ai and infer, inventory
 
-Behaviors 6 and 8–13: the fence, the cap cells, the 429 and 503 probes, go-ai's integration tier and
-infer through the gateway, and the paper inventory of what agentgateway provides for overflow and
-for admission on vLLM's live metrics. Pending.
+Behaviors 8–13: the cap cells, the 429 and 503 probes, go-ai's integration tier and infer through
+the gateway, and the paper inventory of what agentgateway provides for overflow and for admission
+on vLLM's live metrics. Behavior 6, the fence, is removed (goal record, "Decisions"): the rows stay
+reachable directly, which the cap cells use to read each row's `/metrics`. Prepared; not yet run.
+The inventory below is drafted from v1.7.0's docs and source, with cells left for what the probes
+show.
+
+### The cap cells
+
+Four cells, gateway only, each one GuideLLM run of two levels, the levels run back to back within
+the run. Observational: nothing stands at the caps on the gateway, so each cell shows what a client
+sees there. The requests are the overhead cells', with each run's own seed
+([`bench/README.md`](../../bench/README.md)).
+
+| Run | Scenario | Base URL | Levels | Load a level |
+| --- | --- | --- | --- | --- |
+| `c-agent` | `cap-agent` | `http://gb10-2:3000/agent/v1` | 12, 16 sessions | O-agent's 4-turn sessions; 110 s |
+| `c-vision` | `cap-vision` | `http://gb10-2:3000/vision/v1` | 16, 20 streams | O-vision's image and 200 tokens, 100 out; 60 s |
+| `c-audio` | `cap-audio` | `http://gb10-2:3000/audio/v1` | 4, 8 streams | O-audio's clips; 30 s or 64 requests |
+| `c-embed` | `cap-embed` | `http://gb10-2:3000/embedding/v1` | 128, 160 in flight | O-embed's 512 tokens; 60 s |
+
+About 8.7 minutes of load in all (agent 220 s, vision 120 s, audio at most 60 s, embedding 120 s),
+plus GuideLLM's start-up before each run; each run is capped at 10 minutes. C-embed holds a
+number of requests in flight where O-embed sent a constant rate, since the cap is a count in
+flight.
+
+**What a cap run records.** `cell <name> <scenario> cap <alias>` in
+[`scripts/measure-lib.sh`](../../scripts/measure-lib.sh) is a gateway run, with the bench key, the
+gateway's CPU and memory sampled as in slice 2, and three more records, all untracked in the run's
+directory:
+
+- **`row-metrics.tsv`**: every 5 s, the row's own `/metrics`, read direct from the laptop, and the
+  sums over its engines of `vllm:num_requests_running` and `vllm:num_requests_waiting`.
+- **Each reply's status, as GuideLLM saw it.** GuideLLM 0.8.1 keeps every request in
+  `result.json` (no sampling by default). A successful request passed `raise_for_status`, so it was
+  2xx; an errored one keeps its error as `repr` of httpx's `HTTPStatusError`
+  (`scheduler/worker.py`), which names the status (`Server error '503 Service Unavailable' for url
+  ...`) and none of the reply's headers. A request still running when a level ends is counted
+  incomplete, with no reply.
+- **`gateway-requests.tsv`**: after the run, the gateway's access log lines of the alias's route
+  inside the run's time (`docker logs --timestamps --since --until` on gb10-2), kept as time,
+  status, path, and `retry_after`. The overlay `access-log` adds that field, each reply's
+  `Retry-After` header, since GuideLLM keeps no header. The caller's address and every other field
+  are left out.
+
+`summarize` reads, per level: GuideLLM's replies by status; the gateway log's requests by status,
+with how many carried a Retry-After and its values; the row's running and waiting counts (median,
+max) from the samples inside the level; and then latency growth from the first level to the
+second, TTFT, ITL, and request latency medians (embedding: latency only), in ms and as a ratio.
+
+**What to expect.** vLLM admits up to its `max-num-seqs` sequences into a batch and queues the
+rest (`num_requests_waiting`); it refuses none for load and sets no Retry-After. Past a row's cap,
+a client should see only 200s, with the waiting count above 0 and latency, TTFT first, growing
+with it. A non-2xx reply, or a Retry-After, in a cap run is a finding in itself.
+
+### The probes
+
+Each probe is configured, run, and removed with a deploy-time overlay, so the committed
+[`gateway/agentgateway/config.yaml`](../../gateway/agentgateway/config.yaml) stays probe-free.
+
+**The overlay mechanism.** [`scripts/agentgateway-deploy.sh`](../../scripts/agentgateway-deploy.sh)
+takes the names of overlays, each `gateway/agentgateway/probes/<name>.yaml`, and applies them, in
+the order given, to the copy it sends gb10-2, never to `config.yaml`. A deploy without one sends
+`config.yaml` alone, which is how an overlay is removed; either way a re-run renders the same copy.
+An overlay holds sections opened by a directive comment: `#@ append` adds its lines at the end, as
+top-level sections, and refuses a top-level key the copy already has; `#@ after <line>` inserts its
+lines after the one line equal to `<line>`, and refuses none or several. Plain bash on the lines,
+with no YAML tool: the laptop's `yq` is the Python wrapper of jq, and the spike runs no Python. The
+copy's first line names its overlays (`# overlays: none` without), so `ssh gb10-2 head -1
+~/agentgateway/config.yaml` reads what is live; the deploy's `--validate-only` run checks each
+copy before it is moved into place, and agentgateway reloads it with no restart.
+
+| Overlay | What it sets | Source |
+| --- | --- | --- |
+| [`access-log`](../../gateway/agentgateway/probes/access-log.yaml) | an access log field, `retry_after`, each reply's `Retry-After` | `frontendPolicies.accessLog.add`; docs `observability/access-logs/view.md` |
+| [`rate-limit-agent`](../../gateway/agentgateway/probes/rate-limit-agent.yaml) | a request-rate limit on the agent route: 2 requests, 2 more every 10 s, one bucket for every caller | a top-level `policies` entry, `target.route` agent, `localRateLimit`; `http/localratelimit.rs` |
+| [`in-flight-1`](../../gateway/agentgateway/probes/in-flight-1.yaml) | the global in-flight limit at 1 | `frontendPolicies.http.maxConcurrentRequests`; `proxy/gateway.rs` |
+| [`key-header`](../../gateway/agentgateway/probes/key-header.yaml) | the consumer gateway reads its keys from `x-api-key` | `apiKey.location.header.name`, inserted after `    apiKey:` |
+
+`access-log` and `in-flight-1` both set `frontendPolicies`, so they don't combine; the deploy
+refuses the pair.
+
+**What the source says each answers.** From v1.7.0 (`crates/agentgateway/src/`):
+
+- **The rate limit**: 429, `ProxyError::RateLimitExceeded`, with `x-ratelimit-limit`,
+  `x-ratelimit-remaining`, `x-ratelimit-reset`, and `retry-after`, the seconds to the bucket's next
+  refill and at least 1 (`proxy/mod.rs`, the error's response; `http/localratelimit.rs`,
+  `status`). An admitted reply also carries the `x-ratelimit-*` headers. It is a route policy,
+  applied after the key and the route and before any backend (below).
+- **The in-flight limit**: 503 "request limit exceeded" with no Retry-After
+  (`ProxyError::RequestLimitExceeded`, `proxy/mod.rs`). It is counted per bind, each gateway's
+  port, and checked as a request arrives on a connection, before the key, the route, or any
+  backend (`proxy/gateway.rs`, `request_admission`), so even a keyless request gets 503 while the
+  limit is full, and the refusal leaves no access log line, only the `requests_shed` metric. A
+  connection reads the frontend policies when it opens, so the probe's curls, each a new
+  connection, see the reload.
+
+**Read against go-ai's retry set** (408, 429, 502, 503, 504; Retry-After in seconds or an HTTP
+date): both refusals are in it. The 429's `retry-after` is whole seconds, which go-ai reads; its
+wait replaces go-ai's backoff, and one longer than the client's max delay ends the retries
+(infer's README, "Retries"). The 503 has no Retry-After, so go-ai backs off on its own schedule.
+
+**Whether a gateway refusal triggers failover.** None can. In `proxy/httpproxy.rs`, `proxy()`
+runs the gateway policies (the key), selects the route, applies the route's request policies
+(apiKey, budget, authorization, request-rate limits), and only then reads the backend's policies
+and calls `make_backend_call`, which resolves a virtual model, selects a provider or endpoint, and
+sets the access log's `endpoint` (`l.endpoint = Some(backend_call.target...)`). A 401 or a
+request-rate 429 returns before that: no endpoint is chosen, no health or eviction is recorded,
+and no backend is tried, so there is nothing to fail over from. The in-flight 503 is earlier
+still. The one exception is a `type: tokens` rate limit, charged after the provider is chosen; this
+config has none. The probe confirms it: the 429's log line has no `endpoint=` field, where every
+forwarded request's has one.
+
+**Infer's retry run.** The released infer, `tools/infer/v0.1.0`, with `--retries 3
+--retry-base-delay 500ms --retry-max-delay 15s`, against the agent route with `rate-limit-agent`
+deployed and its bucket emptied first: its first request gets 429 with a Retry-After of at most
+10 s, which is under the 15 s max delay, so infer waits it out and the retry succeeds. The gateway
+log shows the 429, its `retry_after`, and the 200 that follows.
+
+### go-ai's tier, infer's tier, and the infer CLI
+
+**The release.** go-ai's per-role credentials, `AI_<ROLE>_TOKEN` and `AI_<ROLE>_HEADER`, arrived in
+both tiers with `tools/infer/v0.1.0` (`84b41dd`), not at `v0.1.0`, whose tier has no credentials.
+Between the two tags the base module's code is unchanged: only `integration/` (the new
+`credentials_test.go`, `doc.go`, `endpoint_test.go`), the README, `go.work`, `mise.toml`, and lint
+config differ. So both tiers run from a detached worktree of go-ai at `tools/infer/v0.1.0`, under
+`.state/agentgateway/go-ai`, with `GOWORK=off` as go-ai's `mise run integration` sets it: go-ai's
+tier tests v0.1.0's code, and infer's builds `cmd/infer` against the released `go-ai v0.1.0` its
+`go.mod` requires. go-ai's own working tree is not touched; the worktree is removed with `git -C
+~/architecture/go-ai worktree remove`. The CLI is the released module, `go install
+github.com/standards-lab/go-ai/tools/infer/cmd/infer@v0.1.0`, into `.state/agentgateway/bin`.
+
+**The invocation.** Each tier is `go test -race -tags integration -count=1 -v ./integration/...`,
+as go-ai's `mise run integration` runs it, from the worktree's root (go-ai's) or `tools/infer`
+(infer's). Each role's `AI_<ROLE>_BASE_URL` is `http://gb10-2:3000/<alias>/v1`, its
+`AI_<ROLE>_TOKEN` the `go-ai` key, sent as Bearer; `AI_TRANSCRIPTION_BASE_URL` is unset, so
+transcription's route-mode scenarios skip. infer's tier maps each role's variables onto
+`INFER_BASE_URL`, `INFER_TOKEN`, and `INFER_HEADER` in the built program's environment, never its
+argv.
+
+**The helpers.** [`scripts/clients-lib.sh`](../../scripts/clients-lib.sh), sourced: `goai_checkout`,
+`infer_install`, `goai_tier <name> <alias>...`, `infer_tier <name> <alias>...`, `infer_at <alias>
+<args>`, and `gw_curl <key> <curl args>`. Each reads its key from `.state/agentgateway/keys/<name>`
+with `$(<file)` inside a subshell into the environment of the one process that sends it: the
+tiers' `AI_<ROLE>_TOKEN` (or `_HEADER`), infer's `INFER_TOKEN` (or `INFER_HEADER`), or curl's
+config on its stdin (`printf 'header = "Authorization: Bearer %s"\n' "$(<key)" | curl -K -`,
+printf being a builtin). No key is in any argv, printed, or logged; the command log shows the
+expression. The tiers clear every role's variables first, so only the named roles run, and after
+each run the helper searches its log for the key. With `CLIENTS_KEY_IN=header` the same helpers
+send `x-api-key: <key>` instead, through `AI_<ROLE>_HEADER`, `INFER_HEADER`, or the curl header.
+
+**The header case**, once: `key-header` deployed, go-ai's tier on the embedding role alone with
+`AI_EMBEDDING_HEADER='x-api-key: <key>'` from the key file, and `AI_EMBEDDING_TOKEN` unset; a
+Bearer request gets 401 meanwhile. A deploy without the overlay restores Bearer.
+
+**The CLI** (behavior 11): `infer_at <alias> models`, then `chat` on agent, vision, and audio, and
+`embed` on embedding, with `INFER_TOKEN` from the go-ai key and no `INFER_MODEL`: each command
+lists the alias's models first and sends to the one listed.
+
+**If the key isn't carried** (behavior 12): should either tier or the CLI fail to send the key
+when slice 3 runs, a 401 in the gateway's log where a 200 was due, behaviors 10 and 11 move to
+`priority`; the finding and the goal record say so, and slice 3 completes without them.
+
+### The steps
+
+The session runs these one at a time, in the architect's view, on the laptop from the repository
+root. Times are estimates.
+
+1. **Pre-checks** (under 1 min), read-only: each row lists its alias, direct; the gateway's idle
+   CPU and memory; the live overlays.
+
+   ```sh
+   for row in agent:gb10-1:8000 vision:gb10-2:8000 audio:framework:8001 embedding:framework:8002; do
+     printf '%s: ' "${row%%:*}"; curl -sS --max-time 5 "http://${row#*:}/v1/models" | jq -c '[.data[].id]'
+   done
+   ssh gb10-2 docker stats --no-stream agentgateway
+   ssh gb10-2 head -1 '~/agentgateway/config.yaml'
+   ```
+
+2. **The cap cells** (about 12 min: 8.7 of load, the rest start-up). The `access-log` overlay
+   first, so the gateway's log carries each reply's Retry-After; then the four runs.
+
+   ```sh
+   scripts/agentgateway-deploy.sh access-log
+   source scripts/measure-lib.sh
+   cell c-agent cap-agent cap agent
+   cell c-vision cap-vision cap vision
+   cell c-audio cap-audio cap audio
+   cell c-embed cap-embed cap embedding
+   ```
+
+3. **The clients' preparation** (about 1 min, the module downloads included):
+
+   ```sh
+   source scripts/clients-lib.sh
+   goai_checkout
+   infer_install
+   ```
+
+4. **The 429 probe and infer's retry run** (about 2 min). Deploy the rate limit beside the log
+   field; send four requests in a row and read their headers; read the 429's log line; then empty
+   the bucket and run infer with retries.
+
+   ```sh
+   scripts/agentgateway-deploy.sh access-log rate-limit-agent
+   for i in 1 2 3 4; do gw_curl architect -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models | grep -iE '^(HTTP|retry-after|x-ratelimit)'; done
+   ssh gb10-2 'docker logs --since 2m agentgateway 2>&1' | grep 'route=default/agent' | sed -E 's/src\.addr=[^ ]+/src.addr=<laptop>/' | tail -4
+   gw_curl architect -sS -o /dev/null -w '%{http_code}\n' http://gb10-2:3000/agent/v1/models; gw_curl architect -sS -o /dev/null -w '%{http_code}\n' http://gb10-2:3000/agent/v1/models
+   time infer_at agent --retries 3 --retry-base-delay 500ms --retry-max-delay 15s chat "Name a primary color."
+   ssh gb10-2 'docker logs --since 1m agentgateway 2>&1' | grep 'route=default/agent' | sed -E 's/src\.addr=[^ ]+/src.addr=<laptop>/' | tail -4
+   ```
+
+   Expected: two 200s with `x-ratelimit-*`, then 429s with `retry-after` and `x-ratelimit-*`; the
+   429's log line with `http.status=429`, its `retry_after`, and no `endpoint=`; infer waiting out
+   the Retry-After, then answering, exit 0.
+
+5. **The 503 probe** (about 1 min). Deploy the in-flight limit alone (it replaces the two
+   overlays above); hold one request open with a long streamed chat; send a second with a key and
+   a third without; then count the log's 503 lines, which should be 0.
+
+   ```sh
+   scripts/agentgateway-deploy.sh in-flight-1
+   gw_curl architect -sS -N -o .state/agentgateway/inflight-stream.txt -H 'Content-Type: application/json' -d '{"model":"agent","stream":true,"messages":[{"role":"user","content":"Write a 400-word story about a lighthouse."}],"max_tokens":1500}' http://gb10-2:3000/agent/v1/chat/completions &
+   sleep 3
+   gw_curl architect -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models | grep -iE '^(HTTP|retry-after)'
+   curl -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models | grep -iE '^(HTTP|retry-after)'
+   wait
+   ssh gb10-2 'docker logs --since 2m agentgateway 2>&1' | grep -c 'http.status=503'
+   ```
+
+   Expected: both answer `HTTP/1.1 503` with no `retry-after`; the stream ends normally.
+
+6. **Probes removed** (under 1 min): deploy with no overlay, and confirm.
+
+   ```sh
+   scripts/agentgateway-deploy.sh
+   ssh gb10-2 head -1 '~/agentgateway/config.yaml'
+   gw_curl architect -sS -o /dev/null -D - http://gb10-2:3000/agent/v1/models | grep -iE '^(HTTP|x-ratelimit)'
+   ```
+
+   Expected: `# overlays: none`; a 200 with no `x-ratelimit-*` header.
+
+7. **go-ai's tier and infer's tier** (about 10 min, the agent's reasoning scenarios most of it):
+
+   ```sh
+   goai_tier goai-tier agent vision audio embedding
+   infer_tier infer-tier agent vision audio embedding
+   ```
+
+   Expected: every scenario passes; transcription's route mode skips, naming
+   `AI_TRANSCRIPTION_BASE_URL`; the key in neither log.
+
+8. **The header case** (about 1 min):
+
+   ```sh
+   scripts/agentgateway-deploy.sh key-header
+   gw_curl architect -sS -o /dev/null -w '%{http_code} bearer\n' http://gb10-2:3000/embedding/v1/models
+   CLIENTS_KEY_IN=header goai_tier goai-tier-header embedding
+   scripts/agentgateway-deploy.sh
+   gw_curl architect -sS -o /dev/null -w '%{http_code} bearer restored\n' http://gb10-2:3000/embedding/v1/models
+   ```
+
+   Expected: 401 for Bearer under the overlay; the embedding scenarios pass through the header;
+   200 once Bearer is restored.
+
+9. **The infer CLI** (about 2 min):
+
+   ```sh
+   for a in agent vision audio embedding; do infer_at "$a" models; done
+   infer_at agent chat "Name a planet."
+   infer_at vision chat "Say hello in three words."
+   infer_at audio chat "Say hello in three words."
+   infer_at embedding embed "first passage" "second passage" | jq -c length
+   ```
+
+   Expected: each `models` prints its alias alone; each chat a reply and its usage; two vectors of
+   768.
+
+10. **Clean-up**: `git -C ~/architecture/go-ai worktree remove .state/agentgateway/go-ai` from the
+    repository root, once the results are read.
+
+### Where the results land
+
+Untracked, under `.state/agentgateway/`: each cap run's `cells/<run>/` (`result.json`,
+`guidellm.log`, `exit`, `gateway-stats.tsv`, `row-metrics.tsv`, `gateway-requests.tsv`); each
+tier's `clients/<run>.log`; `inflight-stream.txt`; and `commands-<date>.log`, every helper call and
+command, which "Commands as run" quotes.
+
+### Settle live
+
+- **The rate limit's target.** The top-level policy names the route `agent` in namespace
+  `default`, as the access log names it (`route=default/agent`). The schema requires the
+  namespace and `--validate-only` doesn't check that a target exists, so the first 429 confirms it
+  attached; four 200s mean it did not.
+- **The `retry_after` field.** The docs read request headers in access log fields; that
+  `response.headers["retry-after"]` reads a gateway-made 429's header, and what it logs when there
+  is none, is seen in step 4 and in the cap runs' `gateway-requests.tsv`.
+- **The gateway's log under C-embed** may run to tens of thousands of lines; `docker logs --since
+  --until` reads only the run's window.
+- **How the gateway logs requests GuideLLM cancels** at a level's end: the gateway log may count
+  them under some status (a client close) where GuideLLM counts them incomplete.
+- **`go install ...@v0.1.0`** reads the module proxy. Should it fail, infer is built from the
+  worktree instead (`cd .state/agentgateway/go-ai/tools/infer && GOWORK=off go build -o
+  ../../../bin/infer ./cmd/infer`), the same code, whose `infer version` reports a development
+  build.
+
+### The paper inventory
+
+What agentgateway v1.7.0 provides for (a) capacity overflow to Azure AI Foundry and (b) admission
+on vLLM's live metrics, from its docs and source; the probe cells are filled when slice 3 runs.
+Docs paths are under `website/content/docs/standalone/latest/` unless named otherwise, source
+paths under `crates/agentgateway/src/`, both at the `v1.7.0` tag. "Std" is standalone, this
+spike's mode.
+
+**Three established facts it starts from.**
+
+- **The `llm` section is one prefix.** Virtual models (failover, weighted, conditional, callout)
+  exist only in the `llm` section (`types/local.rs`, `LocalLLMConfig.virtual_models`), and its
+  `pathPrefix` is a single string, one internal route `llm:request` ("You can set only one
+  prefix", `documentation/llm/about.md`). The per-alias base URLs, `/<alias>/v1`, are the routing
+  form, which has no virtual models; the UI labels its inline `ai` backends "legacy LLM backend"
+  (`ui/src/traffic.ts`), though v1.7.0's code, schema, and docs deprecate nothing. Using virtual
+  models means one shared prefix routed by model name, which `priority` weighs against per-alias
+  base URLs.
+- **Dot segments aren't normalized.** Routing matches the raw path (`http/route.rs`,
+  `matches_request`; `proxy/httpproxy.rs`, `normalize_uri` sets only scheme and authority), as
+  slice 1 saw. Hardening is native: a regex path match (`matches: - path: {regex: ...}`, a full
+  anchored match; `documentation/configuration/traffic-management/matching.md`) or a CEL
+  `authorization` rule with `deny` (`documentation/configuration/security/http-authz.md`)
+  refusing `..` and its encodings before routing.
+- **A full row never refuses.** vLLM queues past `max-num-seqs` (`num_requests_waiting`) rather
+  than answering 429 or 503, so nothing agentgateway classifies as unhealthy ever comes back from
+  a busy row; eviction and failover never see load, only failures. The cap cells measure this.
+
+**The mechanisms.**
+
+| Mechanism | What it does | Where (Std) | Source and docs |
+| --- | --- | --- | --- |
+| Priority groups | Providers grouped; traffic goes to the first group with an endpoint not evicted, so it spills over only when the whole group is evicted, not when it is slow or busy; within a group, P2C on a health and latency score | routing form `ai.groups[].providers[]`; `llm` section, a failover virtual model's `targets[].priority` | `types/loadbalancer.rs`, `EndpointSet::best_bucket`; `llm/mod.rs`, `select_provider`; `documentation/llm/virtual-models.md` |
+| Eviction on 5xx | An unhealthy reply evicts the endpoint: by default a 5xx or a connection failure; `consecutiveFailures` or `healthThreshold` set the bar, else one reply evicts; repeats multiply the duration, unbounded. Default eviction (3 s) only when a backend has more than one group | `health: {unhealthyExpression, eviction: {duration, consecutiveFailures, healthThreshold, restoreHealth}}` on backends, providers, `llm.models[]` | `http/health.rs`; `telemetry/log.rs`, `default_unhealthy_for_status`; `llm/mod.rs`, `AIBackend::new` |
+| `unhealthyExpression` on 429 | A CEL expression that replaces the default classification, e.g. `response.code == 429 \|\| response.code >= 500` | as above | `http/health.rs`; tests in `proxy/httpproxy.rs` |
+| Retry-After eviction | A 429's `Retry-After` (seconds or date, then `retry-after-ms`, `x-ratelimit-reset*`) sets the eviction's length when `eviction.duration` is unset; an explicit `duration` wins. The Kubernetes failover page says the reverse; the code and the standalone page agree | as above | `http/outlierdetection.rs`, `retry_after`; `http/health.rs`, `eviction_decision`; `documentation/llm/virtual-models.md`; `docs/kubernetes/latest/documentation/llm/failover.md` |
+| Route retries | `retry: {attempts, backoff, codes, condition}`; each attempt selects the provider or endpoint again (same route backend), so a retry can move to another group once the first is evicted. Sleeps a fixed `backoff`, never a Retry-After; bodies over 64 KiB aren't retried, which leaves out vision images and audio clips | routing form `routes[].policies.retry`; not in the `llm` section's policies | `http/retry/mod.rs`; `proxy/httpproxy.rs` (`MAX_BUFFERED_BYTES`); `documentation/configuration/resiliency/retries.md` |
+| Virtual models | `failover` (priorities), `weighted`, `conditional` (CEL `when`), and `callout` (an HTTP service picks the model, with `failureMode` failClosed or a fallback model, and a cache) | `llm` section only | `types/local.rs`, `LocalLLMVirtualModelRouting`; `llm/router_callout.rs`; `documentation/llm/virtual-models.md` |
+| Endpoint picker | Gateway API Inference Extension: an external picker (EPP, ext_proc) chooses the endpoint, reading the model servers' metrics itself; agentgateway forwards to the endpoint it returns. Fail-closed only | routing form, on a `service` backend only (`policies.inferenceRouting.endpointPicker`); Std as a sidecar, or Kubernetes `InferencePool` | `http/ext_proc.rs`, `InferenceRouting`; `types/local.rs`, `validate_inference_routing_scope`; `documentation/llm/inference/_index.md`; `examples/llm-standalone-epp/` |
+| In-flight limit | Per bind; 503, no Retry-After, before auth and routing | `frontendPolicies.http.maxConcurrentRequests` | `proxy/gateway.rs`; `proxy/admission.rs`; schema only, no standalone page |
+| Rate limits | Local token buckets (`requests` or `tokens`, per CEL `key`, e.g. per consumer key), or Envoy's rate limit service; 429 with Retry-After and `x-ratelimit-*` | `localRateLimit`, `remoteRateLimit` on routes, `llm.policies`, top-level `policies` | `http/localratelimit.rs`, `http/remoteratelimit.rs`; `documentation/configuration/resiliency/rate-limits.md` |
+| Budgets | Per key, USD or tokens over an epoch-aligned window; `Block` answers 429 with Retry-After at the window's reset. Needs `config.database.url` | `apiKey.keys[].budgets[]` | `http/budget/mod.rs`; `documentation/llm/cost-controls/budget-limits/per-key.md` |
+
+**The probes, read into it** (filled when slice 3 runs):
+
+| Probe | Expected from source | Seen |
+| --- | --- | --- |
+| Rate limit on agent | 429, `retry-after` ≤ 10, `x-ratelimit-*`; no `endpoint=` in the log | — |
+| In-flight limit 1 | 503, no Retry-After, also without a key; no log line | — |
+| infer with retries | waits the Retry-After, then 200, exit 0 | — |
+| Cap cells | only 2xx; `num_requests_waiting` above 0 past each cap; no Retry-After | — |
+
+**The requirements.** Per requirement: native, partial, or gap, and what could fill it, native or
+existing tools first and an authored extension or callout last.
+
+| Requirement | agentgateway v1.7.0 | Mark | What could fill it |
+| --- | --- | --- | --- |
+| Admission on `/metrics` per purpose floor: refuse or redirect a request when the row's live load (running, waiting, KV cache) passes a floor set per purpose | Nothing reads a backend's `/metrics`. The endpoint picker does, outside agentgateway, and it chooses among replicas of one model; its standard pickers score by queue and KV cache, not per-purpose floors. The in-flight limit is one count per port, not per purpose or row; a per-route rate limit counts requests a second, not concurrency | gap | 1. A per-row in-flight count set to each row's cap, if one could be scoped per route: v1.7.0 has none, so it is a gap even before metrics. 2. An existing EPP (the Inference Extension's) with its saturation thresholds, as a sidecar in standalone mode, on a `service` backend per row: native wiring, existing tool, but replica selection, not purpose admission. 3. An `extAuthz` or `extProc` service that reads `/metrics` and refuses past the floor (authored, last resort). |
+| Queueing past caps: hold requests at the gateway when a row is full, rather than pass them on or refuse | Nothing queues: the in-flight limit refuses at once (503), and vLLM queues behind it. The row's own queue is the only one | gap | vLLM's queue is the native one (`num_requests_waiting`), bounded only by its timeouts; a gateway-side queue would be authored. The cap cells measure how vLLM's queue grows. |
+| Capacity overflow to Foundry on GPU pressure or max sessions | Failover moves traffic only when a group is evicted, and eviction sees only unhealthy replies. A full vLLM row answers 200 slowly, so pressure never evicts it. With a gateway refusal in front (an in-flight or rate limit), the refusal is answered before backend selection, so it can't spill over either. A conditional virtual model routes on request attributes, not row load; a callout could route on load, but would need the load from elsewhere | gap (partial with a callout) | 1. Make the row refuse when full, so eviction can act: a vLLM-side limit that answers 429 or 503 with Retry-After past max sessions, then `unhealthyExpression` on 429 and Retry-After eviction move the next requests to a Foundry group (all native once the row refuses; whether vLLM can be made to refuse is for `priority`). 2. A virtual model's `callout` to a small service reading `/metrics` that names the local or Foundry model (native hook, authored service). 3. Route retries can't carry it: they don't wait out Retry-After and skip bodies over 64 KiB. All in the `llm` section, so all need one shared prefix. |
+| Overflow on host down | A down row gives connection failures or 5xx, which evict by default; with the row and Foundry in priority groups, traffic moves to Foundry until the eviction ends, then returns; a route retry sends the failed request on. For the routing form, `ai.groups` provides this without the `llm` section | native | Priority groups with eviction (routing form `ai.groups`, or a failover virtual model), plus a route retry on 502, 503, 504 and connection failure for the request that met the failure. Probed live in `priority`. |
+
+**What `priority` inherits.** The live overflow cells (Foundry, capped) depend on the shared
+prefix question: virtual models and callout are `llm`-section only; `ai.groups` priority groups
+and route retries work in the routing form with per-alias base URLs. Host-down overflow needs only
+the routing form; pressure overflow needs a refusal the gateway can see, which today neither vLLM
+nor agentgateway gives on load.
 
 ## Slice 4 · walkthrough
 
 The architect's walkthrough from this finding: an alias's `/models`, a chat with and without a key,
-a revoked key, a direct row request refused, and the gateway container's read-outs. Pending.
+a revoked key, and the gateway container's read-outs. Pending.
 
 ## Commands as run
 

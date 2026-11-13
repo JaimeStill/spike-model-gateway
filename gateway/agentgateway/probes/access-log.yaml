@@ -1,0 +1,12 @@
+# Adds each reply's Retry-After to agentgateway's access log line, as `retry_after`, for the cap
+# cells and the 429 probe (behaviors 8 and 9): GuideLLM keeps a refused request's status but none
+# of its headers, so the gateway's own log is where a Retry-After is read. A log field only; it
+# changes no routing or limit. Applied by `scripts/agentgateway-deploy.sh access-log`, removed by a
+# deploy without it. agentgateway's docs read headers this way in access log fields
+# (website/content/docs/standalone/latest/documentation/observability/access-logs/view.md); a reply
+# without the header leaves the field out or empty.
+#@ append
+frontendPolicies:
+  accessLog:
+    add:
+      retry_after: 'response.headers["retry-after"]'

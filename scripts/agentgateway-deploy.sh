@@ -7,6 +7,24 @@
 # the container again only when its image or flags changed, or starts it if it is stopped;
 # otherwise the config refresh is all a re-run does.
 #
+# Overlays. `scripts/agentgateway-deploy.sh [<overlay>...]` takes the names of probe overlays,
+# each gateway/agentgateway/probes/<overlay>.yaml, and applies them, in the order given, to the
+# copy it sends, never to config.yaml itself, which stays probe-free. A deploy with no overlay
+# sends config.yaml alone, so it is also how an overlay is removed. Either way the run is
+# idempotent: the same names render the same copy. An overlay file holds sections, each opened by
+# a directive comment:
+#
+#   #@ append            the lines below are added at the end of the copy, as top-level
+#                        sections; a top-level key the copy already has is refused, since YAML
+#                        would hold it twice
+#   #@ after <line>      the lines below are inserted after the one line of the copy equal to
+#                        <line>, the rest of the directive exactly, its indentation included; no
+#                        such line, or more than one, is refused
+#
+# Lines before the first directive must be comments or blank. The copy's first line names the
+# overlays it carries (`# overlays: none` without), so `head -1 ~/agentgateway/config.yaml` on
+# gb10-2 reads what is live.
+#
 # Each command is printed to stderr before it runs, as `+ <time> <host>: <command>`, the form of
 # .state/<task>/commands-*.log, so a finding can quote it exactly. Commands run on gb10-2 are sent
 # as written: `$(tailscale ip -4)`, `$(id -u)`, and `$HOME` expand there, so the consumer port is
@@ -56,18 +74,75 @@ for name in "${names[@]}"; do
   hashes[$name]=${hash%% *}
 done
 
-# The copy sent to gb10-2: config.yaml with each marker replaced by its key's hash. It is written
-# only under .state/, which is untracked, and removed on exit. Replaced in bash, not by sed, so no
-# hash is in a command's argv either.
+# The overlays, applied to config.yaml's lines in memory, as the header describes; any refusal
+# stops the deploy before anything is sent.
+overlay_fail() {
+  echo "agentgateway: overlay $1: $2; nothing was sent" >&2
+  exit 1
+}
+mapfile -t lines <"$config"
+top_key='^([A-Za-z][A-Za-z0-9]*):'
+for overlay in "$@"; do
+  file=gateway/agentgateway/probes/$overlay.yaml
+  [[ $overlay =~ ^[a-z0-9-]+$ && -f $file ]] || overlay_fail "$overlay" "no $file"
+  mapfile -t body <"$file"
+  body+=('#@ end')
+  mode='' anchor='' section=()
+  for raw in "${body[@]}"; do
+    if [[ $raw == '#@ '* ]]; then
+      # The section read so far is placed before the next one is read.
+      case $mode in
+        append)
+          for l in "${section[@]}"; do
+            [[ $l =~ $top_key ]] || continue
+            for have in "${lines[@]}"; do
+              [[ $have != "${BASH_REMATCH[1]}:"* ]] ||
+                overlay_fail "$overlay" "top-level ${BASH_REMATCH[1]} is in the config already"
+            done
+          done
+          lines+=("${section[@]}")
+          ;;
+        after)
+          at=() i=
+          for i in "${!lines[@]}"; do
+            [[ ${lines[i]} != "$anchor" ]] || at+=("$i")
+          done
+          ((${#at[@]} == 1)) ||
+            overlay_fail "$overlay" "${#at[@]} lines equal \"$anchor\"; one is needed"
+          lines=("${lines[@]:0:at[0]+1}" "${section[@]}" "${lines[@]:at[0]+1}")
+          ;;
+      esac
+      section=()
+      case $raw in
+        '#@ append') mode=append ;;
+        '#@ after '*) mode=after anchor=${raw#'#@ after '} ;;
+        '#@ end') mode= ;;
+        *) overlay_fail "$overlay" "unknown directive \"$raw\"" ;;
+      esac
+    elif [[ -n $mode ]]; then
+      section+=("$raw")
+    elif [[ -n ${raw//[[:space:]]/} && $raw != '#'* ]]; then
+      overlay_fail "$overlay" "a line before its first directive isn't a comment"
+    fi
+  done
+  echo "overlay $overlay: applied"
+done
+
+# The copy sent to gb10-2: config.yaml, its overlays applied, with each marker replaced by its
+# key's hash. It is written only under .state/, which is untracked, and removed on exit. Replaced
+# in bash, not by sed, so no hash is in a command's argv either.
 rendered=$(mktemp "$state/config.rendered.XXXXXX.yaml")
 trap 'rm -f "$rendered"' EXIT
 marker='^(.*)sha256:@@([a-z0-9-]+)@@(.*)$'
-while IFS= read -r line || [[ -n $line ]]; do
-  if [[ $line =~ $marker && -n ${hashes[${BASH_REMATCH[2]}]+set} ]]; then
-    line="${BASH_REMATCH[1]}sha256:${hashes[${BASH_REMATCH[2]}]}${BASH_REMATCH[3]}"
-  fi
-  printf '%s\n' "$line"
-done <"$config" >"$rendered"
+{
+  printf '# overlays: %s\n' "${*:-none}"
+  for line in "${lines[@]}"; do
+    if [[ $line =~ $marker && -n ${hashes[${BASH_REMATCH[2]}]+set} ]]; then
+      line="${BASH_REMATCH[1]}sha256:${hashes[${BASH_REMATCH[2]}]}${BASH_REMATCH[3]}"
+    fi
+    printf '%s\n' "$line"
+  done
+} >"$rendered"
 # A marker left over, or a keyHash that isn't a full hash, would deploy a key list that admits no
 # one under that name; stop before anything is sent.
 if grep -qP '@@[a-z0-9-]+@@' "$rendered" ||

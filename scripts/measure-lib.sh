@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
-# The agentgateway task's step helpers for its overhead cells (slice 2, behavior 7), adapted from
-# spike-model-layout's scripts/measure-lib.sh (`cell`, `watch`, `summarize`) and kept to what these
-# cells need: no host loads, memory floors, or readouts of the rows. Sourced from the repository
-# root on the laptop, then called one step at a time in the architect's view:
+# The agentgateway task's step helpers for its overhead cells (slice 2, behavior 7) and its cap
+# cells (slice 3, behavior 8), adapted from spike-model-layout's scripts/measure-lib.sh (`cell`,
+# `watch`, `summarize`) and kept to what these cells need: no host loads or memory floors. Sourced
+# from the repository root on the laptop, then called one step at a time in the architect's view:
 #
 #   source scripts/measure-lib.sh
 #
-#   cell <name> <scenario> <direct|gateway> <alias>
+#   cell <name> <scenario> <direct|gateway|cap> <alias>
 #                     one GuideLLM run of bench/<scenario>.yaml against the alias's row (direct)
-#                     or its base URL on the gateway, into .state/agentgateway/cells/<name>/; on a
-#                     gateway run, the gateway container's CPU and memory sampled on gb10-2
+#                     or its base URL on the gateway (gateway, cap), into
+#                     .state/agentgateway/cells/<name>/; on a gateway or cap run, the gateway
+#                     container's CPU and memory sampled on gb10-2. A cap run is a gateway run
+#                     that also samples the row's running and waiting requests from its /metrics,
+#                     read direct from the row, and afterwards reads each of the run's requests
+#                     from the gateway's access log
 #   summarize <name>  a run's requests and errors, TTFT, ITL and request latency (median, p95),
-#                     and on a gateway run the container's CPU and memory during the benchmark
+#                     and on a gateway run the container's CPU and memory during the benchmark; on
+#                     a cap run, per level, every reply's status, any Retry-After, and the row's
+#                     running and waiting counts, then latency growth from the first level to the
+#                     second
 #   compare <direct-1> <gateway> <direct-2>
 #                     behavior 7's reading: each figure's spread between the two direct runs
 #                     beside what the gateway run adds over their mean
@@ -33,8 +40,19 @@
 # reading the pattern from the key file (`grep -F -f`), and says whether it was found. A direct run
 # sends no key: the rows take none, and the key is the gateway's alone.
 #
+# A cap run's statuses and Retry-After. GuideLLM 0.8.1 records a refused request as errored, with
+# its error as `repr` of httpx's HTTPStatusError (scheduler/worker.py), which names the status
+# ("Server error '503 Service Unavailable' for url ...") and none of the reply's headers; a
+# successful request passed raise_for_status, so it was 2xx. So the status comes from GuideLLM, and
+# Retry-After from the gateway's access log: after the run, `cell` reads the log lines of the
+# alias's route inside the run's time (`docker logs --timestamps --since --until` on gb10-2) into
+# gateway-requests.tsv, keeping each line's time, status, path, and `retry_after`, a field that the
+# probes overlay `access-log` adds (gateway/agentgateway/probes/access-log.yaml); the caller's
+# address and every other field stay out. Without that overlay deployed, the log gives statuses
+# only, and summarize says so.
+#
 # Settings, each an environment variable read when a helper runs:
-#   MEASURE_STATS_EVERY  seconds between gateway samples (default 5)
+#   MEASURE_STATS_EVERY  seconds between gateway and row samples (default 5)
 #   MEASURE_CELL_CAP     a run's cap, given to timeout (default 10m)
 
 if ! (return 0 2>/dev/null); then
@@ -83,7 +101,7 @@ _measure_say() {
 }
 
 cell() {
-  local usage='usage: cell <name> <scenario> <direct|gateway> <alias>'
+  local usage='usage: cell <name> <scenario> <direct|gateway|cap> <alias>'
   if (($# != 4)); then
     echo "$usage" >&2
     return 2
@@ -100,7 +118,7 @@ cell() {
   fi
   case $target in
     direct) url=http://${MEASURE_ROW[$alias]}/v1 ;;
-    gateway)
+    gateway | cap)
       url=$MEASURE_GATEWAY/$alias/v1
       if [[ ! -s $MEASURE_ROOT/$MEASURE_KEY ]]; then
         echo "cell: no key at $MEASURE_KEY; run mise run agentgateway-deploy first" >&2
@@ -138,6 +156,10 @@ cell() {
   _measure_log laptop "${keyed}GUIDELLM__SPEC__BACKEND__TARGET=$url MISE_ENV=bench ${run[*]} > $dir/guidellm.log 2>&1"
   [[ $target == direct ]] ||
     _measure_log laptop "every ${MEASURE_STATS_EVERY:-5} s while it runs: ssh -n $MEASURE_GATEWAY_HOST \"docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway\" >> $dir/gateway-stats.tsv"
+  [[ $target != cap ]] ||
+    _measure_log laptop "every ${MEASURE_STATS_EVERY:-5} s while it runs: curl -sS --max-time 3 http://${MEASURE_ROW[$alias]}/metrics, the sums of vllm:num_requests_running and vllm:num_requests_waiting >> $dir/row-metrics.tsv"
+  local since
+  since=$(date +%s)
 
   # The run, the terminal's view of it, and the sampler, in one foreground subshell, so Ctrl-C
   # reaches them all; timeout puts GuideLLM in a process group of its own, so the trap passes the
@@ -149,7 +171,7 @@ cell() {
     (
       export MISE_ENV=bench GUIDELLM__SPEC__BACKEND__TARGET=$url
       unset GUIDELLM__SPEC__BACKEND__API_KEY
-      if [[ $target == gateway ]]; then
+      if [[ $target != direct ]]; then
         GUIDELLM__SPEC__BACKEND__API_KEY=$(<"$MEASURE_KEY")
         export GUIDELLM__SPEC__BACKEND__API_KEY
       fi
@@ -160,11 +182,29 @@ cell() {
     # GuideLLM's own output, followed in the terminal until it exits.
     tail -n +1 -f --pid="$pid" "$dir/guidellm.log" &
 
+    # The row sampler, on a cap run only, in the background beside the gateway sampler: the row's
+    # requests running and waiting, read from its own /metrics, direct from the laptop (the rows
+    # stay reachable directly), at each interval, until GuideLLM exits. Each is the sum over the
+    # row's engines of vLLM's gauge. A failed read is a row of dashes.
+    if [[ $target == cap ]]; then
+      printf 'epoch\ttime\trunning\twaiting\n' >"$dir/row-metrics.tsv"
+      while kill -0 "$pid" 2>/dev/null; do
+        line=$(curl -sS --max-time 3 "http://${MEASURE_ROW[$alias]}/metrics" 2>/dev/null |
+          awk '/^vllm:num_requests_running[{ ]/ { r += $NF; n++ }
+            /^vllm:num_requests_waiting[{ ]/ { w += $NF; n++ }
+            END { if (n) printf "%g|%g", r, w }') || line=
+        [[ -n $line ]] || line='-|-'
+        printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$(date +%T)" "${line%%|*}" "${line#*|}" \
+          >>"$dir/row-metrics.tsv"
+        sleep "${MEASURE_STATS_EVERY:-5}"
+      done &
+    fi
+
     # The gateway sampler, on a gateway run only: the container's CPU (100% is one core) and
     # memory, one `docker stats --no-stream` on gb10-2 at each interval, until GuideLLM exits. A
     # failed read is a row of dashes, so a gap shows. summarize keeps the samples inside the
     # benchmark's time.
-    if [[ $target == gateway ]]; then
+    if [[ $target != direct ]]; then
       printf 'epoch\ttime\tcpu\tmemory\n' >"$dir/gateway-stats.tsv"
       while kill -0 "$pid" 2>/dev/null; do
         line=$(ssh -n "$MEASURE_GATEWAY_HOST" \
@@ -187,13 +227,14 @@ cell() {
   )
   rc=$?
   echo "$rc" >"$MEASURE_ROOT/$dir/exit"
+  [[ $target != cap ]] || _measure_requests "$name" "$alias" "$since" "$(($(date +%s) + 1))"
   {
     case $rc in
       0) echo "$name: exit 0" ;;
       124) echo "$name: exit 124, the ${MEASURE_CELL_CAP:-10m} cap hit" ;;
       *) echo "$name: exit $rc" ;;
     esac
-    if [[ $target == gateway ]]; then
+    if [[ $target != direct ]]; then
       if grep -rqsF -f "$MEASURE_ROOT/$MEASURE_KEY" "$MEASURE_ROOT/$dir"; then
         echo "$name: THE KEY IS IN $dir; delete it before anything is shared"
       else
@@ -245,9 +286,84 @@ summarize() {
             printf "  gateway: %d samples in the benchmark (%d failed); CPU %% median %.2f, max %.2f; memory MiB median %.1f, max %.1f\n",
               k, miss, med(c, k), cmax, med(m, k), mmax }' "$dir/gateway-stats.tsv"
       fi
+      [[ ! -f $dir/row-metrics.tsv ]] || _measure_cap_levels "$dir"
     fi
     [[ ! -f $dir/exit ]] || echo "  exit $(<"$dir/exit")"
   } | _measure_say summarize
+}
+
+# A cap run's requests as the gateway logged them, read after the run: the access log lines of the
+# alias's route between two epochs, each kept as its time (docker's, UTC), status, path, and the
+# `retry_after` field the probes overlay `access-log` adds, empty without it. The rest of each
+# line, the caller's address among it, is left out.
+_measure_requests() {
+  local name=$1 alias=$2 since=$3 until=$4
+  local out=$MEASURE_STATE/cells/$name/gateway-requests.tsv
+  local remote="docker logs --timestamps --since $since --until $until agentgateway 2>&1"
+  _measure_log laptop "ssh -n $MEASURE_GATEWAY_HOST '$remote' | the lines of route=default/$alias as time, status, path, retry_after > $out"
+  {
+    printf 'time\tstatus\tpath\tretry_after\n'
+    # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
+    ssh -n "$MEASURE_GATEWAY_HOST" "$remote" |
+      awk -v route=" route=default/$alias " 'index($0, route) {
+        st = ""; p = ""; ra = ""
+        if (match($0, / http\.status=[0-9]+/)) st = substr($0, RSTART + 13, RLENGTH - 13)
+        if (match($0, / http\.path=[^ ]+/)) p = substr($0, RSTART + 11, RLENGTH - 11)
+        if (match($0, / retry_after=[^ ]+/)) ra = substr($0, RSTART + 13, RLENGTH - 13)
+        printf "%s\t%s\t%s\t%s\n", $1, st, p, ra }'
+  } >"$MEASURE_ROOT/$out"
+  printf '%s: %d request lines from the gateway log\n' "$name" \
+    "$(($(wc -l <"$MEASURE_ROOT/$out") - 1))" | _measure_say cell
+}
+
+# A cap run's levels, each benchmark of its result.json in turn: every reply's status, as GuideLLM
+# saw it (2xx for each successful request; an errored one's status read from its error) and as the
+# gateway logged it, with any Retry-After; the row's running and waiting requests (median, max)
+# from the samples inside the level's time; then latency growth from the first level to the
+# second. The gateway's /models lines, GuideLLM's backend check, are left out of its counts.
+# shellcheck disable=SC2016 # jq's variables.
+_MEASURE_CAP_JQ='
+.benchmarks[] | .config.strategy.streams as $n
+| "\($n)\t\(.start_time)\t\(.end_time)\t"
+  + ([(range(.metrics.request_totals.successful) | "2xx"),
+      (.requests.errored[].info.error | [capture("(?<s>[1-5][0-9][0-9]) ")][0].s // "no status")]
+     | group_by(.) | map("\(.[0]) x\(length)") | join(", "))'
+# shellcheck disable=SC2016 # jq's variables.
+_MEASURE_GROWTH_JQ='
+def r: . * 100 | round / 100;
+(.config.spec.backend.request_format == "/v1/embeddings") as $embed
+| if (.benchmarks | length) < 2 then "  growth: one level only" else
+  .benchmarks[0] as $a | .benchmarks[1] as $b
+  | ((if $embed then [] else [["time_to_first_token_ms", 1], ["inter_token_latency_ms", 1]] end) + [["request_latency", 1000]])[] as [$f, $k]
+  | ($a.metrics[$f].successful.median * $k) as $x | ($b.metrics[$f].successful.median * $k) as $y
+  | "  growth \($a.config.strategy.streams) to \($b.config.strategy.streams): \($f | sub("_ms$"; "")) median ms \($x | r) to \($y | r), \(($y - $x) | r) (x\(if $x > 0 then $y / $x | r else "-" end))"
+  end'
+
+_measure_cap_levels() {
+  local dir=$1 n s e statuses iso_s iso_e
+  while IFS=$'\t' read -r n s e statuses; do
+    echo "  level $n: GuideLLM replies ${statuses:-none}"
+    iso_s=$(date -u -d "@${s%.*}" +%Y-%m-%dT%H:%M:%S)
+    iso_e=$(date -u -d "@$((${e%.*} + 1))" +%Y-%m-%dT%H:%M:%S)
+    if [[ -f $dir/gateway-requests.tsv ]]; then
+      awk -F'\t' -v s="$iso_s" -v e="$iso_e" '
+        NR > 1 && substr($1, 1, 19) >= s && substr($1, 1, 19) < e && $3 !~ /\/models$/ {
+          k++; st[$2]++; if ($4 != "" && $4 != "\"\"") { ra++; v[$4]++ } }
+        END { line = ""; for (c in st) line = line (line ? ", " : "") c " x" st[c]
+          printf "  level gateway log: %d requests, %s; Retry-After on %d", k, (k ? line : "none"), ra
+          for (x in v) printf " (%s x%d)", x, v[x]
+          printf "\n" }' "$dir/gateway-requests.tsv"
+    fi
+    awk -F'\t' -v s="$s" -v e="$e" '
+      function med(a, k,  i, j, t) { for (i = 2; i <= k; i++) for (j = i; j > 1 && a[j-1] > a[j]; j--) { t = a[j]; a[j] = a[j-1]; a[j-1] = t }
+        return k % 2 ? a[(k+1)/2] : (a[k/2] + a[k/2+1]) / 2 }
+      NR > 1 && $1 >= s && $1 <= e { if ($3 == "-") { miss++; next }
+        k++; r[k] = $3 + 0; w[k] = $4 + 0; if (r[k] > rmax) rmax = r[k]; if (w[k] > wmax) wmax = w[k] }
+      END { if (!k) { printf "  level row: no samples inside the level (%d failed)\n", miss; exit }
+        printf "  level row: %d samples (%d failed); running median %g, max %g; waiting median %g, max %g\n",
+          k, miss, med(r, k), rmax, med(w, k), wmax }' "$dir/row-metrics.tsv"
+  done < <(jq -r "$_MEASURE_CAP_JQ" "$dir/result.json")
+  jq -r "$_MEASURE_GROWTH_JQ" "$dir/result.json"
 }
 
 # Behavior 7's reading, per figure: the two direct runs, their spread |d1 - d2|, the gateway run,

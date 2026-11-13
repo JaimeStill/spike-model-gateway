@@ -1,0 +1,31 @@
+# C-embed, the agentgateway task's embedding cap cell (behavior 8): the embedding row, granite
+# (embedding on the Framework's 8002), through the gateway only, at two levels of 128 and then 160
+# requests in flight, each for 60 s. Observational: nothing stands at the cap on the gateway, so the
+# cell shows what a client sees there, every reply's status, the row's running and waiting counts,
+# and how latency grows from one level to the next. Derived from overhead-embed.yaml, its requests
+# unchanged: 512 synthetic tokens to /v1/embeddings. Adapted: a fixed number of requests in flight,
+# 128 and then 160, each sent as the last one's reply arrives, where the overhead cell sent a
+# constant 34 a second whatever the replies' latency; the cap is a count in flight, so the load is
+# too. The model is the alias, embedding, given on the command line with its tokenizer
+# (ibm-granite/granite-embedding-english-r2) by `cell`, which sets the target, the gateway's base
+# URL, in GUIDELLM__SPEC__BACKEND__TARGET, the bench key in GUIDELLM__SPEC__BACKEND__API_KEY, and
+# the run's own seed. Run from the repository root.
+spec:
+  backend:
+    kind: openai_http
+    request_format: /v1/embeddings
+    # GuideLLM checks the backend before a run with GET <target>/health, the target's /v1 cut off.
+    # Through the gateway that is /embedding/health, which no route serves (404), so the check
+    # reads /v1/models instead, which also proves the key before any load is sent.
+    api_routes:
+      /health: v1/models
+  profile:
+    kind: concurrent
+    streams: [128, 160]
+  data:
+    - kind: synthetic_text
+      prompt_tokens: 512
+  # Each level stops at 60 s; the requests in flight then are counted incomplete.
+  constraints:
+    - kind: max_duration
+      seconds: 60

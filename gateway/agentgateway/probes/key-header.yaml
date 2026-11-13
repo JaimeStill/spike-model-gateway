@@ -1,0 +1,10 @@
+# The one-off header case (behavior 10): the consumer gateway reads each key from the `x-api-key`
+# header, the whole value, in place of `Authorization: Bearer <key>`. The same keys are admitted;
+# a Bearer request gets 401 while it is applied. Inserted into config.yaml's gateway apiKey policy,
+# beside its mode and keys (apiKey.location.header: name and an optional prefix; schema/config.md).
+# Applied by `scripts/agentgateway-deploy.sh key-header`, removed, restoring Bearer, by a deploy
+# without it.
+#@ after     apiKey:
+      location:
+        header:
+          name: x-api-key
