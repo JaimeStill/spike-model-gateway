@@ -1342,8 +1342,12 @@ the docs and source at `v1.7.0` and neither tried live:
 
 ## Commands as run
 
-Every command run, exactly as run, with its time, from `.state/agentgateway/commands-*.log`; the
-output stays there, untracked.
+Every command the logs hold, exactly as logged, with its time, from
+`.state/agentgateway/commands-*.log`; the output stays there, untracked. The architect's walks are
+under their slices' sections, slice 1's under "The walk" and slice 4's in its steps. A command that
+no log holds is named, not quoted, in its section: slice 3's commands run outside the helpers, and
+the streamed chat the architect ran during slice 4's walkthrough (its form is under that slice's
+"Results").
 
 ### 2026-11-13 · host updates and row restarts
 
@@ -1420,6 +1424,19 @@ with `--rawfile`, through the gateway and direct to the row.
 + 2026-11-13T13:37:23-05:00 laptop: jq -n --rawfile wav .state/agentgateway/assets/clip-6s.b64 '{model:"audio",max_tokens:256,messages:[{role:"user",content:[{type:"input_audio",input_audio:{data:$wav,format:"wav"}},{type:"text",text:"Transcribe this audio."}]}]}' | curl -sS -H 'Content-Type: application/json' -d @- http://framework:8001/v1/chat/completions | jq -c '{model, text: .choices[0].message.content}'
 + 2026-11-13T13:37:32-05:00 laptop: curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(openssl rand -hex 32)" $GW/agent/v1/models
 + 2026-11-13T13:37:32-05:00 laptop: curl -sS -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer ' $GW/agent/v1/models
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /metrics\n' -H "Authorization: Bearer $K" '$GW/metrics'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /health\n' -H "Authorization: Bearer $K" '$GW/health'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /version\n' -H "Authorization: Bearer $K" '$GW/version'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /tokenize\n' -H "Authorization: Bearer $K" '$GW/tokenize'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /docs\n' -H "Authorization: Bearer $K" '$GW/docs'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /openapi.json\n' -H "Authorization: Bearer $K" '$GW/openapi.json'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /v1/models\n' -H "Authorization: Bearer $K" '$GW/v1/models'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /agent/metrics\n' -H "Authorization: Bearer $K" '$GW/agent/metrics'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /agent/health\n' -H "Authorization: Bearer $K" '$GW/agent/health'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /agent/v1/../../metrics\n' -H "Authorization: Bearer $K" '$GW/agent/v1/../../metrics'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /agent/v1/%2e%2e/%2e%2e/metrics\n' -H "Authorization: Bearer $K" '$GW/agent/v1/%2e%2e/%2e%2e/metrics'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /agent/v1/..%2f..%2fmetrics\n' -H "Authorization: Bearer $K" '$GW/agent/v1/..%2f..%2fmetrics'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /AGENT/v1/models\n' -H "Authorization: Bearer $K" '$GW/AGENT/v1/models'
 + 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /metrics\n' -H "Authorization: Bearer $K" "$GW/metrics"
 + 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /health\n' -H "Authorization: Bearer $K" "$GW/health"
 + 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /version\n' -H "Authorization: Bearer $K" "$GW/version"
@@ -1444,6 +1461,7 @@ again, logged abbreviated; it ran detached, and curl exited 0 at 13:39:53.
 
 ```text
 + 2026-11-13T13:38:00-05:00 laptop: curl -sS -o /dev/null -w '%{http_code} revoke-test before\n' -H "Authorization: Bearer $R" $GW/agent/v1/models
++ 2026-11-13T13:38:00-05:00 laptop: (curl -sS -N -H "Authorization: Bearer $R" -H 'Content-Type: application/json' -d '{"model":"agent","stream":true,"messages":[{"role":"user","content":"Write a 600-word story about a lighthouse."}],"max_tokens":2000}' $GW/agent/v1/chat/completions > .state/agentgateway/revoke-stream.txt; echo "stream curl exit $? at $(date -Iseconds)" >> .state/agentgateway/revoke-stream.txt) &
 + 2026-11-13T13:38:45-05:00 laptop: grep -n -A2 'name: revoke-test' gateway/agentgateway/config.yaml | head -3; sed -i '/keyHash: sha256:@@revoke-test@@/,+2d' gateway/agentgateway/config.yaml; grep -c revoke-test gateway/agentgateway/config.yaml
 + 2026-11-13T13:38:45-05:00 laptop: mise run agentgateway-deploy 2>&1 | grep -E '^key|unchanged|docker ps|Up '
 + 2026-11-13T13:38:46-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
