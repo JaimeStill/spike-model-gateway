@@ -277,7 +277,8 @@ agentgateway's admin paths with a consumer key, and a dot-segment path such as
 ### Results
 
 Run on 2026-11-13: the host updates from 11:09 to 11:26, the row restarts at 11:26–11:27, the
-deploy and the architect's walk from 13:29, the session's probes from 13:37 to 13:39. Every
+deploy and the architect's walk from 13:29, the session's probes from 13:37 to 13:39, and gb10-2's
+reboot from 16:05 to 16:12. Every
 command, as run, is under "Commands as run"; the requests quoted here are the session's, from the
 laptop, where `$GW` is `http://gb10-2:3000`, `$K` the architect's key, and `$R` revoke-test's.
 
@@ -314,12 +315,14 @@ under 2 s. Counted from 11:27:23, when polling started, each row answered health
 - **The UI** through `ssh -N -L 3001:127.0.0.1:3001 gb10-2`, over Tailscale SSH, shows the
   read-only mode banner, the warning "UI is exposed without authentication", 2 gateways, and 4
   routes.
-- **Restart, unattended: configured, not shown.** Read at 15:19:03, after the slices, at review:
-  `docker inspect` on gb10-2 gives image `cr.agentgateway.dev/agentgateway:v1.7.0`,
-  `restart=unless-stopped`, and `started=2026-11-13T18:29:58Z` (the deploy at 13:29:58);
-  `systemctl is-enabled docker` gives `enabled`; and gb10-2 booted at 11:25:03, before the deploy.
-  So the restart policy is set and Docker starts at boot, but gb10-2 hasn't rebooted since the
-  deploy: no reboot has shown the gateway coming back unattended.
+- **Restart, unattended: shown by a reboot.** The architect rebooted gb10-2 (`sudo reboot`, time
+  not recorded) while the laptop polled the gateway's `/agent/v1/models` and the vision row's
+  `/health` every 5 s from 16:05:04. Both stopped answering at 16:09:02, and gb10-2 booted at
+  16:09:18 (`uptime -s`). The gateway answered again at 16:09:38, 36 s after it went down, with no
+  step by anyone: Docker restarted the container under its `restart=unless-stopped` policy
+  (`started=2026-11-13T21:09:29Z`, `restarts=0`), and the live config read `# overlays: none`. The
+  vision row's `/health` answered at 16:12:14, 192 s after down. At 16:12:20–21 every
+  `/<alias>/v1/models` listed its alias, and a keyless request got 401.
 
 **Gap: the UI has no authentication of its own.** Access to it rests on gb10-2's loopback and SSH
 to gb10-2, nothing else. Authenticating the UI with JWT or OIDC is on the paper list for slice 3's
@@ -1838,4 +1841,21 @@ in, which wrote its output to `.state/agentgateway/clients/infer-cli-1519.txt`:
 
 ```text
 ~ 15:19, laptop: O=.state/agentgateway/clients/infer-cli-$(date +%H%M).txt; { for a in agent vision audio embedding; do echo "-- $a models"; infer_at "$a" models; done; echo "-- agent chat"; infer_at agent chat "Name a planet."; echo "-- embedding embed"; infer_at embedding embed "first passage" "second passage"; } > $O 2>&1
+```
+
+### 2026-11-13 · the reboot of gb10-2
+
+From the laptop: the watcher, logged by its one-line description, which ran from 16:05:04 across
+the architect's reboot of gb10-2 (`sudo reboot`, a root step, time not recorded) and wrote each
+change of state to `.state/agentgateway/reboot-2026-11-13.txt`; then the read-outs after it, with
+`$GW` the consumer base URL:
+
+```text
++ 2026-11-13T16:05:04-05:00 laptop: watch every 5 s: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -o /dev/null -w %{http_code} --max-time 3 http://gb10-2:3000/agent/v1/models; curl -s -o /dev/null -w %{http_code} --max-time 3 http://gb10-2:8000/health
++ 2026-11-13T16:12:20-05:00 laptop: ssh gb10-2 "uptime -s; docker inspect agentgateway --format 'restart={{.HostConfig.RestartPolicy.Name}} started={{.State.StartedAt}} restarts={{.RestartCount}}'; docker ps --format '{{.Names}} {{.Status}}'; head -1 ~/agentgateway/config.yaml"
++ 2026-11-13T16:12:20-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS $GW/agent/v1/models | jq -c '[.data[].id]'
++ 2026-11-13T16:12:20-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS $GW/vision/v1/models | jq -c '[.data[].id]'
++ 2026-11-13T16:12:20-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS $GW/audio/v1/models | jq -c '[.data[].id]'
++ 2026-11-13T16:12:21-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS $GW/embedding/v1/models | jq -c '[.data[].id]'
++ 2026-11-13T16:12:21-05:00 laptop: curl -sS -o /dev/null -w '%{http_code} keyless\n' $GW/agent/v1/models
 ```

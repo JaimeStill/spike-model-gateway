@@ -23,7 +23,9 @@ Which gateway fronts the self-hosted vLLM layout, and with what access control?
 - It names purposes by alias (agent, vision, audio, embedding). Each alias has its own base URL,
   `/<alias>/v1`, whose `/models` lists only that alias.
 - It overflows to Azure AI Foundry under the same alias when a purpose is full or its host is down.
-- It is the only network path to the rows, so no serving API manages models.
+- A consumer key reaches serving routes only, so no serving API manages models. Making the gateway
+  the only network path to the rows is production's concern, for the networking and platform teams;
+  in dev the rows stay reachable directly on the tailnet.
 
 ## The answer
 
@@ -35,9 +37,9 @@ The answer is in the top-level [`README.md`](../README.md#the-answer).
    no answer crossed, each on its own `/<alias>/v1` whose `/models` lists exactly that alias. The
    gateway's added TTFT, ITL, and latency, and its CPU and memory, are measured against the same
    GuideLLM cells sent direct, in one session.
-2. **The fence.** Keys are issued by the gateway, and a missing or revoked key is refused. The
-   rows are reachable only through the gateway, and no vLLM management route is open to a
-   consumer key.
+2. **Keys and routes.** Keys are issued by the gateway, and a missing or revoked key is refused.
+   No vLLM management route is open to a consumer key. The network path to the rows is
+   production's concern, for the networking and platform teams.
 3. **Caps.** At each cap (agent 12, vision 16, audio 4, embedding 128): what queues, and what
    returns 429 or 503 with Retry-After, against go-ai's retry set.
 4. **Admission.** Admission on vLLM's `/metrics` against static caps: what each gateway does
@@ -49,8 +51,7 @@ The answer is in the top-level [`README.md`](../README.md#the-answer).
    Framework treated as down until `/health` answers after its LUKS unlock; and which workloads may
    leave the self-hosted machines.
 8. **go-ai.** go-ai's integration tier, unchanged, through the gateway, with each `AI_*_BASE_URL`
-   set to its purpose URL. The `infer` CLI's one-listed-model fallback is added once it is
-   released.
+   set to its purpose URL, and the released `infer` CLI's one-listed-model fallback.
 9. **Traces.** Each gateway's OpenTelemetry traces.
 10. **On paper.** Agent Router, vLLM's production-stack router, Kubernetes portability, JWT/OIDC,
     production's Azure Container Apps routing, IL6, and a cheaper chat tier.
@@ -77,23 +78,30 @@ The experiment's rules, in `ai-hosting.md`, govern every session. In short:
 
 ## Capabilities
 
-- **Gateway bring-up:** agentgateway and LiteLLM on gb10-2 in front of the four rows.
-- **The fence:** gateway keys, and the rows rebound behind the gateway.
-- **Capacity behaviour:** queueing, 429, 503, and Retry-After at each cap, and admission on
-  `/metrics`.
-- **Priority and overflow:** per-key priority and budgets, embedding's rate limit, and Azure AI
-  Foundry overflow.
-- **Traces:** each gateway's OpenTelemetry traces through a Collector.
-- **Step helpers:** adapted from spike-model-layout's `scripts/measure-lib.sh`, as a task needs
-  them.
-- **The gateway document:** the decision and its configuration as requirements for v1.ai.hosting.
+- **Gateway bring-up:** `mise run agentgateway-deploy`
+  ([`scripts/agentgateway-deploy.sh`](../scripts/agentgateway-deploy.sh)) deploys agentgateway to
+  gb10-2 from [`gateway/agentgateway/`](../gateway/agentgateway/config.yaml) and reloads its
+  config in place.
+- **Gateway keys:** the deploy creates each key the config names, kept untracked on the deploying
+  machine, and sends gb10-2 a copy with each key's hash. Removing a name and deploying revokes it.
+- **Probe overlays:** `gateway/agentgateway/probes/` holds one-off config changes (an access log
+  field, a rate limit, an in-flight limit, a key header) that the deploy applies to the copy it
+  sends; a deploy without them removes them.
+- **Step helpers:** [`scripts/measure-lib.sh`](../scripts/measure-lib.sh) runs and reads the
+  GuideLLM cells in [`bench/`](../bench/README.md), and
+  [`scripts/clients-lib.sh`](../scripts/clients-lib.sh) runs go-ai's and infer's tiers, the infer
+  CLI, and curl through the gateway, each with a key read from its file.
+- **Planned:** LiteLLM's bring-up, admission on `/metrics`, per-key priority and budgets,
+  embedding's rate limit, Azure AI Foundry overflow, OpenTelemetry traces through a Collector, and
+  the gateway document, the decision and its configuration as requirements for v1.ai.hosting.
 
 ## Path
 
 The tasks, in the order they run, each with the evidence it proves:
 
-1. `agentgateway`: agentgateway v1.7.0 on gb10-2, with the rows rebound behind it by a
-   spike-model-engines `host/` pull request (evidence 1–4, 8).
+1. `agentgateway`: agentgateway v1.7.0 on gb10-2, with each row serving under its alias through a
+   spike-model-engines `host/` pull request (evidence 1–4, 8). Its finding is
+   [`docs/findings/agentgateway.md`](../docs/findings/agentgateway.md).
 2. `litellm`: LiteLLM with Postgres virtual keys, on the same cells, with an agentgateway anchor
    cell (evidence 1–4, 8).
 3. `priority`: Azure AI Foundry overflow, with priority and budgets on both gateways in one session

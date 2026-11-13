@@ -174,7 +174,7 @@ Door          two-way: the container can be removed, the host/ pull request
 
 ## Progress
 
-slices 4/4 committed (slice 1: 48027e3; slice 2: 4b55cc6, 93405a0; slice 3: 64ced85, a5882ea; slice 4: 62b39f1, 0f6ba8a) · standards done (7ccf3f4, 68689f6) · spec round 1 gaps closed (7ff71ad) · editor —
+slices 4/4 committed (slice 1: 48027e3; slice 2: 4b55cc6, 93405a0; slice 3: 64ced85, a5882ea; slice 4: 62b39f1, 0f6ba8a) · standards done (7ccf3f4, 68689f6) · spec done (7ff71ad; behaviors 2, 15 by the architect) · editor done
 
 ## Decisions
 
@@ -251,6 +251,17 @@ slices 4/4 committed (slice 1: 48027e3; slice 2: 4b55cc6, 93405a0; slice 3: 64ce
   2026-11-13), not taken from the restart policy alone.
 - agentgateway: the brief's Door line follows behaviors 4 and 6 as amended (no ufw rules; a key is
   revoked by removing its name and deploying).
+- agentgateway: the container gets each row's host with `--add-host` from `tailscale ip -4` on
+  gb10-2, since Docker's default bridge resolves none of the short names; no address is written down.
+- agentgateway: probes are overlays the deploy applies to the copy it sends gb10-2, never to the
+  committed config, with plain bash directives, since the laptop's `yq` is the Python wrapper of jq.
+- agentgateway: a cap run reads Retry-After from the gateway's access log, through the `access-log`
+  overlay, since GuideLLM 0.8.1 keeps no reply header.
+- agentgateway: each GuideLLM run is seeded from its name, so the row's prefix cache doesn't serve a
+  later run the prompts an earlier one sent.
+- agentgateway: go-ai's and infer's tiers ran from a detached go-ai worktree at
+  `tools/infer/v0.1.0`, since the `v0.1.0` tag's tier carries no credentials; go-ai's working tree
+  is untouched.
 
 ## Pending edits
 
@@ -258,3 +269,7 @@ slices 4/4 committed (slice 1: 48027e3; slice 2: 4b55cc6, 93405a0; slice 3: 64ce
   the only network path to the rows" as a dev requirement, noting that production's network
   security belongs to the networking and platform teams; its `agentgateway` task's proof drops "a
   direct tailnet request to a row fails" (architect, 2026-11-13).
+- coordinator · experiment.hosting intake: spike-model-engines' `docs/engines/vllm/api.md` and
+  `models.md` are stale since its pull request #17: requests to the four standing rows now name the
+  alias, while the guide's examples send the Hugging Face repository. This spike changes only
+  `host/` there, so the fix is left to the experiment's intake.
