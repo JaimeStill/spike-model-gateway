@@ -19,6 +19,8 @@ what a client sees at each row's cap, and what agentgateway lacks for admission 
 - **Network path:** the laptop reaches all three hosts directly over Tailscale, with no relay
   (`tailscale ping`, 2026-11-13 11:09 and again at 11:26, after the host updates). The gateway
   reaches the rows from gb10-2 over the tailnet. No tailnet or LAN address is recorded here.
+- **Log lines:** agentgateway's access log carries `src.addr`, the caller's tailnet address, so any
+  log line quoted here has it replaced with `<laptop>`. No key, key prefix, or key hash is quoted.
 
 The hosts, as read on 2026-11-13 after the morning's updates (raw read-outs untracked under
 `.state/agentgateway/`):
@@ -272,7 +274,119 @@ entry deleted and deployed, with a request running across the reload); vLLM's ro
 agentgateway's admin paths with a consumer key, and a dot-segment path such as
 `/agent/v1/../../metrics` sent with `curl --path-as-is`.
 
-Results: pending.
+### Results
+
+Run on 2026-11-13: the host updates from 11:09 to 11:26, the row restarts at 11:26–11:27, the
+deploy and the architect's walk from 13:29, the session's probes from 13:37 to 13:39. Every
+command, as run, is under "Commands as run"; the requests quoted here are the session's, from the
+laptop, where `$GW` is `http://gb10-2:3000`, `$K` the architect's key, and `$R` revoke-test's.
+
+**The hosts, at session start.** On the GB10s the architect's `apt full-upgrade` upgraded 14
+packages each, libc6 and tailscale among them, run in tmux; gb10-1 asked for a restart, and both
+GB10s were rebooted. On the Framework, `omarchy update` upgraded gliff and mise-bin, with no
+reboot. After the updates the GB10s run kernel 7.0.0-1025-nvidia, driver 580.178.04, Docker
+29.6.2, and Tailscale 1.104.7, and the Framework Tailscale 1.104.2 (the table above). Every
+`tailscale ping` from the laptop is direct, at 1 ms or less, before and after. gb10-1 still lists 3
+phased apt updates (distro-info, python3-distro-info, snapd), held back by Ubuntu's phasing.
+
+**Behavior 1: each row serves its alias.** spike-model-engines pull request #17, merged as
+`261879e`, adds `--served-model-name` to the four standing rows, and its LICENSE. Each host pulled
+it and restarted its rows with `host/engines vllm update` at 11:26–11:27, each update exiting 0 in
+under 2 s. Counted from 11:27:23, when polling started, each row answered healthy with its
+`/v1/models` listing exactly its alias: embedding at 0 s (`["embedding"]`), audio at 20 s
+(`["audio"]`), vision at 130 s (`["vision"]`), and agent at 411 s (`["agent"]`).
+
+**Behavior 2: the deploy, its listeners, and the UI.**
+
+- **Short names.** A container on gb10-2's default bridge resolves none of `gb10-1`, `gb10-2`, and
+  `framework`, so the deploy passes each row's host with `--add-host`, as "Short host names in the
+  container" provides.
+- **The deploy.** `mise run agentgateway-deploy` created the four keys, pulled the image (digest
+  `sha256:60216aafb03d…`), validated the rendered copy ("Configuration is valid!"), moved it into
+  place, and started the container with label `spike.spec=e1d1d93a9f78`.
+- **The listeners**, from `docker logs agentgateway`: the config loaded from and watched at
+  `/config/config.yaml`; the consumer gateway on 3000, published on the tailnet address; the UI on
+  3001, published on loopback; the admin API on 127.0.0.1:15000 and [::1]:15000 inside the
+  container; readiness on [::]:15021 and stats on [::]:15020 inside the container, unpublished.
+  The log also warns that no session key is set, which concerns MCP sessions, unused here.
+- **`docker port`** shows only `3000/tcp -> <tailnet>:3000` and `3001/tcp -> 127.0.0.1:3001`.
+- **From the laptop,** 15000 is refused (`000`), and `/ui` on 3000, with a key, answers 404.
+- **The UI** through `ssh -N -L 3001:127.0.0.1:3001 gb10-2`, over Tailscale SSH, shows the
+  read-only mode banner, the warning "UI is exposed without authentication", 2 gateways, and 4
+  routes.
+
+**Gap: the UI has no authentication of its own.** Access to it rests on gb10-2's loopback and SSH
+to gb10-2, nothing else. Authenticating the UI with JWT or OIDC is on the paper list for slice 3's
+inventory.
+
+**Behavior 3: pass-through under each alias.**
+
+- **Models.** Every `/<alias>/v1/models` lists exactly its alias: `["agent"]`, `["vision"]`,
+  `["audio"]`, `["embedding"]`.
+- **Agent.** A chat (the walk's, "Hello there, wonderful dear friend!", 73 tokens in and 198 out,
+  181 of them reasoning); a streamed chat, 43 `data:` events; Messages, `"stop_reason":"end_turn"`
+  with the text `"Red."`; and Responses, `"status":"completed"` with the text `"Mars."`.
+- **Vision** read `"GATEWAY 7319"` from a generated 1280×720 JPEG.
+- **Audio** transcribed a 6 s clip as "And um, this is what we're going to be doing over the next";
+  the same request sent direct to the row gave the same text without the comma. (The first attempt
+  passed the clip as a jq argument, which the laptop's shell refused as too long, so nothing was
+  sent; the rerun reads it with `--rawfile`.)
+- **Embedding.** 2 inputs, 2 vectors of 768 dimensions.
+- **No crossing aliases.** A chat naming `vision` sent to `/agent/v1` reached the agent row, which
+  refused it: "The model `vision` does not exist. Valid aliases: agent." The route decides the row,
+  and the row serves only its alias.
+- **Usage read by detect.** The gateway's log line for the walk's chat carries `protocol=llm`,
+  `op=chat`, `model=agent`, and the token usage read from the reply: 73 in, 198 out, 181
+  reasoning, in 5,576 ms. The `/models` request's line names `route=default/agent` and
+  `endpoint=gb10-1:8000`.
+
+**Behavior 4: keys and revocation.**
+
+- **Refused.** No key, an empty Bearer (`Authorization: Bearer `), and a random 64-hex key all get
+  401. The log line for the walk's keyless request gives `reason=APIKeyAuth` ("no API Key found")
+  in 0 ms and names no route: the gateway policy refuses before routing.
+- **Revocation, first run.** A long streamed chat on revoke-test started at 13:38:00 and finished
+  at 13:38:41, before the revoke at 13:38:45, so it shows nothing about requests in flight. The
+  revoke-test request sent within a second of the deploy still got 200: the gateway logged
+  `loaded config` at 13:38:46.914, just under 1 s after the move, and the request beat the
+  reload. From the reload on, the key gets 401, as the second run shows.
+  The entry was then restored and deployed again, and revoke-test readmitted (200), for a second
+  run.
+- **Revocation, second run, during a stream.** The same streamed chat on revoke-test, started at
+  13:39:15. At 13:39:21 it had 206 `data:` events; the entry was deleted and deployed; at 13:39:24
+  the stream stood at 305 events, and a new request on the same key got 401. The stream ran on to
+  1,341 events and ended with `"finish_reason":"stop"`, curl exiting 0 at 13:39:53. A revoke
+  refuses new requests on the key and lets the running one finish.
+- **revoke-test stays revoked.** Its entry is removed from
+  [`gateway/agentgateway/config.yaml`](../../gateway/agentgateway/config.yaml) and deployed; the
+  key file stays on the laptop and is listed nowhere.
+
+**Behavior 5: nothing but the four aliases is routed.**
+
+- **Unrouted paths.** With a valid key, `/metrics`, `/health`, `/version`, `/tokenize`, `/docs`,
+  `/openapi.json`, `/v1/models`, `/agent/metrics`, `/agent/health`, and `/AGENT/v1/models` all get
+  404 "route not found" from the gateway: route matching is case-sensitive, and an alias's routes
+  start at `/<alias>/v1`.
+- **Without a key,** `/metrics` gets 401: the key policy runs before routing, so an unrouted path
+  is refused the same as a routed one.
+- **Dot segments.** `/agent/v1/../../metrics`, `/agent/v1/%2e%2e/%2e%2e/metrics`, and
+  `/agent/v1/..%2f..%2fmetrics`, sent with `curl --path-as-is`, also got 404, but not from the
+  gateway (below).
+
+**Finding: agentgateway does not normalize dot segments.** All three dot-segment paths matched the
+agent route and were forwarded to gb10-1 (log `route=default/agent endpoint=gb10-1:8000`); the
+404 is the row's. Nothing is exposed today, because vLLM doesn't resolve those paths to its root
+routes, but that is what protects `/metrics` and the rest through the agent route, not the gateway.
+The paper inventory in slice 3 weighs the hardening: an authorization rule in agentgateway's native
+CEL, or a regex path match on each route, refusing `..` and its encodings (`%2e%2e`, `%2f`) before
+a request is routed. Behavior 6's firewall doesn't cover this: it admits the gateway as the rows'
+one source, and these requests come from the gateway.
+
+**The key is never logged.** A search of the full container log for the first 8 characters of the
+architect's key, after the walk's requests, found nothing (grep exit 1).
+
+**Behavior 14: currency.** `mise run currency` reports only python, which is held; the agentgateway
+pin is current.
 
 ## Slice 2 · overhead
 
@@ -319,3 +433,93 @@ reboot. The session's, once spike-model-engines' pull request #17 was merged:
 
 Each host's checkout came to `261879e`, and each update restarted its row's container under the
 row's new flags, exiting 0.
+
+### 2026-11-13 · short names, the deploy, and the walk
+
+Whether a container on gb10-2 resolves the rows' short names (none does):
+
+```text
++ 2026-11-13T11:39:44-05:00 gb10-2: for h in gb10-1 gb10-2 framework; do docker run --rm --entrypoint getent vllm/vllm-openai:v0.33.0 hosts "$h" >/dev/null && echo "$h resolves" || echo "$h does not resolve"; done; grep -E "^(nameserver|search)" /etc/resolv.conf | sed -E "s/[0-9.]+$/<ns>/; s/search .*/search <tailnet domains>/"
+```
+
+The architect's walk, step 1, from the laptop: `mise run agentgateway-deploy`, which logs
+`[agentgateway-deploy] $ scripts/agentgateway-deploy.sh`, prints `key <name>: created` for the four
+keys, and runs:
+
+```text
++ 2026-11-13T13:29:53-05:00 gb10-2: mkdir -p ~/agentgateway
++ 2026-11-13T13:29:54-05:00 laptop: ssh gb10-2 'cat > ~/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.irSc5x.yaml
++ 2026-11-13T13:29:54-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-13T13:29:57-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-13T13:29:58-05:00 gb10-2: mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml
++ 2026-11-13T13:29:58-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "spike.spec"}} {{.State.Running}}' 2>/dev/null || true
++ 2026-11-13T13:29:58-05:00 gb10-2: docker run --detach --name agentgateway --restart unless-stopped --user "$(id -u):$(id -g)" --publish "$(tailscale ip -4):3000:3000" --publish 127.0.0.1:3001:3001 --volume "$HOME/agentgateway:/config:ro" --add-host "gb10-1:$(tailscale ip -4 gb10-1)" --add-host "gb10-2:$(tailscale ip -4 gb10-2)" --add-host "framework:$(tailscale ip -4 framework)" --label spike.spec=e1d1d93a9f78 cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml
++ 2026-11-13T13:29:58-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
+```
+
+The walk's further steps, `docker logs` and `docker port` on gb10-2, the first requests, the
+key search, the 404 and refused probes, and the UI tunnel, are the commands under "The walk" above,
+run by the architect as written there.
+
+### 2026-11-13 · pass-through, refusals, and unrouted paths
+
+From the laptop, with `$GW` the consumer base URL and `$K` the architect's key. A first loop over
+the unrouted paths at 13:37:32 single-quoted `$GW/<path>`, so curl rejected each URL locally and
+sent nothing; the loop at 13:37:38 reran it correctly. The first audio request, at 13:37:15,
+failed on the laptop (jq's argument list too long) and sent nothing; the next two read the clip
+with `--rawfile`, through the gateway and direct to the row.
+
+```text
++ 2026-11-13T13:37:03-05:00 laptop: curl -sS -H "Authorization: Bearer $K" $GW/agent/v1/models | jq -c '[.data[].id]'
++ 2026-11-13T13:37:03-05:00 laptop: curl -sS -H "Authorization: Bearer $K" $GW/vision/v1/models | jq -c '[.data[].id]'
++ 2026-11-13T13:37:03-05:00 laptop: curl -sS -H "Authorization: Bearer $K" $GW/audio/v1/models | jq -c '[.data[].id]'
++ 2026-11-13T13:37:03-05:00 laptop: curl -sS -H "Authorization: Bearer $K" $GW/embedding/v1/models | jq -c '[.data[].id]'
++ 2026-11-13T13:37:03-05:00 laptop: curl -sS -N -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d '{"model":"agent","stream":true,"messages":[{"role":"user","content":"Count from 1 to 5."}],"max_tokens":200}' $GW/agent/v1/chat/completions | grep -c '^data: '
++ 2026-11-13T13:37:04-05:00 laptop: curl -sS -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d '{"model":"agent","max_tokens":300,"messages":[{"role":"user","content":"Name a primary color."}]}' $GW/agent/v1/messages | jq -c '{type, model, stop_reason, text: [.content[] | select(.type=="text") | .text], usage}'
++ 2026-11-13T13:37:06-05:00 laptop: curl -sS -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d '{"model":"agent","max_output_tokens":300,"input":"Name a planet."}' $GW/agent/v1/responses | jq -c '{object, model, status, text: [.output[] | select(.type=="message") | .content[].text], usage: .usage.total_tokens}'
++ 2026-11-13T13:37:14-05:00 laptop: jq -n --arg img "data:image/jpeg;base64,$(base64 -w0 .state/agentgateway/assets/text.jpg)" '{model:"vision",max_tokens:100,messages:[{role:"user",content:[{type:"image_url",image_url:{url:$img}},{type:"text",text:"What text is in this image? Answer with the text only."}]}]}' | curl -sS -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d @- $GW/vision/v1/chat/completions | jq -c '{model, text: .choices[0].message.content, usage: .usage.total_tokens}'
++ 2026-11-13T13:37:15-05:00 laptop: jq -n --arg wav "$(base64 -w0 .state/agentgateway/assets/clip-6s.wav)" '{model:"audio",max_tokens:256,messages:[{role:"user",content:[{type:"input_audio",input_audio:{data:$wav,format:"wav"}},{type:"text",text:"Transcribe this audio."}]}]}' | curl -sS -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d @- $GW/audio/v1/chat/completions | jq -c '{model, text: .choices[0].message.content, usage: .usage.total_tokens}'
++ 2026-11-13T13:37:15-05:00 laptop: curl -sS -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d '{"model":"embedding","input":["agentgateway passes requests through.","A second sentence."]}' $GW/embedding/v1/embeddings | jq -c '{model, n: (.data|length), dims: (.data[0].embedding|length), usage}'
++ 2026-11-13T13:37:22-05:00 laptop: base64 -w0 .state/agentgateway/assets/clip-6s.wav > .state/agentgateway/assets/clip-6s.b64; jq -n --rawfile wav .state/agentgateway/assets/clip-6s.b64 '{model:"audio",max_tokens:256,messages:[{role:"user",content:[{type:"input_audio",input_audio:{data:$wav,format:"wav"}},{type:"text",text:"Transcribe this audio."}]}]}' | curl -sS -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d @- $GW/audio/v1/chat/completions | jq -c '{model, text: .choices[0].message.content, usage: .usage.total_tokens}'
++ 2026-11-13T13:37:23-05:00 laptop: jq -n --rawfile wav .state/agentgateway/assets/clip-6s.b64 '{model:"audio",max_tokens:256,messages:[{role:"user",content:[{type:"input_audio",input_audio:{data:$wav,format:"wav"}},{type:"text",text:"Transcribe this audio."}]}]}' | curl -sS -H 'Content-Type: application/json' -d @- http://framework:8001/v1/chat/completions | jq -c '{model, text: .choices[0].message.content}'
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(openssl rand -hex 32)" $GW/agent/v1/models
++ 2026-11-13T13:37:32-05:00 laptop: curl -sS -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer ' $GW/agent/v1/models
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /metrics\n' -H "Authorization: Bearer $K" "$GW/metrics"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /health\n' -H "Authorization: Bearer $K" "$GW/health"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /version\n' -H "Authorization: Bearer $K" "$GW/version"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /tokenize\n' -H "Authorization: Bearer $K" "$GW/tokenize"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /docs\n' -H "Authorization: Bearer $K" "$GW/docs"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /openapi.json\n' -H "Authorization: Bearer $K" "$GW/openapi.json"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /v1/models\n' -H "Authorization: Bearer $K" "$GW/v1/models"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /agent/metrics\n' -H "Authorization: Bearer $K" "$GW/agent/metrics"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /agent/health\n' -H "Authorization: Bearer $K" "$GW/agent/health"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /agent/v1/../../metrics\n' -H "Authorization: Bearer $K" "$GW/agent/v1/../../metrics"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /agent/v1/%2e%2e/%2e%2e/metrics\n' -H "Authorization: Bearer $K" "$GW/agent/v1/%2e%2e/%2e%2e/metrics"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /agent/v1/..%2f..%2fmetrics\n' -H "Authorization: Bearer $K" "$GW/agent/v1/..%2f..%2fmetrics"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS --path-as-is -o /dev/null -w '%{http_code} /AGENT/v1/models\n' -H "Authorization: Bearer $K" "$GW/AGENT/v1/models"
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS -o /dev/null -w '%{http_code} /metrics no key\n' $GW/metrics
++ 2026-11-13T13:37:38-05:00 laptop: curl -sS -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d '{"model":"vision","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' $GW/agent/v1/chat/completions | jq -c '{error: .error.message}'
+```
+
+### 2026-11-13 · revocation
+
+From the laptop, with `$R` revoke-test's key. The 13:39:15 stream is the 13:38:00 request
+again, logged abbreviated; it ran detached, and curl exited 0 at 13:39:53.
+
+```text
++ 2026-11-13T13:38:00-05:00 laptop: curl -sS -o /dev/null -w '%{http_code} revoke-test before\n' -H "Authorization: Bearer $R" $GW/agent/v1/models
++ 2026-11-13T13:38:45-05:00 laptop: grep -n -A2 'name: revoke-test' gateway/agentgateway/config.yaml | head -3; sed -i '/keyHash: sha256:@@revoke-test@@/,+2d' gateway/agentgateway/config.yaml; grep -c revoke-test gateway/agentgateway/config.yaml
++ 2026-11-13T13:38:45-05:00 laptop: mise run agentgateway-deploy 2>&1 | grep -E '^key|unchanged|docker ps|Up '
++ 2026-11-13T13:38:46-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
++ 2026-11-13T13:38:46-05:00 laptop: curl -sS -o /dev/null -w '%{http_code} revoke-test after\n' -H "Authorization: Bearer $R" $GW/agent/v1/models
++ 2026-11-13T13:38:46-05:00 laptop: curl -sS -o /dev/null -w '%{http_code} architect after\n' -H "Authorization: Bearer $K" $GW/agent/v1/models
++ 2026-11-13T13:38:46-05:00 laptop: grep -c '^data: ' .state/agentgateway/revoke-stream.txt; grep -o '"finish_reason":"[a-z]*"' .state/agentgateway/revoke-stream.txt | tail -1; tail -2 .state/agentgateway/revoke-stream.txt
++ 2026-11-13T13:39:12-05:00 laptop: git checkout gateway/agentgateway/config.yaml && mise run agentgateway-deploy 2>&1 | grep -E '^key|unchanged'
++ 2026-11-13T13:39:15-05:00 laptop: curl -sS -o /dev/null -w '%{http_code} revoke-test readmitted\n' -H "Authorization: Bearer $R" $GW/agent/v1/models
++ 2026-11-13T13:39:15-05:00 laptop: curl -sS -N -H "Authorization: Bearer $R" ... '{"model":"agent","stream":true,..."Write a 600-word story about a lighthouse."...,"max_tokens":2000}' $GW/agent/v1/chat/completions > .state/agentgateway/revoke-stream.txt &  (detached)
++ 2026-11-13T13:39:21-05:00 laptop: grep -c '^data: ' .state/agentgateway/revoke-stream.txt
++ 2026-11-13T13:39:21-05:00 laptop: sed -i '/keyHash: sha256:@@revoke-test@@/,+2d' gateway/agentgateway/config.yaml && mise run agentgateway-deploy 2>&1 | grep -E '^key|unchanged'
++ 2026-11-13T13:39:24-05:00 laptop: curl -sS -o /dev/null -w '%{http_code} revoke-test new request after revoke\n' -H "Authorization: Bearer $R" $GW/agent/v1/models
++ 2026-11-13T13:39:24-05:00 laptop: grep -c '^data: ' .state/agentgateway/revoke-stream.txt
++ 2026-11-13T13:39:53-05:00 laptop: grep -c '^data: ' .state/agentgateway/revoke-stream.txt; grep -o '"finish_reason":"[a-z]*"' .state/agentgateway/revoke-stream.txt | tail -1; tail -1 .state/agentgateway/revoke-stream.txt
+```

@@ -45,9 +45,6 @@ gateways:
       - keyHash: sha256:@@go-ai@@
         metadata:
           name: go-ai
-      - keyHash: sha256:@@revoke-test@@
-        metadata:
-          name: revoke-test
   # The UI, read-only (config.storage), on its own port, published on gb10-2's loopback only and
   # reached through an SSH tunnel. The admin API's debug and shutdown endpoints stay on adminAddr.
   ui:
