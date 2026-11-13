@@ -241,6 +241,11 @@ slices 1/4 committed (slice 1: 48027e3) · standards — · spec — · editor �
   copy sent to gb10-2. It amends round 2's committed hashes (behavior 4): the running config is the
   same, and no hash enters git history. Rejected: a key step that writes hashes into the committed
   config, which publishes each deployment's hashes and makes a second deployer rewrite them.
+- agentgateway: the UI labels inline `ai` route backends "legacy LLM backend" (ui/src/traffic.ts);
+  v1.7.0's code, schema, and docs don't deprecate them. agentgateway's newer features (providers,
+  virtual models: failover, weighted, conditional, callout) live in the `llm` section, which takes
+  one path prefix. Slice 3's paper inventory records the risk and that `priority` may weigh
+  per-alias base URLs against one shared `/v1` routed by model name.
 
 ## Pending edits
 
