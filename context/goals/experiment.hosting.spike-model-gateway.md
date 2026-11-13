@@ -37,6 +37,9 @@
   `--model` required of every client.
 - plan: go-ai's integration tier runs through the gateway, and go-ai stays read-only. The `infer`
   CLI is used once it is released, as a published version.
+- plan: agentgateway's `host/` pull request to spike-model-engines also adds go-core's Apache-2.0
+  `LICENSE` there, per the spike repository convention (standards-lab `context/README.md`,
+  "Experiments"); this spike holds spike-model-engines.
 
 ## Pending edits
 
