@@ -184,7 +184,7 @@ Door          two-way: the container can be removed, the host/ pull request
 
 ## Progress
 
-slices 1/4 committed (slice 1: 48027e3) · standards — · spec — · editor —
+slices 2/4 committed (slice 1: 48027e3; slice 2: 4b55cc6, 93405a0) · standards — · spec — · editor —
 
 ## Decisions
 
