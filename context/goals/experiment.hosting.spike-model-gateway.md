@@ -168,13 +168,13 @@ Out of scope  LiteLLM; Azure AI Foundry overflow live; the endpoint picker live;
               spike-model-engines outside host/ and its LICENSE (guides, uv,
               llama.cpp pins); Kubernetes
 Door          two-way: the container can be removed, the host/ pull request
-              reverted, the ufw rules deleted, and the gateway config is in git
-              (a committed key hash is revoked by removing it)
+              reverted, and the gateway config is in git (a key is revoked by
+              removing its name and deploying)
 ```
 
 ## Progress
 
-slices 4/4 committed (slice 1: 48027e3; slice 2: 4b55cc6, 93405a0; slice 3: 64ced85, a5882ea; slice 4: 62b39f1, 0f6ba8a) · standards — · spec — · editor —
+slices 4/4 committed (slice 1: 48027e3; slice 2: 4b55cc6, 93405a0; slice 3: 64ced85, a5882ea; slice 4: 62b39f1, 0f6ba8a) · standards done (7ccf3f4, 68689f6) · spec round 1 gaps closed (7ff71ad) · editor —
 
 ## Decisions
 
