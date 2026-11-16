@@ -4,12 +4,13 @@ Whether agentgateway's `llm` section can serve the four aliases the way the inli
 backends do, which agentgateway's UI labels "legacy". The task trials `llm` live beside route `ai`,
 keeps it only if behaviors 1–6 of the task brief all hold, and otherwise returns to route `ai`
 (evidence 1 and 8 of [`context/README.md`](../../context/README.md#the-evidence)). This finding
-holds slice 1, the trial, and slice 2, the tiers, the final verdict, and the overhead cells; slice 3
-adds the settled form.
+holds slice 1, the trial; slice 2, the tiers, the final verdict, and the overhead cells; slice 3,
+the settled form, the base-URL choice, and the watch register; and the walkthrough the architect
+runs as slice 4.
 
 - **Measured:** 2026-11-16, 07:54–07:59 local time, from the laptop, and the transcription
   verification at 09:06–09:08; slice 2 at 09:13–09:30, on Tailscale's relay ("The network
-  path"). Every command is under "Commands as run".
+  path"); slice 3 at 09:37–09:41. Every command is under "Commands as run".
 - **Gateway:** agentgateway v1.7.0, `cr.agentgateway.dev/agentgateway:v1.7.0`, on gb10-2,
   configured from [`gateway/agentgateway/config.yaml`](../../gateway/agentgateway/config.yaml).
 - **Rows:** as in the agentgateway task's finding
@@ -77,12 +78,14 @@ Every later deploy reloaded the config in place.
 
 **The helpers.** [`scripts/clients-lib.sh`](../../scripts/clients-lib.sh) and
 [`scripts/measure-lib.sh`](../../scripts/measure-lib.sh) read the alias-to-port map from
-`deploy.env`, and take `GATEWAY_FORM`, `llm` (the default) or `route`, for the base URL.
+`deploy.env`, and take `GATEWAY_FORM`, `llm` (the default) or `route`, for the base URL (removed
+in slice 3, with the route form).
 `gw_base <alias>` prints the base URL. State and the command log are under `.state/routing/`;
 keys stay in `.state/agentgateway/keys/`.
 
-**The 429 probe on `llm`.** [`probes/rate-limit-agent-llm.yaml`](../../gateway/agentgateway/probes/rate-limit-agent-llm.yaml)
-is a top-level policy targeting the `llm` route, `internal/llm:request`, with a conditional
+**The 429 probe on `llm`.** `probes/rate-limit-agent-llm.yaml`, renamed
+[`probes/rate-limit-agent.yaml`](../../gateway/agentgateway/probes/rate-limit-agent.yaml) in slice
+3, is a top-level policy targeting the `llm` route, `internal/llm:request`, with a conditional
 `localRateLimit`: 2 requests, refilled every 10 s, when `proxy.listener.name == "agent"`.
 `llm.policies.localRateLimit` takes no condition, so a limit set there would hold all four
 aliases. The route's name is the one the access log prints (`route=internal/llm:request`), and
@@ -559,6 +562,215 @@ on this figure, by 2.89 and 5.34 ms, and every other vision figure, TTFT and ITL
 within. Per behavior 9, an `llm` figure beyond route `ai` by more than the spread is the
 architect's call, not a fail.
 
+## Results · slice 3
+
+### The settled form
+
+**The `llm` section serves the four aliases; route `ai` is deleted.** Behaviors 1–6 held, the
+tiers passed, and the architect accepted the one flagged overhead figure, so the losing form went:
+from [`config.yaml`](../../gateway/agentgateway/config.yaml), the `consumer` gateway on 3000, its
+key list, the four routes, and their shared allow-list; from
+[`deploy.env`](../../gateway/agentgateway/deploy.env) and the deploy, `AGW_PORT` and the 3000
+publish. The keys now live in one list, `llm.policies.apiKey`, with the same
+`sha256:@@<name>@@` markers. The header comment describes the one form.
+
+- **Probes.** The route form's `rate-limit-agent` is deleted, and `rate-limit-agent-llm` takes its
+  name, [`probes/rate-limit-agent.yaml`](../../gateway/agentgateway/probes/rate-limit-agent.yaml).
+  [`key-header`](../../gateway/agentgateway/probes/key-header.yaml) still inserts after the line
+  `    apiKey:`, now `llm.policies.apiKey`'s and the only such line; only its comment changed.
+  `in-flight-1` inserts under `frontendPolicies:`, unchanged. No overlay was deployed. The deploy
+  has no dry path, so each was rendered on the laptop the deploy's way, its markers replaced with a
+  placeholder hash, and validated with the pinned image there (`docker run ... --validate-only`):
+  `key-header` alone, and `rate-limit-agent` with `in-flight-1`, each "Configuration is valid!".
+  `apiKey.location` is a field of `LocalAPIKeys` in v1.7.0's schema, the type `llm.policies.apiKey`
+  takes, and a field added under it is refused (``llm.policies: unknown field `bogusField` ``).
+- **Helpers.** [`scripts/clients-lib.sh`](../../scripts/clients-lib.sh) and
+  [`scripts/measure-lib.sh`](../../scripts/measure-lib.sh) drop `GATEWAY_FORM`: one form leaves
+  nothing to choose, and `gw_base <alias>` is `http://gb10-2:<port>/v1`. measure-lib's cap-cell
+  reader picked access log lines by the route form's `route=default/<alias>`. The `llm` section
+  serves every alias through one route, so it now picks `listener=<alias>
+  route=internal/llm:request`. Read over the smoke test's window (09:37:41), it found the agent
+  port's two lines, `/v1/models` and `/v1/chat/completions`, both 200. clients-lib gains
+  `logged <command>`, which runs a step that prints no key, such as the deploy, a keyless curl, or
+  `mise run watch`, and puts the command and its output in the day's log, so the walkthrough runs
+  every command through the helpers.
+
+### The base URLs
+
+Each alias's base URL is its own port's `/v1`, and its `/v1/models` lists that alias alone:
+
+| Alias | Base URL |
+| --- | --- |
+| agent | `http://gb10-2:3010/v1` |
+| vision | `http://gb10-2:3011/v1` |
+| audio | `http://gb10-2:3012/v1` |
+| embedding | `http://gb10-2:3013/v1` |
+
+A consumer changes only the base URL and the key, as the tiers showed (behavior 3).
+
+- **Rejected: one shared `/v1` with a key per purpose.** The `llm` section could serve every alias
+  at one base URL and hold each key to its purpose, but a consumer that uses more than one alias
+  would then hold a key for each, every consumer split four ways.
+- **Rejected: per-alias routes into `llm`'s internal router.** Routes on one port matching
+  `/<alias>/v1` could forward into the `llm` section through its internal `llm:router` backend,
+  but that name is undocumented and could change in any release without notice.
+- **What would bring `/<alias>/v1` back:** `llm.pathPrefix` is one string at v1.7.0, one prefix
+  for every attached gateway. If `llm` gains several prefixes, or a model list per prefix, the
+  aliases could share one port again. [`docs/watch.md`](../watch.md) watches the schema field.
+
+### The deprecation risk
+
+The gateway moved to `llm` ahead of a likely deprecation of route `ai`, on this evidence, read at
+v1.7.0:
+
+- **The UI labels it legacy.** `ui/src/traffic.ts` names an inline `ai` backend "legacy LLM
+  backend" (and an inline `mcp` one "legacy MCP backend").
+- **The docs moved.** website#1091 rewrote the Claude Code and Claude Desktop client pages from
+  `routes[].backends[].ai` to the `llm` section, closing agentgateway#3655, "Docs result in legacy
+  backend configuration".
+- **A form has been deprecated without parity before.** `binds` is deprecated in favour of
+  `gateways` and `routes` (the schema's own description: "Deprecated; usage of `gateways` and
+  `routes` is recommended instead"), while `gateways` can't yet express `tunnelProtocol: connect`
+  or `mode: internal` (#3204, open).
+- **There is no deprecation policy.** #2767, "Define a project deprecation policy", was closed:
+  "it may be a bit premature to establish a dep policy at this point with the project."
+- **The schema doesn't mark route `ai` yet.** The route backend's `ai` variant has no
+  description at v1.7.0, where `binds`' says "Deprecated".
+
+[`docs/watch.md`](../watch.md), the watch register, now tracks it. Its read-only check,
+`mise run watch` ([`scripts/watch.sh`](../../scripts/watch.sh)), runs at every task's PLAN as its
+own block, separate from `mise run currency`. Three entries:
+
+- **Deprecation: agentgateway route `ai` backends.** Upstream #3204, #2767, #3655, and
+  website#1091; watched, whether the `ai` variant's description mentions deprecation (false) and
+  the UI's "legacy LLM backend" (present).
+- **Capability: `llm` serving several base URLs on one port.** Watched, `llm.pathPrefix`'s type
+  (`"string"`).
+- **Capability: always-passthrough (#4185).** Merged 2026-10-27, after v1.7.0's tag. At v1.7.0
+  `passthrough` covers only paths agentgateway doesn't classify, so `llm` parses the typed
+  requests and adds `include_usage` to streams (behavior 2); #4185, marked breaking, makes it pass
+  through always. Watched, whether the latest release holds its merge commit (absent). Before an
+  upgrade that carries it, the gateway's body handling is checked again.
+
+The first run, at 09:40, read every line as recorded, at v1.7.0:
+
+```text
+checked 2026-11-16T14:40Z
+agentgateway route `ai` backends deprecated
+  agentgateway/agentgateway#3204: recorded open, now open
+  agentgateway/agentgateway#2767: recorded closed, now closed
+  agentgateway/agentgateway#3655: recorded closed, now closed
+  agentgateway/website#1091: recorded merged, now merged
+  agentgateway/agentgateway@v1.7.0 schema/config.json [.["$defs"].LocalRouteBackend.oneOf[] | select(.properties.ai) | .description // "" | test("deprecated"; "i")] | any: recorded false, now false
+  agentgateway/agentgateway@v1.7.0 ui/src/traffic.ts "legacy LLM backend": recorded present, now present
+agentgateway `llm` serving several base URLs on one port
+  agentgateway/agentgateway@v1.7.0 schema/config.json .["$defs"].LocalLLMConfig.properties.pathPrefix.type: recorded "string", now "string"
+agentgateway always-passthrough for `llm` models
+  agentgateway/agentgateway#4185: recorded merged, now merged
+  agentgateway/agentgateway@v1.7.0 contains 2a7c2ec473a2: recorded absent, now absent
+```
+
+Its `differs` path was tried on a scratch edit of the register, then restored: a recorded state
+changed, a text field's value flipped, and a path that doesn't exist each printed `differs` (the
+missing file as `unreadable`), and the check exited 1.
+
+### The smoke test
+
+The deploy at 09:37:15 validated the config, recreated the container for the removed port (label
+`spike.spec=f7f7f658b092`), and published 3010–3013 on the tailnet address and 3001 on loopback.
+Through the helpers, with the architect's key:
+
+| Request | Result |
+| --- | --- |
+| `/v1/models` on 3010, 3011, 3012, 3013 | `["agent"]`, `["vision"]`, `["audio"]`, `["embedding"]` |
+| agent chat on 3010 | "Greetings and welcome, dear friend!", 73 in, 126 out |
+| vision chat on 3011 | "Red", 21 in, 2 out |
+| embedding on 3013 | one vector of 768, 5 tokens |
+| `/agent/v1/models` on 3000 | `000`, "Failed to connect to gb10-2:3000 ... Could not connect to server": nothing listens |
+
+A second deploy at 09:40:56 changed nothing ("image and flags unchanged; config.yaml reloads in
+place"), and a keyless `/v1/models` on 3010 got 401 (09:41:01).
+
+## Walkthrough
+
+Slice 4, run by the architect from the repository root on the laptop. Every command goes through
+the helpers, so each lands in `.state/routing/commands-<date>.log`. Each step's expected result
+comes from slices 1–3.
+
+```sh
+source scripts/clients-lib.sh
+```
+
+1. **A deploy that changes nothing.**
+
+   ```sh
+   logged "mise run agentgateway-deploy"
+   ```
+
+   Expected: `Configuration is valid!`, then "agentgateway: image and flags unchanged;
+   config.yaml reloads in place", and the container up.
+
+2. **Each base URL's `/models`.**
+
+   ```sh
+   for a in agent vision audio embedding; do gw_curl architect -sS "$(gw_base $a)/models" | jq -c '[.data[].id]'; done
+   ```
+
+   Expected: `["agent"]`, `["vision"]`, `["audio"]`, `["embedding"]`.
+
+3. **A chat, a stream, an embedding, and a transcription.**
+
+   ```sh
+   gw_curl architect -sS -H 'Content-Type: application/json' -d '{"model":"agent","messages":[{"role":"user","content":"Say hello in five words."}],"max_tokens":256}' "$(gw_base agent)/chat/completions" | jq -c '{model, content: .choices[0].message.content, usage}'
+   gw_curl architect -sS -N -H 'Content-Type: application/json' -d '{"model":"agent","stream":true,"messages":[{"role":"user","content":"Count from 1 to 5."}],"max_tokens":200}' "$(gw_base agent)/chat/completions" | grep -c '"usage":{'
+   gw_curl architect -sS -H 'Content-Type: application/json' -d '{"model":"embedding","input":["gateway","routing"]}' "$(gw_base embedding)/embeddings" | jq -c '[.data[].embedding | length]'
+   gw_curl architect -sS -w '\n%{http_code}\n' -F model=audio -F file=@.state/routing/assets/clip-6s.wav "$(gw_base audio)/audio/transcriptions"
+   ```
+
+   Expected: the agent's greeting with its usage; `1`, the one usage chunk `llm` adds to every
+   stream, though the request didn't ask for it; `[768,768]`; and `{"detail":"Not Found"}` with
+   `404`, the audio row's own answer: no row serves transcription at vLLM v0.33.0
+   ("Transcription, verified").
+
+4. **A model at the wrong alias, and a path that isn't served.**
+
+   ```sh
+   gw_curl architect -sS -w '\n%{http_code}\n' -H 'Content-Type: application/json' -d '{"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":16}' "$(gw_base agent)/chat/completions"
+   gw_curl architect -sS -o /dev/null -w '%{http_code}\n' http://gb10-2:3010/metrics
+   ```
+
+   Expected: `403`, "Model authorization denied"; then `403`, from the serving-path allow-list.
+
+5. **A request without a key.**
+
+   ```sh
+   logged "curl -sS -o /dev/null -w '%{http_code}\n' http://gb10-2:3010/v1/models"
+   ```
+
+   Expected: `401`.
+
+6. **One tier role.**
+
+   ```sh
+   goai_tier walk agent
+   ```
+
+   Expected: the agent role's scenarios pass, as in behavior 3, and the helper reports that the key
+   is in none of the log's lines.
+
+7. **The watch register.**
+
+   ```sh
+   logged "mise run watch"
+   ```
+
+   Expected: every line `recorded ..., now ...` with the same value, and exit 0. Any `differs` is
+   read into [`docs/watch.md`](../watch.md) by hand.
+
+### Walkthrough results
+
+To be recorded from the architect's run.
+
 ## Commands as run
 
 Every command the log holds, as logged, with its time, from `.state/routing/commands-2026-11-16.log`,
@@ -954,4 +1166,47 @@ runs, and for a gateway run the sampler beside it, on the lines after its own:
 + 2026-11-16T09:30:00-05:00 laptop: compare r-embed-direct-1 r-embed-llm r-embed-direct-2
 + 2026-11-16T09:30:01-05:00 laptop: compare r-vision-direct-1 r-vision-route r-vision-direct-2
 + 2026-11-16T09:30:01-05:00 laptop: compare r-vision-direct-1 r-vision-llm r-vision-direct-2
+```
+
+### 2026-11-16 · slice 3: the settled form
+
+The deploy that removed 3000 (the container recreated), the smoke test, the cap-cell reader over
+the smoke test's window, the watch check's first run, and a deploy that changed nothing with a
+keyless request, through `logged`:
+
+```text
++ 2026-11-16T09:37:15-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:37:15-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-16T09:37:15-05:00 gb10-2: mkdir -p ~/agentgateway
++ 2026-11-16T09:37:16-05:00 laptop: ssh gb10-2 'cat > ~/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.TPmRnz.yaml
++ 2026-11-16T09:37:16-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T09:37:17-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T09:37:18-05:00 gb10-2: mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml
++ 2026-11-16T09:37:19-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "spike.spec"}} {{.State.Running}}' 2>/dev/null || true
++ 2026-11-16T09:37:19-05:00 gb10-2: docker rm --force agentgateway
++ 2026-11-16T09:37:20-05:00 gb10-2: docker run --detach --name agentgateway --restart unless-stopped --user "$(id -u):$(id -g)" --publish "$(tailscale ip -4):3010:3010" --publish "$(tailscale ip -4):3011:3011" --publish "$(tailscale ip -4):3012:3012" --publish "$(tailscale ip -4):3013:3013" --publish 127.0.0.1:3001:3001 --volume "$HOME/agentgateway:/config:ro" --add-host "gb10-1:$(tailscale ip -4 gb10-1)" --add-host "gb10-2:$(tailscale ip -4 gb10-2)" --add-host "framework:$(tailscale ip -4 framework)" --label spike.spec=f7f7f658b092 cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml
++ 2026-11-16T09:37:21-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
++ 2026-11-16T09:37:27-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:37:27-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3010/v1/models
++ 2026-11-16T09:37:28-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3011/v1/models
++ 2026-11-16T09:37:28-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3012/v1/models
++ 2026-11-16T09:37:28-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3013/v1/models
++ 2026-11-16T09:37:28-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -H Content-Type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Say hello in five words."}],"max_tokens":256} http://gb10-2:3010/v1/chat/completions
++ 2026-11-16T09:37:32-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Name one primary color, one word."}],"max_tokens":64} http://gb10-2:3011/v1/chat/completions
++ 2026-11-16T09:37:32-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -H Content-Type: application/json -d {"model":"embedding","input":"gateway routing"} http://gb10-2:3013/v1/embeddings
++ 2026-11-16T09:37:33-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -w 3000: %{http_code} %{errormsg}\n http://gb10-2:3000/agent/v1/models
++ 2026-11-16T09:37:41-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T09:37:41-05:00 laptop: ssh -n gb10-2 'docker logs --timestamps --since 2026-11-16T14:37:25Z --until 2026-11-16T14:37:40Z agentgateway 2>&1' | the lines of listener=agent route=internal/llm:request as time, status, path, retry_after > .state/routing/cells/s3-log-check/gateway-requests.tsv
++ 2026-11-16T09:40:04-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:40:04-05:00 laptop: mise run watch
++ 2026-11-16T09:40:56-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:40:56-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-16T09:40:57-05:00 gb10-2: mkdir -p ~/agentgateway
++ 2026-11-16T09:40:57-05:00 laptop: ssh gb10-2 'cat > ~/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.dTnaLU.yaml
++ 2026-11-16T09:40:58-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T09:40:59-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T09:40:59-05:00 gb10-2: mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml
++ 2026-11-16T09:41:00-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "spike.spec"}} {{.State.Running}}' 2>/dev/null || true
++ 2026-11-16T09:41:01-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
++ 2026-11-16T09:41:01-05:00 laptop: curl -sS -o /dev/null -w '3010 no key: %{http_code}\n' http://gb10-2:3010/v1/models
 ```
