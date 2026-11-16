@@ -928,6 +928,10 @@ render, `location.header.name: x-api-key` sits under the consumer gateway's `api
 
 ### Results
 
+The laptop's path, recorded after the checks (11:39:14, `tailscale ping`): every host through
+Tailscale's DERP relay (nyc), as in slice 2, with no direct path: gb10-1 117 ms, gb10-2 58 ms, the
+Framework 144 ms. The checks here are functional, so the relay bears on no figure; no benchmark ran.
+
 The deploy at 11:30:15 validated the config and recreated the container for the changed ports
 (label `spike.spec=e1d1d93a9f78`), publishing 3000 on the tailnet address and 3001 on loopback.
 Then, through the helpers, with the architect's key unless noted:
@@ -1613,4 +1617,5 @@ watch rerun:
 + 2026-11-16T11:33:25-05:00 laptop: gh api 'repos/agentgateway/agentgateway/contents/ui/src/traffic.ts?ref=v1.7.0' --jq .content | base64 -d | grep -n 'legacy'
 + 2026-11-16T11:34:04-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-16T11:34:04-05:00 laptop: mise run watch
++ 2026-11-16T11:39:14-05:00 laptop: for h in gb10-1 gb10-2 framework; do tailscale ping -c 1 $h | sed -E "s/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?/<addr>/g"; done
 ```
