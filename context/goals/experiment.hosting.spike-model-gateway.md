@@ -134,7 +134,7 @@
   - Rejected: one shared `/v1` with a key per purpose, which splits every consumer four ways.
   - Rejected: per-alias routes into the internal `llm:router` backend, an undocumented name.
 - routing: the alias ports are 3010 agent, 3011 vision, 3012 audio, and 3013 embedding. They are
-  set in deploy.env, and the helpers map each alias to its port.
+  set in deploy.env, and the helpers map each alias to its port. Superseded by the realignment on route `ai`.
 - routing: the trial passes only if all of (a)–(f) hold:
   - (a) each base URL lists exactly its alias;
   - (b) the full pass-through matrix works, and a model named at another alias's port is refused;
@@ -156,13 +156,26 @@
   - Rejected: a schema check inside currency, which would mix version gaps with upstream risk.
 - routing: behavior 2's transcription line is met by the gateway's handling only (architect, 2026-11-16, "but we should at least verify it"): the audio row (Gemma 4 E4B, vLLM v0.33.0) registers no `/v1/audio/*` route, since `Gemma4ForConditionalGeneration` doesn't implement `SupportsTranscription`; both forms forward the full multipart body (the row's `/metrics` counts its Content-Length) and `llm` refuses a wrong-alias model with 403. A row that serves transcription needs a different model, such as Gemma 3n.
 - routing: the overhead cells ran on Tailscale's DERP relay (architect, 2026-11-16: "we have to be okay with the idea that we're not always going to be on the direct network path"); the laptop's network had no direct path (netcheck MappingVariesByDestIP true). `llm` against route `ai` is the comparable figure, since both share the path. Rejected: waiting for a direct path, and running GuideLLM from gb10-1.
-- routing: the verdict is `llm`: behaviors 1–6 hold. The one flagged figure, vision's median request latency `llm` +2.45 ms over route `ai` against a 1.78 ms direct spread, is accepted by the architect (2026-11-16) as noise-sized on a 4.7 s request.
+- routing: the verdict is `llm`: behaviors 1–6 hold. The one flagged figure, vision's median request latency `llm` +2.45 ms over route `ai` against a 1.78 ms direct spread, is accepted by the architect (2026-11-16) as noise-sized on a 4.7 s request. Superseded by the realignment on route `ai`.
 - routing: each model's authorization reads `proxy.listener.name`, not `proxy.gateway.name`: standalone agentgateway makes each `gateways` entry a listener of one gateway, `default`. Every model lists all four formats, audio included, since agentgateway classifies `/v1/chat/completions` before `passthrough`. The route form keeps its prefix match and refuses off-list paths with a conditional `directResponse` 404, since a prefix rewrite needs a prefix match.
 - routing: before any upstream issue, the session searched every agentgateway issue and pull request (2026-11-16). Only one gap has nothing upstream: several model routers per listener in standalone `llm`, which Kubernetes has (agentgateway#2973). The finding's "For an upstream feature request" holds the facts for the architect to file it in their own words. Per-model limits are agentgateway#4307's (comment there if priority needs them), typed parsing is #4185's, and `/models` scoping is closed (#2719).
 - routing: the watch register keeps the always-passthrough entry (#4185) although the trial
   passed, where the brief named it only on a fallback: `llm` parses chat, Messages, Responses, and
   embeddings as typed requests and adds `include_usage` to streams, so the release carrying #4185
   is re-checked before any upgrade.
+- routing: the architect reopened routing after it shipped (2026-11-16) and realigned the gateway
+  on route `ai`. The docs recommend routing-based configuration for path-based LLM routing
+  (`llm/configuration-modes.md`, edited 2026-11-10). The MCP docs call the `mcp` section and route
+  `mcp` backends "not a different feature", though the UI labels both inline forms "legacy". No
+  upstream issue or discussion asks for `llm` per prefix. Upstream's strategy is still converging,
+  so the gateway stays on the documented form, the watch register tracks it, and there is no
+  upstream engagement for now. Rejected: filing the #2973-parity request now.
+- routing: the realignment ran no benchmark, since slice 2 measured both forms equal within noise,
+  and revoked no key again, since slice 1 proved revocation on the same, unchanged route form.
+- routing: on route `ai` with `"*": detect`, a streamed chat carries no usage unless the client
+  sends `include_usage` (realignment, live). priority weighs typing `/v1/chat/completions` as
+  `completions`, which forces `include_usage`, and `/v1/embeddings` as `embeddings`, which Azure
+  overflow needs too (`context/priority-on-route-ai.md`).
 
 ## Pending edits
 
@@ -170,16 +183,16 @@
   `models.md` are stale since its pull request #17: requests to the four standing rows now name the
   alias, while the guide's examples send the Hugging Face repository. This spike changes only
   `host/` there, so the fix is left to the experiment's intake.
-- coordinator · v1.ai.hosting: agentgateway's route `ai` backends are UI-labelled "legacy", the
-  docs moved to the `llm` section (website#1091), `binds` was deprecated without parity (#3204),
-  and there is no deprecation policy (#2767, closed as premature); since 1.7 the Kubernetes model
-  form is called the recommended one (#4307). The gateway's config form may change under it;
-  spike-model-gateway's watch register (`docs/watch.md`) tracks it.
+- coordinator · v1.ai.hosting: the gateway runs route `ai` backends, the form agentgateway's docs
+  recommend for path-based LLM routing. The UI labels them "legacy", and since 1.7 the Kubernetes
+  model form is called the recommended one (#4307); agentgateway has no deprecation policy (#2767,
+  closed as premature), and it deprecated `binds` without parity (#3204). spike-model-gateway's
+  watch register (`docs/watch.md`) tracks route `ai`, and the `llm` form, trialled in task
+  `routing` where it passed, is the fallback.
 - coordinator · experiment.hosting intake: propose the watch register as a shared feature for the
   infrastructure repositories (architect, 2026-11-16): one entry per dependency for anticipated
   capabilities, deprecations, and other changes that would affect the infrastructure we maintain,
   with a read-only `gh` check run at each PLAN beside currency.
-- coordinator · roadmap: the spike's summary and its tasks' wording change from `/<alias>/v1` to
-  each alias's own port, `http://<gateway>:<port>/v1`, whose `/models` lists only that alias
-  (routing's `llm` form); priority's summary "in the form routing settles" can name the `llm`
-  section.
+- coordinator · roadmap: the per-alias base URL stays `/<alias>/v1`, whose `/models` lists only
+  that alias, served by route `ai`, the docs' routing form; priority's summary "in the form
+  routing settles" can name the route `ai` form.

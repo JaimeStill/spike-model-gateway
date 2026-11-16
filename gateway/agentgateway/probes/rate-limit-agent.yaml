@@ -1,17 +1,14 @@
-# The 429 probe: a local request-rate limit on the agent alias's port alone, small enough that a
-# handful of requests trips it. Its bucket holds 2 requests and gets 2 back every 10 s, so the third
-# request within a 10 s window answers 429 with `retry-after` (the seconds to the next refill, at
-# least 1) and `x-ratelimit-limit`, `-remaining`, and `-reset` (crates/agentgateway/src/proxy/
-# mod.rs, ProxyError's response; http/localratelimit.rs). No `key`, so every caller on the port
-# shares the one bucket. Each reply's Retry-After is in the access log without an overlay
+# The 429 probe (the agentgateway task's behavior 9): a local request-rate limit on the agent route
+# alone, small enough that a handful of requests trips it. Its bucket holds 2 requests and gets 2
+# back every 10 s, so the third request within a 10 s window answers 429 with `retry-after` (the
+# seconds to the next refill, at least 1) and `x-ratelimit-limit`, `-remaining`, and `-reset`; an
+# admitted reply carries the `x-ratelimit-*` headers too (crates/agentgateway/src/proxy/mod.rs,
+# ProxyError's response; http/localratelimit.rs). No `key`, so every caller of the agent route
+# shares the one bucket. A top-level policy attached to the route, so config.yaml's route is
+# untouched; the route's name is `agent` in the `default` namespace, as the access log's
+# `route=default/agent` shows. Applied by `scripts/agentgateway-deploy.sh rate-limit-agent`,
+# removed by a deploy without it; each reply's Retry-After is in the access log without an overlay
 # (config.yaml).
-#
-# The llm section serves the four alias gateways through one route, which the access log names
-# `route=internal/llm:request`, and its own `llm.policies.localRateLimit` takes no condition, so a
-# limit there would hold every alias. This top-level policy targets that route and is conditional:
-# its one entry applies only when the request arrived on the `agent` listener, and with no
-# unconditioned fallback entry, a request on any other port takes no limit. Applied by
-# `scripts/agentgateway-deploy.sh rate-limit-agent`, removed by a deploy without it.
 #@ append
 policies:
 - name:
@@ -19,12 +16,11 @@ policies:
     namespace: default
   target:
     route:
-      name: llm:request
-      namespace: internal
+      name: agent
+      namespace: default
   policy:
     localRateLimit:
-      conditional:
-      - condition: proxy.listener.name == "agent"
-        maxTokens: 2
-        tokensPerFill: 2
-        fillInterval: 10s
+    - type: requests
+      maxTokens: 2
+      tokensPerFill: 2
+      fillInterval: 10s

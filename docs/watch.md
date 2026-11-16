@@ -62,23 +62,37 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Kind:** deprecation.
 - **Dependency:** agentgateway, `agentgateway/agentgateway`, the image pinned in
   [`gateway/agentgateway/deploy.env`](../gateway/agentgateway/deploy.env) (v1.7.0).
-- **Relies on:** nothing today. The gateway serves the four aliases through the `llm` section, which
-  task `routing` moved to ahead of a likely deprecation of the inline route `ai` backends
-  ([`docs/findings/routing.md`](findings/routing.md), "Results · slice 3"). The entry watches that
-  route `ai` is in fact deprecated, which confirms `llm` as the supported path, and whether it goes
-  the way `binds` went: deprecated before the replacement could express everything it did.
-- **Evidence**, at v1.7.0:
+- **Relies on:** the gateway's four routes, `/<alias>/v1` on the `consumer` port, each with an
+  inline `ai` backend ([`gateway/agentgateway/config.yaml`](../gateway/agentgateway/config.yaml)).
+  Task `routing` trialled the `llm` section and shipped it, then realigned on route `ai`, the form
+  agentgateway's docs recommend for path-based routing
+  ([`docs/findings/routing.md`](findings/routing.md), "Realignment on route `ai`"). The entry
+  watches whether route `ai` is deprecated after all, and whether it goes the way `binds` went:
+  deprecated before the replacement could express everything it did.
+- **Evidence**, at v1.7.0. For route `ai` staying a supported form:
+  - The current docs recommend routing-based configuration for path-based LLM routing. The
+    decision table in `content/docs/standalone/latest/documentation/llm/configuration-modes.md`
+    (agentgateway/website, last edited 2026-11-10, `d35d036`) has the row "Do you need custom,
+    path-based routing (e.g., `/openai`, `/anthropic`)? | Yes | Routing-based configuration", and
+    the page's title is "Routing-based configuration for LLMs".
+  - The UI's "legacy" label may mean "inline backend on a route", not deprecation. The MCP docs
+    (`mcp/configuration-modes.md`, same edit) state that the top-level `mcp` section "is a
+    simplified form of the same MCP backend that `routes[].backends[].mcp` configures. It is not a
+    different feature", while the UI labels an inline route `mcp` backend "legacy MCP backend" as
+    well as an inline `ai` one "legacy LLM backend" (`ui/src/traffic.ts`).
+  - The schema doesn't mark route `ai`: the route backend's `ai` variant carries no description
+    (`schema/config.json`, `$defs.LocalRouteBackend`), where `binds`' says "Deprecated".
+
+  On the other side:
   - agentgateway's UI labels an inline `ai` backend "legacy LLM backend" (`ui/src/traffic.ts`).
-  - The docs moved from route `ai` to the `llm` section: website#1091 rewrote the Claude Code and
-    Claude Desktop client pages from `routes[].backends[].ai` to `llm:`, closing
+  - The client docs moved from route `ai` to the `llm` section: website#1091 rewrote the Claude
+    Code and Claude Desktop client pages from `routes[].backends[].ai` to `llm:`, closing
     agentgateway#3655, "Docs result in legacy backend configuration".
   - `binds` was deprecated in favour of `gateways` and `routes` before `gateways` could express
     `tunnelProtocol: connect` or `mode: internal` (#3204, open), so upstream has deprecated a form
     without parity before.
   - agentgateway has no deprecation policy: #2767, "Define a project deprecation policy", was
     closed as premature.
-  - The schema doesn't mark route `ai` yet: the route backend's `ai` variant carries no
-    description (`schema/config.json`, `$defs.LocalRouteBackend`).
   - On Kubernetes the model form is already the recommended one: agentgateway#4307 opens "Since
     1.7, `AgentgatewayModel` is the recommended way to expose LLMs", `AgentgatewayModel` being the
     Kubernetes counterpart of the `llm` section's models.
@@ -98,12 +112,14 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Trigger:** the `ai` variant's description says deprecated, or the UI's label changes, or a
   release note deprecates route `ai`: the state moves to deprecated in a release. Its removal from
   the schema moves it to removed.
-- **Fallback:** none needed: the gateway is on `llm` already. On a trigger, check that nothing in
-  this project, and nothing `priority` plans, still needs route `ai`, such as route retries or
-  `ai.groups` ([`docs/findings/agentgateway.md`](findings/agentgateway.md), "The paper
-  inventory"), and record what `llm` must gain for parity.
+- **Fallback:** the `llm` form trialled in task `routing`
+  ([`docs/findings/routing.md`](findings/routing.md), "The trial"): one alias per port, each model
+  authorized on its own port by `proxy.listener.name`. On a trigger, check what this project, and
+  what `priority` plans, still needs from route `ai`, such as route retries or `ai.groups`
+  ([`docs/findings/agentgateway.md`](findings/agentgateway.md), "The paper inventory"), and record
+  what `llm` must gain for parity.
 - **State:** watching.
-- **Last checked:** 2026-11-16T14:48Z, `mise run watch`: every line as recorded, at v1.7.0, the
+- **Last checked:** 2026-11-16T16:34Z, `mise run watch`: every line as recorded, at v1.7.0, the
   latest release.
 
 ## agentgateway `llm` serving several base URLs on one port
@@ -111,12 +127,14 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Kind:** capability.
 - **Dependency:** agentgateway, `agentgateway/agentgateway`, as above.
 - **Wants:** the `llm` section serving each alias at its own base URL on one port, through several
-  path prefixes or a model list per prefix, so that the aliases could return to
-  `http://gb10-2:<port>/<alias>/v1` on one port.
+  path prefixes or a model list per prefix, so that the gateway could serve today's
+  `http://gb10-2:3000/<alias>/v1` base URLs from `llm` rather than from route `ai`. This is the
+  migration trigger: the gateway stays on route `ai`, the documented form for path-based routing,
+  until `llm` can express the same base URLs.
 - **Evidence:** task `routing`'s trial ([`docs/findings/routing.md`](findings/routing.md), "The
   trial"): at v1.7.0, `llm.pathPrefix` is one string, the one prefix for every gateway the section
-  is attached to, so the four aliases are told apart by port, each model authorized on its own
-  listener.
+  is attached to, so the trial told the four aliases apart by port, each model authorized on its
+  own listener.
 - **Upstream:** Kubernetes has it: agentgateway#2973 lets an HTTPRoute with a path-prefix rule
   instantiate a further model router on the same listener, which `AgentgatewayModel`s bind to. No
   issue asks for it in the standalone `llm` section (survey of every issue and pull request,
@@ -128,11 +146,12 @@ and the project has acted on it; the finding or decision that acted keeps the re
   - `json agentgateway/agentgateway schema/config.json .["$defs"].LocalLLMConfig.properties.pathPrefix.type = "string"`
     one prefix; an array, or an object, would be the change.
 - **Parity:** a release whose `llm` section lists only a prefix's own models on that prefix's
-  `/models`, and refuses another prefix's, as each port does today.
-- **Action:** weigh moving the aliases back to one port, against the four ports' cost to
-  consumers (four base URLs either way) and to the deploy (four published ports).
+  `/models`, and refuses another prefix's, as each port did in the trial.
+- **Action:** when standalone `llm` serves several prefixes (Kubernetes has it, #2973), weigh
+  moving the gateway to it: the same `/<alias>/v1` base URLs, served by the `llm` section, against
+  re-checking its body handling (the always-passthrough entry below).
 - **State:** watching.
-- **Last checked:** 2026-11-16T14:48Z, `mise run watch`: as recorded, at v1.7.0.
+- **Last checked:** 2026-11-16T16:34Z, `mise run watch`: as recorded, at v1.7.0.
 
 ## agentgateway always-passthrough for `llm` models
 
@@ -152,9 +171,10 @@ and the project has acted on it; the finding or decision that acted keeps the re
   - `release-contains agentgateway/agentgateway 2a7c2ec473a221c643ff5c3adab77351bac65e71 = absent`
     the latest release carries the merge.
 - **Parity:** the release carrying it, read in its notes for what `passthrough: detect` now does.
-- **Action:** before upgrading to it, re-check the gateway's body handling on every alias: the
-  formats each model lists, whether streams still gain `include_usage`, and whether usage is still
-  read for the access log and for `priority`'s budgets; then decide `passthrough` per model.
+- **Action:** this applies if the gateway moves to `llm`, or if its `ai.routes` names a typed
+  route type in place of `detect`. Before either, on the release carrying it, re-check the gateway's body handling on every alias: the formats each model
+  lists, whether streams still gain `include_usage`, and whether usage is still read for the access
+  log and for `priority`'s budgets; then decide `passthrough` per model.
 - **State:** watching.
-- **Last checked:** 2026-11-16T14:48Z, `mise run watch`: as recorded; v1.7.0, the latest
+- **Last checked:** 2026-11-16T16:34Z, `mise run watch`: as recorded; v1.7.0, the latest
   release, doesn't carry the merge.
