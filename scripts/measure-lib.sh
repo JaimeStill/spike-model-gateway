@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# The agentgateway task's step helpers for its overhead cells (slice 2, behavior 7) and its cap
-# cells (slice 3, behavior 8), adapted from spike-model-layout's scripts/measure-lib.sh (`cell`,
-# `watch`, `summarize`) and kept to what these cells need: no host loads or memory floors. Sourced
-# from the repository root on the laptop, then called one step at a time in the architect's view:
+# The step helpers for the GuideLLM cells: the agentgateway task's overhead cells (its slice 2,
+# behavior 7) and cap cells (its slice 3, behavior 8), and the routing task's overhead cells,
+# per gateway form, adapted from spike-model-layout's scripts/measure-lib.sh (`cell`, `watch`,
+# `summarize`) and kept to what these cells need: no host loads or memory floors. Sourced from the
+# repository root on the laptop, then called one step at a time in the architect's view:
 #
 #   source scripts/measure-lib.sh
 #
 #   cell <name> <scenario> <direct|gateway|cap> <alias>
 #                     one GuideLLM run of bench/<scenario>.yaml against the alias's row (direct)
-#                     or its base URL on the gateway (gateway, cap), into
-#                     .state/agentgateway/cells/<name>/; on a gateway or cap run, the gateway
-#                     container's CPU and memory sampled on gb10-2. A cap run is a gateway run
-#                     that also samples the row's running and waiting requests from its /metrics,
+#                     or its base URL on the gateway (gateway, cap), in the form GATEWAY_FORM names
+#                     (below), into .state/routing/cells/<name>/; on a gateway or cap run, the
+#                     gateway container's CPU and memory sampled on gb10-2. A cap run is a gateway
+#                     run that also samples the row's running and waiting requests from its /metrics,
 #                     read direct from the row, and afterwards reads each of the run's requests
 #                     from the gateway's access log
 #   summarize <name>  a run's requests and errors, TTFT, ITL and request latency (median, p95),
@@ -26,7 +27,7 @@
 # No helper runs a benchmark on its own or chains runs: `cell` runs exactly one.
 #
 # The command log. Each helper call and each command it runs is appended to
-# .state/agentgateway/commands-<YYYY-MM-DD>.log, and printed to stderr, as
+# .state/routing/commands-<YYYY-MM-DD>.log, and printed to stderr, as
 # `+ <ISO time> <host>: <command>`, the form the deploy script prints; what a helper reports
 # follows as `= <ISO time> <helper>: <line>`. The finding's "Commands as run" quotes that log.
 #
@@ -46,12 +47,15 @@
 # successful request passed raise_for_status, so it was 2xx. So the status comes from GuideLLM, and
 # Retry-After from the gateway's access log: after the run, `cell` reads the log lines of the
 # alias's route inside the run's time (`docker logs --timestamps --since --until` on gb10-2) into
-# gateway-requests.tsv, keeping each line's time, status, path, and `retry_after`, a field that the
-# probes overlay `access-log` adds (gateway/agentgateway/probes/access-log.yaml); the caller's
-# address and every other field stay out. Without that overlay deployed, the log gives statuses
-# only, and summarize says so.
+# gateway-requests.tsv, keeping each line's time, status, path, and `retry_after`, a field
+# gateway/agentgateway/config.yaml adds to every line; the caller's address and every other field
+# stay out. The lines are picked by the route form's `route=default/<alias>`, so a cap run reads the
+# route form only.
 #
 # Settings, each an environment variable read when a helper runs:
+#   GATEWAY_FORM         the gateway form a gateway or cap run targets: llm (the default),
+#                        http://gb10-2:<port>/v1 with the alias's port from
+#                        gateway/agentgateway/deploy.env; or route, http://gb10-2:3000/<alias>/v1
 #   MEASURE_STATS_EVERY  seconds between gateway and row samples (default 5)
 #   MEASURE_CELL_CAP     a run's cap, given to timeout (default 10m)
 
@@ -62,10 +66,18 @@ fi
 
 MEASURE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # Relative to the root: every command runs from there, so the log names no home directory.
-MEASURE_STATE=.state/agentgateway
-MEASURE_KEY=$MEASURE_STATE/keys/bench
+MEASURE_STATE=.state/routing
+MEASURE_KEY=.state/agentgateway/keys/bench
 MEASURE_GATEWAY_HOST=gb10-2
-MEASURE_GATEWAY=http://$MEASURE_GATEWAY_HOST:3000
+
+# Each alias's port on the llm form, from deploy.env's AGW_ALIAS_PORTS, and the route form's port.
+# shellcheck disable=SC1091 # check.sh runs shellcheck without -x; deploy.env is assignments.
+source "$MEASURE_ROOT/gateway/agentgateway/deploy.env"
+declare -gA MEASURE_PORT=()
+for _ap in $AGW_ALIAS_PORTS; do
+  MEASURE_PORT[${_ap%%:*}]=${_ap#*:}
+done
+unset _ap
 
 # Each alias's row, as host:port, and the tokenizer GuideLLM counts its tokens with (spike-model-
 # layout's, for the model each row serves).
@@ -119,7 +131,14 @@ cell() {
   case $target in
     direct) url=http://${MEASURE_ROW[$alias]}/v1 ;;
     gateway | cap)
-      url=$MEASURE_GATEWAY/$alias/v1
+      case ${GATEWAY_FORM:-llm} in
+        llm) url=http://$MEASURE_GATEWAY_HOST:${MEASURE_PORT[$alias]}/v1 ;;
+        route) url=http://$MEASURE_GATEWAY_HOST:$AGW_PORT/$alias/v1 ;;
+        *)
+          echo "cell: GATEWAY_FORM is ${GATEWAY_FORM}; llm or route" >&2
+          return 2
+          ;;
+      esac
       if [[ ! -s $MEASURE_ROOT/$MEASURE_KEY ]]; then
         echo "cell: no key at $MEASURE_KEY; run mise run agentgateway-deploy first" >&2
         return 2
@@ -296,7 +315,7 @@ summarize() {
 
 # A cap run's requests as the gateway logged them, read after the run: the access log lines of the
 # alias's route between two epochs, each kept as its time (docker's, UTC), status, path, and the
-# `retry_after` field the probes overlay `access-log` adds, empty without it. The rest of each
+# `retry_after` field config.yaml adds, empty when the reply had no Retry-After. The rest of each
 # line, the caller's address among it, is left out.
 _measure_requests() {
   local name=$1 alias=$2 since=$3 until=$4

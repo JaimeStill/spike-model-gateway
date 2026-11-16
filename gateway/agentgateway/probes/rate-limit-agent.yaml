@@ -6,8 +6,8 @@
 # response; http/localratelimit.rs). No `key`, so every caller of the agent route shares the one
 # bucket. A top-level policy attached to the route, so config.yaml's route is untouched; the
 # route's name is `agent` in the `default` namespace, as the access log's `route=default/agent`
-# shows. Applied by `scripts/agentgateway-deploy.sh access-log rate-limit-agent`, removed by a
-# deploy without it.
+# shows. Applied by `scripts/agentgateway-deploy.sh rate-limit-agent`, removed by a deploy without
+# it; each reply's Retry-After is in the access log without an overlay (config.yaml).
 #@ append
 policies:
 - name:

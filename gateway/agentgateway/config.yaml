@@ -5,11 +5,26 @@
 # it in place, so a deploy that changes only this file needs no restart. Fields under `config` are
 # read once, at start.
 #
-# The routing form (gateways and routes) is used, not the simple `llm` section, which takes one path
-# prefix where the four aliases need four. Each alias has its own base URL, /<alias>/v1, rewritten to
-# its row's /v1 and passed through as is: the `detect` route type forwards the request unchanged,
-# including /v1/models, and still reads token usage from the reply. Nothing else on the port is
-# routed, so vLLM's root routes (/metrics, /health, /tokenize, /docs) answer 404.
+# Two forms serve the four aliases side by side while task `routing` trials the second; the losing
+# form is deleted when the trial settles (docs/findings/routing.md).
+#
+# - The route form, on the `consumer` gateway, port 3000: each alias's base URL is /<alias>/v1, a
+#   route with an inline `ai` backend, which agentgateway's UI labels "legacy". The route rewrites
+#   /<alias>/v1 to its row's /v1 and passes the request through as is (`detect`).
+# - The `llm` form, on the gateways `agent`, `vision`, `audio`, and `embedding`, ports 3010-3013:
+#   each alias's base URL is http://gb10-2:<port>/v1, the standard serving paths at the root of its
+#   own port. The `llm` section serves its models under one path prefix for every gateway it is
+#   attached to, so the aliases are told apart by port: each model is authorized on its own port
+#   only, so a port's /v1/models lists its alias alone, and a request naming another alias gets
+#   403.
+#
+# On both forms a consumer key reaches the serving endpoints only, the eight paths of
+# `serving_paths` below: /v1/models, chat/completions, completions, messages, responses,
+# embeddings, audio/transcriptions, and audio/translations. Every other path is refused once the
+# key is admitted: 404 on the route form, as an unrouted path is; 403 on the llm form, whose route
+# takes every path, so only an authorization rule can refuse one. vLLM's root routes (/metrics,
+# /health, /tokenize, /docs) are among those refused. A missing, unknown, or revoked key gets 401
+# on every port, before anything else.
 config:
   # The admin API and its UI, on the container's own loopback: no published port reaches it.
   adminAddr: localhost:15000
@@ -18,9 +33,19 @@ config:
   storage:
     mode: readOnly
 
+# Every request's access log line carries the reply's Retry-After as `retry_after` (empty or absent
+# when the reply has none), the only place a client's 429 or 503 shows it to a reader: GuideLLM
+# keeps a refused request's status but none of its headers. A log field only; it changes no routing
+# or limit (docs: observability/access-logs/view.md).
+frontendPolicies:
+  accessLog:
+    add:
+      retry_after: 'response.headers["retry-after"]'
+
 gateways:
-  # The consumer port, published on gb10-2's tailnet address. It isn't named `default`: the UI
-  # attaches itself to a gateway of that name when `ui.gateways` is unset.
+  # The route form's port, published on gb10-2's tailnet address. It isn't named `default`: the UI
+  # attaches itself to a gateway of that name when `ui.gateways` is unset, and the `llm` section to
+  # one when `llm.gateways` is.
   consumer:
     port: 3000
     # Every request on the port needs a gateway-issued key, sent as a Bearer token, before any route
@@ -33,6 +58,8 @@ gateways:
     # missing key, then sends gb10-2 a copy of this file with each marker replaced by its key's
     # `sha256:<hex>`; a marker never reaches gb10-2. Adding an entry and deploying issues a key;
     # removing one and deploying revokes it with no restart (docs/findings/agentgateway.md, "Keys").
+    # The `llm` section lists the same keys again (llm.policies.apiKey); a key is issued or revoked
+    # in both lists at once.
     apiKey:
       mode: strict
       keys:
@@ -45,6 +72,15 @@ gateways:
       - keyHash: sha256:@@go-ai@@
         metadata:
           name: go-ai
+  # The llm form's ports, one an alias, each published on gb10-2's tailnet address (deploy.env).
+  agent:
+    port: 3010
+  vision:
+    port: 3011
+  audio:
+    port: 3012
+  embedding:
+    port: 3013
   # The UI, read-only (config.storage), on its own port, published on gb10-2's loopback only and
   # reached through an SSH tunnel. The admin API's debug and shutdown endpoints stay on adminAddr.
   ui:
@@ -53,9 +89,102 @@ gateways:
 ui:
   gateways: ui
 
-# One route per alias. Each matches /<alias>/v1 and its subpaths only, rewrites that prefix to /v1,
-# and sends the request to its row by short host name, over plain HTTP on the tailnet. The custom
-# provider with no formats translates nothing; every path is the `detect` route type.
+# The llm form. Attached to the four alias gateways, with no pathPrefix: each serves the standard
+# paths at its root, and its route takes every path on the port (agentgateway names it
+# `internal/llm:request` in the access log).
+llm:
+  gateways: [agent, vision, audio, embedding]
+  # Request policies, run on every request to the four ports before a model is chosen: the key,
+  # then the serving-path allow-list, which answers 403 for any other path.
+  policies:
+    apiKey:
+      mode: strict
+      keys:
+      - keyHash: sha256:@@architect@@
+        metadata:
+          name: architect
+      - keyHash: sha256:@@bench@@
+        metadata:
+          name: bench
+      - keyHash: sha256:@@go-ai@@
+        metadata:
+          name: go-ai
+    authorization:
+      rules:
+      # serving_paths. /v1/models/<id> is left out: no client here reads one model, the rows don't
+      # serve it, and the route form refuses it too, so the two forms answer the same paths.
+      - require: >-
+          request.path in ["/v1/models", "/v1/chat/completions", "/v1/completions",
+          "/v1/messages", "/v1/responses", "/v1/embeddings", "/v1/audio/transcriptions",
+          "/v1/audio/translations"]
+  # One model an alias, named as the alias, which is also the name its row serves, so the request's
+  # model is forwarded unchanged. Each is a `custom` provider, an OpenAI-compatible server, at its
+  # row's /v1 by short host name over plain HTTP on the tailnet: the provider appends each format's
+  # path to the base URL's path (/v1 + /chat/completions; schema: params.baseUrl), and keeps a
+  # detect request's own path. agentgateway reads chat/completions, messages, responses, and
+  # embeddings as their own route types, not as `detect`, and refuses one its provider doesn't list
+  # in `formats` with 400 "unsupported conversion"; so each model lists all four, the payloads every
+  # vLLM row accepts, and agentgateway sends each request in its own format, translating none. The
+  # audio paths, and any path agentgateway doesn't classify (/v1/completions), are passed through
+  # as is (`detect`), their usage read from the reply.
+  #
+  # Each model's `authorization` holds it to its own port: /v1/models lists only the models
+  # authorized for the request, and a request naming another alias's model gets 403 "Model
+  # authorization denied". The rule reads the CEL `proxy.listener.name`, not `proxy.gateway.name`:
+  # standalone agentgateway makes each entry under `gateways` a listener of one gateway, `default`
+  # (the access log's `gateway=default/default listener=agent`).
+  models:
+  - name: agent
+    provider:
+      custom:
+        formats: &formats
+        - type: completions
+        - type: messages
+        - type: responses
+        - type: embeddings
+    params:
+      baseUrl: http://gb10-1:8000/v1
+    passthrough: detect
+    authorization:
+      rules:
+      - require: proxy.listener.name == "agent"
+  - name: vision
+    provider:
+      custom:
+        formats: *formats
+    params:
+      baseUrl: http://gb10-2:8000/v1
+    passthrough: detect
+    authorization:
+      rules:
+      - require: proxy.listener.name == "vision"
+  - name: audio
+    provider:
+      custom:
+        formats: *formats
+    params:
+      baseUrl: http://framework:8001/v1
+    passthrough: detect
+    authorization:
+      rules:
+      - require: proxy.listener.name == "audio"
+  - name: embedding
+    provider:
+      custom:
+        formats: *formats
+    params:
+      baseUrl: http://framework:8002/v1
+    passthrough: detect
+    authorization:
+      rules:
+      - require: proxy.listener.name == "embedding"
+
+# The route form: one route per alias. Each matches /<alias>/v1 and below, rewrites that prefix to
+# /v1, and sends the request to its row by short host name, over plain HTTP on the tailnet. The
+# custom provider with no formats translates nothing; every path is the `detect` route type, which
+# forwards the request unchanged and reads token usage from the reply. A path under /<alias>/v1
+# outside serving_paths is answered 404 by the route itself, before any backend; any path outside
+# /<alias>/v1 matches no route, so it gets 404 too.
 routes:
 - name: agent
   gateways: consumer
@@ -66,6 +195,16 @@ routes:
     urlRewrite:
       path:
         prefix: /v1
+    # serving_paths, read after the rewrite: route policies run in a fixed order, the URL rewrite
+    # before the direct response (proxy/httpproxy.rs, apply_request_policies). An exact path match
+    # can't do this: a prefix rewrite needs a prefix match (http/filters.rs).
+    directResponse: &not-serving
+      conditional:
+      - condition: >-
+          !(request.path in ["/v1/models", "/v1/chat/completions", "/v1/completions",
+          "/v1/messages", "/v1/responses", "/v1/embeddings", "/v1/audio/transcriptions",
+          "/v1/audio/translations"])
+        status: 404
     ai:
       routes:
         "*": detect
@@ -84,6 +223,7 @@ routes:
     urlRewrite:
       path:
         prefix: /v1
+    directResponse: *not-serving
     ai:
       routes:
         "*": detect
@@ -102,6 +242,7 @@ routes:
     urlRewrite:
       path:
         prefix: /v1
+    directResponse: *not-serving
     ai:
       routes:
         "*": detect
@@ -120,6 +261,7 @@ routes:
     urlRewrite:
       path:
         prefix: /v1
+    directResponse: *not-serving
     ai:
       routes:
         "*": detect
