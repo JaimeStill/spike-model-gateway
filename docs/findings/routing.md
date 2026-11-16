@@ -1617,5 +1617,6 @@ watch rerun:
 + 2026-11-16T11:33:25-05:00 laptop: gh api 'repos/agentgateway/agentgateway/contents/ui/src/traffic.ts?ref=v1.7.0' --jq .content | base64 -d | grep -n 'legacy'
 + 2026-11-16T11:34:04-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-16T11:34:04-05:00 laptop: mise run watch
++ 2026-11-16T11:39:14-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-16T11:39:14-05:00 laptop: for h in gb10-1 gb10-2 framework; do tailscale ping -c 1 $h | sed -E "s/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?/<addr>/g"; done
 ```
