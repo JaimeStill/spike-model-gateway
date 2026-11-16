@@ -171,9 +171,8 @@ and the project has acted on it; the finding or decision that acted keeps the re
   - `release-contains agentgateway/agentgateway 2a7c2ec473a221c643ff5c3adab77351bac65e71 = absent`
     the latest release carries the merge.
 - **Parity:** the release carrying it, read in its notes for what `passthrough: detect` now does.
-- **Action:** relevant if and when the gateway moves to `llm`, and to route `ai`'s typed route
-  types, should the gateway's `ai.routes` ever name one in place of `detect`. Before either, on the
-  release carrying it, re-check the gateway's body handling on every alias: the formats each model
+- **Action:** this applies if the gateway moves to `llm`, or if its `ai.routes` names a typed
+  route type in place of `detect`. Before either, on the release carrying it, re-check the gateway's body handling on every alias: the formats each model
   lists, whether streams still gain `include_usage`, and whether usage is still read for the access
   log and for `priority`'s budgets; then decide `passthrough` per model.
 - **State:** watching.
