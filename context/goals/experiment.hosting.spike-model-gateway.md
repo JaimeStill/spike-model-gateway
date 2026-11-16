@@ -82,7 +82,7 @@ Door          two-way: one config file, the losing form is a deletion,
 
 ## Progress
 
-slices 3/4 committed · standards ✓ (ccc398d, 74f57a1) · spec ✓ (behaviors 1–11 met; context/README.md gap closed by the editor) · editor ✓ · slice 4, the architect's walkthrough, next
+slices 4/4 committed · standards ✓ · spec ✓ · editor ✓ · walkthrough ✓ (architect, 10:46–10:50, every step as expected)
 
 ## Decisions
 

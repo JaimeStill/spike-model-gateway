@@ -811,7 +811,18 @@ source scripts/clients-lib.sh
 
 ### Walkthrough results
 
-To be recorded from the architect's run.
+Run by the architect, 2026-11-16, 10:46–10:50, on the laptop over the DERP relay. Every step gave
+its expected result:
+
+| Step | Result |
+|---|---|
+| 1. A deploy that changes nothing | `Configuration is valid!`; "agentgateway: image and flags unchanged; config.yaml reloads in place"; the container up about an hour |
+| 2. Each base URL's `/models` | `["agent"]`, `["vision"]`, `["audio"]`, `["embedding"]` |
+| 3. Chat, stream, embedding, transcription | `{"model":"agent","content":"Hello, dear friend, welcome back!","usage":{"prompt_tokens":73,"completion_tokens":125,"total_tokens":198,"completion_tokens_details":{"reasoning_tokens":107}}}`; `1` usage chunk in the stream, unrequested; `[768,768]`; `{"detail":"Not Found"}` `404`, the audio row's own answer |
+| 4. Wrong alias, unserved path | `{"error":{"message":"Model authorization denied","type":"invalid_request_error","code":"model_authorization_denied"}}` `403`; `/metrics` on 3010 `403` |
+| 5. No key | `401` |
+| 6. One tier role | `goai_tier walk agent`: 17 passed, 0 failed, 4 skipped (top-level), exit 0; the skips are the roles left unset (embedding, audio, transcription); `TestModels` reads "AI_AGENT_BASE_URL serves agent"; the key is not in the log |
+| 7. The watch register | `checked 2026-11-16T15:50Z`, every line `recorded X, now X`, exit 0 |
 
 ## Commands as run
 
@@ -1297,3 +1308,32 @@ gh api "repos/agentgateway/agentgateway/contents/examples/llm-keyed-rate-limit/R
 `jq length` printed 1247 and 3108. Not quoted: fourteen two-word `gh search issues` queries that returned
 nothing (GitHub's search matched them too narrowly, which is why the full lists were read), and the
 local `jq` greps over the two lists, by gap.
+
+### 2026-11-16 · the walkthrough, run by the architect
+
+```
++ 2026-11-16T10:46:22-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T10:46:29-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-16T10:46:29-05:00 gb10-2: mkdir -p ~/agentgateway
++ 2026-11-16T10:46:30-05:00 laptop: ssh gb10-2 'cat > ~/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.o3oMWH.yaml
++ 2026-11-16T10:46:31-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T10:46:31-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T10:46:32-05:00 gb10-2: mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml
++ 2026-11-16T10:46:33-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "spike.spec"}} {{.State.Running}}' 2>/dev/null || true
++ 2026-11-16T10:46:34-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
++ 2026-11-16T10:47:13-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3010/v1/models
++ 2026-11-16T10:47:13-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3011/v1/models
++ 2026-11-16T10:47:14-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3012/v1/models
++ 2026-11-16T10:47:14-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3013/v1/models
++ 2026-11-16T10:47:40-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -H Content-Type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Say hello in five words."}],"max_tokens":256} http://gb10-2:3010/v1/chat/completions
++ 2026-11-16T10:47:55-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -N -H Content-Type: application/json -d {"model":"agent","stream":true,"messages":[{"role":"user","content":"Count from 1 to 5."}],"max_tokens":200} http://gb10-2:3010/v1/chat/completions
++ 2026-11-16T10:48:12-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -H Content-Type: application/json -d {"model":"embedding","input":["gateway","routing"]} http://gb10-2:3013/v1/embeddings
++ 2026-11-16T10:48:30-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -w \n%{http_code}\n -F model=audio -F file=@.state/routing/assets/clip-6s.wav http://gb10-2:3012/v1/audio/transcriptions
++ 2026-11-16T10:48:45-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -w \n%{http_code}\n -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":16} http://gb10-2:3010/v1/chat/completions
++ 2026-11-16T10:49:02-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -w \n%{http_code}\n -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":16} http://gb10-2:3010/v1/chat/completions
++ 2026-11-16T10:49:05-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -w %{http_code}\n http://gb10-2:3010/metrics
++ 2026-11-16T10:49:18-05:00 laptop: curl -sS -o /dev/null -w '%{http_code}\n' http://gb10-2:3010/v1/models
++ 2026-11-16T10:49:25-05:00 laptop: goai_tier walk agent
++ 2026-11-16T10:49:25-05:00 laptop: cd .state/routing/go-ai/. && AI_AGENT_BASE_URL=http://gb10-2:3010/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/routing/clients/walk.log
++ 2026-11-16T10:50:40-05:00 laptop: mise run watch
+```
