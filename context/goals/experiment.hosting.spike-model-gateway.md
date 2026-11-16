@@ -251,7 +251,7 @@ Door          two-way, except what reached Azure:
 
 ## Progress
 
-slices 0/4 committed · standards — · spec — · editor —
+slices 0/4 committed (slice 1 files committed: engines 6f5a1f1, 7574391; gateway b6321a8; host steps pending: architect host updates and Azure walk, then the host/ PR, row restarts, compose deploy) · standards — · spec — · editor —
 
 ## Decisions
 
@@ -459,6 +459,8 @@ slices 0/4 committed · standards — · spec — · editor —
 - priority: held spike-model-engines' llama.cpp at b12098, declining b12407: inert, kept for
   reference (R2 Q15).
 - priority: confirmed at approval (architect, 2026-11-16): each deployment is DataZoneStandard where the model offers it, and GlobalStandard otherwise; the Azure resource name stays untracked and is filled in at deploy; the budget Block is shown by a probe overlay that lowers bulk's budget.
+- priority: Postgres is pinned at 18.7-alpine, the latest `-alpine` tag, per rolling currency (the convention's example was 18.6). The compose FROM pin is read by crane, which go-web-service's currency already uses, so it is a known tool, not a new one.
+- priority: in the compose stack, agentgateway runs from its image pin rather than a Dockerfile, keeps `container_name: agentgateway` for the helpers, and is recreated only when its `config:` section changes (a hash label), since `config.*` is read at start. Tailnet addresses are looked up on gb10-2 at run time, and Postgres publishes no port.
 
 ## Pending edits
 
