@@ -7,8 +7,8 @@ priority, request-rate buckets and token budgets, and embedding held to 34 reque
 slice 1, the setup; slice 2, the overflow and benchmark C; slice 3, the keys and limits and
 benchmarks A, B, and D; and the walkthrough the architect runs as slice 4.
 
-- **Measured:** 2026-11-16, from the laptop. Slice 1 ran 13:05–13:56 local time. Every command is
-  under "Commands as run".
+- **Measured:** 2026-11-16, from the laptop. Slice 1 ran 13:05–13:56 local time, slice 2
+  14:17–14:41. Every command is under "Commands as run".
 - **Gateway:** agentgateway v1.7.0, `cr.agentgateway.dev/agentgateway:v1.7.0`, on gb10-2, with its
   Postgres (`postgres:18.7-alpine`) in one compose project
   ([`gateway/compose.yml`](../../gateway/compose.yml)), configured from
@@ -203,9 +203,169 @@ volume kept its 178 `request_logs` rows (13:56:33).
 
 ## Slice 2 · overflow
 
-Pending.
+Slice 2 ran 14:17–14:41, from the laptop through the step helpers, with every command under
+"Commands as run". It deployed three configs: `4ed570c`, the overflow, at 14:17; `01e6c4d`,
+escalation 1's answers, at 14:32; and `2ba52b8`, escalation 2's, at 14:40. Each deploy left the
+agentgateway container running and reloaded its config in place. Each also recreated the Postgres
+container, though its definition hadn't changed. `request_logs` kept its rows: 183 at 14:17. Why
+compose recreates Postgres on each deploy is still open, and slice 3's deploys will do the same.
 
-### Escalation (2026-11-16)
+### Rows up (behaviors 5, 6, 8)
+
+With `4ed570c` deployed and every row up (14:17:35–14:19:25):
+
+| Check | Result |
+| --- | --- |
+| `/v1/models` on each `/<alias>/v1` | answered by the gateway, each listing its alias alone |
+| a request to each alias | 200, with no `x-gateway-overflow` header |
+| a streamed chat without `include_usage` | ends with a usage chunk: the typed `completions` route adds it |
+| embeddings | 768 dimensions |
+| no key; `/agent/v1/load` | 401; 404, off the allow-list |
+| go-ai's tier, all four roles | 20 passed, 0 failed, 1 skipped |
+| infer's tier, all four roles | 13 passed, 0 failed, 1 skipped |
+
+The one skip in each tier is transcription, which no row serves. Three questions went to the
+architect here, before benchmark C ("Escalation 1", below). Their answers were deployed as
+`01e6c4d` at 14:32, and agent and vision answered a request each on their rows at 14:32:43.
+
+### A row down (behaviors 7, 8)
+
+The `rows-down` probe overlay
+([`probes/rows-down.yaml`](../../gateway/agentgateway/probes/rows-down.yaml)) points every row's
+provider at port 8009 on its own host, where nothing listens (checked on all three hosts at
+14:17:24). The rows keep running. It was deployed at 14:32:54, and each alias was asked once:
+
+- **agent:** 200 from `gpt-oss-120b`, with `x-gateway-overflow: azure`.
+- **vision:** first a 400. `gpt-5-mini` refuses `max_tokens`: "Unsupported parameter: 'max_tokens'
+  is not supported with this model. Use 'max_completion_tokens' instead." Sent again with
+  `max_completion_tokens`, it answered 200, "pink", for a red 1×1 PNG. The vision row answers the
+  same PNG "Red".
+- **audio, go-ai's fixture clip:** 503 twice, then 200, "The access code is 7429." The body is
+  258,652 bytes, past the 64 KiB the gateway buffers for a retry, so it isn't retried. Each
+  attempt fails its connection to the row ("connection refused"), and the row is evicted only
+  after 2 failures in a row. So the first two requests got the row's 503, and the third reached
+  Azure.
+- **audio, text only:** 400. `gpt-audio-mini` requires audio: "This model requires that either
+  input content or output modality contain audio."
+- **embedding:** 200 from `text-embedding-3-small`, 768 dimensions.
+
+Every reply Azure answered carried the overflow header, and the access log named the Azure
+provider on its line (`gen_ai.provider.name=azure`, `overflow="azure"`). No request went to
+another alias's row or deployment.
+
+**Back to the rows.** The overlay was removed by a plain deploy at 14:36:52. At the first check,
+14:37:03, all four aliases answered from their rows, and `azure_count` read 0 from 14:36:52. A
+config reload builds the backends again, so it clears the eviction state: no row waited out an
+eviction.
+
+### The tiers on Azure (behavior 10)
+
+go-ai's and infer's tiers ran through the `rows-down` overlay with their base URLs and keys
+unchanged (14:33:31–14:36:36). Transcription is skipped in both, as in every run.
+
+**go-ai: 10 passed, 10 failed, 1 skipped.** The failures:
+
+| Test | Cause |
+| --- | --- |
+| `TestFunctionCallRoundTrip`, `TestStreamFunctionCall`, `TestReasoningRoundTrip`, `TestStreamReasoningRoundTrip` (all three formats each), `TestToolChoice/allowed_tools_required` | `gpt-oss-120b` refuses `tool_choice: required`: 400, "Request included unsupported tool use. tool_choice 'required' is not supported for the model." (`UnsupportedToolUse`) |
+| `TestToolChoice/named_function` | `gpt-oss-120b` ignores a named function and answers in text: 0 function calls |
+| `TestChatUnknownModelIsAPIError` (all three formats) | an unknown model name succeeds, since the Azure provider sets the deployment as the model |
+| `TestStreamText/messages` | a translated Messages stream reports 0 input tokens |
+| `TestChatIncompleteAtMaxOutputTokens/responses` | a Responses reply cut off at its limit gives the reason `max_tokens`, where go-ai expects `max_output_tokens` |
+| `TestAudioInResponsesRefused`, `TestTranscribeChat` | a large audio body gets 503 ("connection refused") while the row isn't yet evicted, as above |
+
+Responses itself passed on agent (`TestChat/responses`). The brief expected it to fail on agent,
+since `gpt-oss-120b` serves Chat Completions only. The gateway translates a Responses request into
+Chat Completions for that provider, as it does Messages.
+
+**infer: 9 passed, 4 failed, 1 skipped.** Beside the gaps above, it adds:
+
+- go-ai's stream parsers reject two of Azure's streams. The Chat Completions parser rejects
+  Azure's chat stream, whose first chunk has an empty reply id ("chunk of reply
+  \"chatcmpl-…\" in the stream of reply \"\""). The Responses parser rejects how Azure adds a
+  reasoning item ("reasoning item \"rs_…\" is added with content"). They fail
+  `TestChatReasoningEffort`, `TestChatImage`, and part of `TestChatIncompleteAtMaxTokens`. Each is
+  to be found at its root and fixed in a v1.ai.client hotfix task, with no gateway workaround (the
+  goal record's decision).
+- `gpt-5-mini` refuses reasoning effort `none`: "Unsupported value: 'none' is not supported with
+  the 'gpt-5-mini-2025-08-07' model. Supported values are: 'minimal', 'low', 'medium', and
+  'high'."
+- `gpt-oss-120b` gives no reasoning item at `--reasoning low` through Messages: "reasoning items =
+  0 at --reasoning low".
+- A Messages stream at `--max-tokens 16` on agent "did not exit within 15s"
+  (`TestChatIncompleteAtMaxTokens/messages`).
+- `TestTranscribeChat` gets the large-audio 503, as in go-ai's tier.
+
+The released infer CLI, setting no model, picked each alias on Azure: each base URL's `infer
+models` listed its alias alone, and `infer chat` on agent answered.
+
+Azure's count after the tiers was 76 since 14:32:54, so 81 in the task with slice 1's 5. That
+includes 13 400s on agent and 3 on vision, from the refusals above.
+
+### Benchmark C-agent (behavior 9)
+
+C-agent ran once, resized (escalation 1), with the rows up and `01e6c4d` deployed: `cell bc-agent
+overflow-agent cap agent`, 28 concurrent single-turn chats of 512 tokens in and 128 out, 60 s,
+from 14:37:10 to 14:38:31. Read with `summarize` and `overflow_read`:
+
+| Reading | Value |
+| --- | --- |
+| GuideLLM's replies | 2xx ×60, 400 ×99, 429 ×2845, 3 with no status (the row's "engine is currently busy" inside a stream); 24 incomplete at the end |
+| answered by the row | 89 (200 ×87, and 2 with no status) |
+| answered by Azure | 2,944: 429 ×2845, 400 ×99, no 2xx |
+| 503 from the row to the client | 0 |
+| refused requests retried | 18, with 20 retries; all 18 reached Azure |
+| eviction windows | about 28 a minute, estimated from the log's order |
+| first refusal | 0.7 s after the benchmark's start |
+| the row | running median 12, max 12; waiting median 0, max 12 |
+| gateway CPU, median / max | 4.54% / 5.91% of one core; memory 80.5 / 83.1 MiB |
+
+So a refused request does reach Azure: the 20 ms backoff lets the eviction land before the retry.
+But under saturation the row's 503 with eviction sends nearly the whole load to Azure. Each
+eviction opens a 5 s window in which every new request goes to the Azure group. Azure's
+`gpt-oss-120b` throttled within seconds, and its 429s didn't evict it under the health policy
+then deployed. So it stayed in rotation and answered the alias's load with 429s. Every 429 carried
+`Retry-After: 1`.
+
+**The 99 400s.** The access log keeps no error body, and GuideLLM 0.8.1 keeps only the status.
+The probable cause is the request itself. Every non-429 reply from Azure in the run was a 400, with
+no 2xx, while a plain chat to the same deployment answered 200 minutes before. GuideLLM 0.8.1 adds
+two vLLM fields to every fixed-length chat request, `ignore_eos: true` and `stop: null`, beside
+`max_completion_tokens` (`guidellm/backends/openai/request_handlers.py`, 1183–1185). The 400s
+point at Azure refusing one of them. This is not confirmed, since no reply body was kept.
+
+The run breached the task's stop rule (Azure's 429s, and a count past the cap). The session
+stopped and escalated (escalation 2, below). C-vision did not run.
+
+### Per alias: the cloud model and its parity (behavior 12)
+
+| Alias | Cloud model | SKU, processing scope | Parity gaps seen |
+| --- | --- | --- | --- |
+| agent | `gpt-oss-120b` | DataZoneStandard: within the data zone | refuses `tool_choice: required` and ignores a named function; an unknown model name succeeds; Responses is translated to Chat Completions, and a reply cut off at its limit reports `max_tokens`; a translated Messages stream reports 0 input tokens, and one at a 16-token limit didn't end within 15 s; no reasoning item at low effort through Messages; Azure's chat stream opens with an empty reply id and Responses adds its reasoning item in a form go-ai rejects (go-ai's to fix) |
+| vision | `gpt-5-mini` 2025-08-07 | GlobalStandard: processed globally | refuses `max_tokens` (wants `max_completion_tokens`) and reasoning effort `none`; an unknown model name succeeds; the stream gaps above; called a red PNG "pink" where the row said "Red" |
+| audio | `gpt-audio-mini` 2025-12-15 | GlobalStandard: processed globally | refuses a text-only chat; serves Chat Completions only; an audio body over 64 KiB isn't retried, so it gets the row's 503 until 2 failures evict the row |
+| embedding | `text-embedding-3-small` | DataZoneStandard: within the data zone | another vector space at the same 768 dimensions; every reply is marked as overflow |
+
+Which workloads may leave the self-hosted machines is the architect's call in `answer`. These
+gaps are its inputs: agent and embedding stay within the data zone, while vision and audio are
+processed globally. Only synthetic and test-fixture content was sent to Azure: the helpers'
+prompts, a 1×1 PNG, go-ai's `phrase.wav` fixture, and GuideLLM's synthetic text.
+
+### The Azure count
+
+Counted from the access log after each step that can overflow:
+
+| Step | Azure-answered | Toward the cap |
+| --- | --- | --- |
+| slice 1, direct | 5 | 5 |
+| rows-down probes and the tiers, 14:32:54–14:36:38 | 76 (agent 50, vision 20, audio 2, embedding 4) | 76 |
+| benchmark C-agent | 2,944 (429 ×2845, 400 ×99) | 99 |
+| total | 3,025 | 180 of 300 |
+
+The cap counts Azure's 2xx and its 4xx other than 429, since Azure refuses a 429 without
+processing it (escalation 2). Azure's 2,845 429s are reported apart.
+
+### Escalation 1 (2026-11-16)
 
 Slice 2's rows-up checks passed; three questions went to the architect before benchmark C, and
 were answered:
@@ -218,7 +378,7 @@ were answered:
 - **Azure provider health: the rows' policy.** Each `<alias>-azure` provider now carries
   `&row-health`: two 503s or failed connections in a row evict it for 5 s. It had none, so
   agentgateway's default for several groups held: one 5xx or failed connection evicted it for 3 s.
-  A 429 doesn't evict it.
+  A 429 doesn't evict it; escalation 2, below, adds it.
 - **Benchmark C sized to Azure's capacity.** gpt-5-mini has 10 units, about 10,000 tokens a minute,
   and gpt-oss-120b 50 units, about 50,000 tokens a minute. The briefed loads, C-agent's sessions of
   an 8,192-token first turn and C-vision's 1440p images, would pass them within seconds of an
@@ -233,6 +393,22 @@ were answered:
 The implementer's earlier checks "on the mock" used a throwaway Python mock upstream in the
 session's scratchpad, never committed: an exception to the experiment's no-authored-Python rule,
 which the architect was told about.
+
+
+### Escalation 2 (2026-11-16)
+
+Benchmark C-agent breached the stop rule, and the architect decided:
+
+- **C-vision is dropped, and C-agent is recorded as run.** Under saturation, a row's 503 with
+  eviction sends nearly the whole load to Azure. C-vision would show the same at gpt-5-mini's 10
+  units.
+- **Azure groups also evict on 429.** Each `<alias>-azure` provider now carries `&azure-health`: a
+  503, a 429, or a failed connection, 2 in a row, evicts it for 5 s, so a throttling Azure leaves
+  rotation. It was deployed as `2ba52b8` at 14:40:43 and passes `--validate-only`. It is not shown
+  live: a live 429 needs Azure to throttle (about 60 counted requests on one deployment), and
+  agentgateway logs no eviction.
+- **The cap counts 2xx and non-429 4xx.** The count is 180 of 300 after C, with Azure's 429s
+  reported apart. `azure_count` prints both.
 
 ## Slice 3 · keys and limits
 
@@ -358,4 +534,152 @@ appended to the log by `tee -a`. The architect's reboot is logged as theirs.
 + 2026-11-16T13:56:35-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3000/audio/v1/models
 + 2026-11-16T13:56:35-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3000/embedding/v1/models
 + 2026-11-16T13:56:35-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Say hello in five words."}],"max_tokens":64} http://gb10-2:3000/vision/v1/chat/completions
+```
+
+### 2026-11-16 · the overflow deploy and the rows-up checks
+
+```text
++ 2026-11-16T14:17:24-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T14:17:24-05:00 laptop: for h in gb10-1 gb10-2 framework; do ssh -o BatchMode=yes $h 'ss -ltn | grep -c ":8009 "'; done
++ 2026-11-16T14:17:26-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-16T14:17:26-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-16T14:17:27-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-16T14:17:27-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-16T14:17:28-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-16T14:17:28-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T14:17:29-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T14:17:30-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-16T14:17:30-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-16T14:17:31-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-16T14:17:35-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-16T14:17:35-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3000/agent/v1/models
++ 2026-11-16T14:17:35-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3000/vision/v1/models
++ 2026-11-16T14:17:36-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3000/audio/v1/models
++ 2026-11-16T14:17:36-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3000/embedding/v1/models
++ 2026-11-16T14:17:46-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T14:17:46-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p2-up-agent.json -H Content-Type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Say hello in five words."}],"max_tokens":256} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-16T14:17:49-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -N -H Content-Type: application/json -d {"model":"agent","stream":true,"messages":[{"role":"user","content":"Count from 1 to 5."}],"max_tokens":200} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-16T14:17:51-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p2-up-vision.json -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":[{"type":"text","text":"What color is this image? One word."},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"}}]}],"max_tokens":64} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-16T14:17:52-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p2-up-audio.json -H Content-Type: application/json -d @/dev/fd/63 http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-16T14:17:53-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p2-up-embed.json -H Content-Type: application/json -d {"model":"embedding","input":["gateway","routing"]} http://gb10-2:3000/embedding/v1/embeddings
++ 2026-11-16T14:17:53-05:00 laptop: curl -s -o /dev/null -w '%{http_code}\n' http://gb10-2:3000/agent/v1/models
++ 2026-11-16T14:17:53-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -w %{http_code}\n http://gb10-2:3000/agent/v1/load
++ 2026-11-16T14:17:58-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T14:17:58-05:00 laptop: goai_tier p2-up-goai agent vision audio embedding
++ 2026-11-16T14:17:58-05:00 laptop: cd .state/priority/go-ai/. && AI_AGENT_BASE_URL=http://gb10-2:3000/agent/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_VISION_BASE_URL=http://gb10-2:3000/vision/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3000/embedding/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/priority/clients/p2-up-goai.log
++ 2026-11-16T14:18:57-05:00 laptop: infer_tier p2-up-infer agent vision audio embedding
++ 2026-11-16T14:18:57-05:00 laptop: cd .state/priority/go-ai/tools/infer && AI_AGENT_BASE_URL=http://gb10-2:3000/agent/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_VISION_BASE_URL=http://gb10-2:3000/vision/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3000/embedding/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/priority/clients/p2-up-infer.log
+```
+
+### 2026-11-16 · escalation 1's deploy
+
+```text
++ 2026-11-16T14:32:33-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T14:32:33-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-16T14:32:33-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-16T14:32:34-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-16T14:32:35-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-16T14:32:35-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-16T14:32:36-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T14:32:37-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T14:32:37-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-16T14:32:38-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-16T14:32:39-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-16T14:32:42-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-16T14:32:43-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -w %{http_code}\n -H Content-Type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Hi"}],"max_tokens":8} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-16T14:32:44-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -o /dev/null -w %{http_code}\n -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8} http://gb10-2:3000/vision/v1/chat/completions
+```
+
+### 2026-11-16 · the rows-down overlay and the tiers on Azure
+
+```text
++ 2026-11-16T14:32:54-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T14:32:54-05:00 laptop: mise run agentgateway-deploy rows-down
++ 2026-11-16T14:32:54-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-16T14:32:54-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-16T14:32:55-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-16T14:32:56-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-16T14:32:56-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T14:32:57-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T14:32:58-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-16T14:32:58-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-16T14:32:59-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-16T14:33:02-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-16T14:33:03-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p2-down-agent.json -H Content-Type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Reply with the word ready."}],"max_tokens":64} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-16T14:33:05-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p2-down-vision.json -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":[{"type":"text","text":"What color is this image? One word."},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"}}]}],"max_tokens":256} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-16T14:33:05-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p2-down-audio.json -H Content-Type: application/json -d @/dev/fd/63 http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-16T14:33:06-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p2-down-audio-text.json -H Content-Type: application/json -d {"model":"audio","messages":[{"role":"user","content":"Reply with the word ready."}],"max_tokens":32} http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-16T14:33:06-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p2-down-embed.json -H Content-Type: application/json -d {"model":"embedding","input":["gateway","routing"]} http://gb10-2:3000/embedding/v1/embeddings
++ 2026-11-16T14:33:06-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-16T14:32:54-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-16T14:33:19-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T14:33:19-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p2-down-vision2.json -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":[{"type":"text","text":"What color is this image? One word."},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"}}]}],"max_completion_tokens":256} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-16T14:33:21-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p2-down-audio1.json -H Content-Type: application/json -d @/dev/fd/63 http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-16T14:33:22-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p2-down-audio2.json -H Content-Type: application/json -d @/dev/fd/63 http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-16T14:33:24-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-16T14:32:54-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-16T14:33:31-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T14:33:31-05:00 laptop: goai_tier p2-down-goai agent vision audio embedding
++ 2026-11-16T14:33:31-05:00 laptop: cd .state/priority/go-ai/. && AI_AGENT_BASE_URL=http://gb10-2:3000/agent/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_VISION_BASE_URL=http://gb10-2:3000/vision/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3000/embedding/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/priority/clients/p2-down-goai.log
++ 2026-11-16T14:35:11-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-16T14:32:54-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-16T14:35:33-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T14:35:33-05:00 laptop: infer_tier p2-down-infer agent vision audio embedding
++ 2026-11-16T14:35:33-05:00 laptop: cd .state/priority/go-ai/tools/infer && AI_AGENT_BASE_URL=http://gb10-2:3000/agent/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_VISION_BASE_URL=http://gb10-2:3000/vision/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3000/embedding/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/priority/clients/p2-down-infer.log
++ 2026-11-16T14:36:36-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/agent/v1 .state/priority/bin/infer models
++ 2026-11-16T14:36:36-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/vision/v1 .state/priority/bin/infer models
++ 2026-11-16T14:36:36-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/audio/v1 .state/priority/bin/infer models
++ 2026-11-16T14:36:36-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/embedding/v1 .state/priority/bin/infer models
++ 2026-11-16T14:36:36-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/agent/v1 .state/priority/bin/infer chat Reply with the word ready.
++ 2026-11-16T14:36:37-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-16T14:32:54-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
+```
+
+### 2026-11-16 · back to the rows
+
+```text
++ 2026-11-16T14:36:52-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T14:36:52-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-16T14:36:52-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-16T14:36:52-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-16T14:36:53-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-16T14:36:54-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-16T14:36:54-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T14:36:55-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T14:36:56-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-16T14:36:56-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-16T14:36:57-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-16T14:37:00-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-16T14:37:01-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Hi"}],"max_completion_tokens":8} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-16T14:37:01-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_completion_tokens":8} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-16T14:37:02-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"audio","messages":[{"role":"user","content":"Hi"}],"max_completion_tokens":8} http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-16T14:37:02-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"embedding","input":"ready"} http://gb10-2:3000/embedding/v1/embeddings
++ 2026-11-16T14:37:03-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-16T14:36:52-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
+```
+
+### 2026-11-16 · benchmark C-agent
+
+```text
++ 2026-11-16T14:37:10-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T14:37:10-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T14:37:10-05:00 laptop: cell bc-agent overflow-agent cap agent
++ 2026-11-16T14:37:10-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/agent/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overflow-agent.yaml --backend kind=openai_http,model=agent --tokenizer kind=huggingface_auto,model=openai/gpt-oss-120b --seed kind=static,value=494185694 --output kind=json,path=.state/priority/cells/bc-agent/result.json --disable-console-interactive > .state/priority/cells/bc-agent/guidellm.log 2>&1
++ 2026-11-16T14:37:10-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/priority/cells/bc-agent/gateway-stats.tsv
++ 2026-11-16T14:37:10-05:00 laptop: every 5 s while it runs: curl -sS --max-time 3 http://gb10-1:8000/metrics, the sums of vllm:num_requests_running and vllm:num_requests_waiting >> .state/priority/cells/bc-agent/row-metrics.tsv
++ 2026-11-16T14:38:29-05:00 laptop: ssh -n gb10-2 'docker logs --timestamps --since 1794857830 --until 1794857910 agentgateway 2>&1' | the lines of route=default/agent as time, status, path, retry_after, overflow, retry_attempt > .state/priority/cells/bc-agent/gateway-requests.tsv
++ 2026-11-16T14:38:31-05:00 laptop: overflow_read bc-agent
++ 2026-11-16T14:38:32-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-16T14:37:10-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
+```
+
+### 2026-11-16 · escalation 2's deploy
+
+```text
++ 2026-11-16T14:40:43-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T14:40:43-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-16T14:40:43-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-16T14:40:44-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-16T14:40:45-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-16T14:40:46-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-16T14:40:46-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T14:40:47-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T14:40:48-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-16T14:40:49-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-16T14:40:49-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-16T14:40:53-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
 ```
