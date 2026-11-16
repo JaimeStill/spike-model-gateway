@@ -251,7 +251,7 @@ Door          two-way, except what reached Azure:
 
 ## Progress
 
-slices 1/4 committed (slice 1 done: gb10-2 reboot 13:52:43, gateway answering 13:53:26, vision 13:56:30, Postgres kept 178 request_logs rows; Azure requests 5/300) · standards — · spec — · editor —
+slices 1/4 committed (slice 1 done; slice 2: files 4ed570c deployed 14:17; rows-up matrix, /models, usage on streams, 401/404, go-ai 20/0/1, infer 13/0/1 pass; escalation open: retry backoff, benchmark C sizing, Azure provider health; Azure requests 5/300) · standards — · spec — · editor —
 
 ## Decisions
 
