@@ -24,6 +24,13 @@
 #   compare <direct-1> <gateway> <direct-2>
 #                     behavior 7's reading: each figure's spread between the two direct runs
 #                     beside what the gateway run adds over their mean
+#   overflow_read <name>
+#                     benchmark C's reading of a cap run (the priority task's behavior 9), from its
+#                     gateway-requests.tsv and result.json: the replies the row and Azure each
+#                     answered, per status; the 503s the row returned to the client; the requests
+#                     the route retried, and whether any of them reached Azure; the eviction
+#                     windows, an estimate, and their rate a minute; and the time from the
+#                     benchmark's start to the row's first refusal
 #
 # No helper runs a benchmark on its own or chains runs: `cell` runs exactly one.
 #
@@ -48,9 +55,20 @@
 # successful request passed raise_for_status, so it was 2xx. So the status comes from GuideLLM, and
 # Retry-After from the gateway's access log: after the run, `cell` reads the log lines of the
 # alias's route inside the run's time (`docker logs --timestamps --since --until` on gb10-2) into
-# gateway-requests.tsv, keeping each line's time, status, path, and `retry_after`, a field
-# gateway/agentgateway/config.yaml adds to every line; the caller's address and every other field
-# stay out.
+# gateway-requests.tsv, keeping each line's time, status, path, `retry_after` and `overflow`, two
+# fields gateway/agentgateway/config.yaml adds to every line, and `retry.attempt`, the attempt that
+# answered when the route retried; the caller's address, the endpoint (an overflow's names the
+# Azure account), and every other field stay out.
+#
+# Benchmark C's reading (overflow_read). Each line is one client request, its last attempt: the
+# row's reply if `overflow` is empty, Azure's if it is "azure". A line with `retry.attempt` n had n
+# earlier attempts refused (a 503 or a failed connection), each to the row unless the row was
+# already evicted. agentgateway logs no eviction and exports no metric of one (v1.7.0,
+# types/loadbalancer.rs), so the eviction windows are estimated from the lines in time order: a
+# window starts at an Azure-answered line that follows a row-answered one. A line's time is when the
+# request ended, so a long stream that started before a window can end inside it: the estimate is
+# coarse, and is labelled so. The row's first refusal is the earliest line with a 503 from the row,
+# a retry, or an Azure answer, timed from the benchmark's start in result.json.
 #
 # Settings, each an environment variable read when a helper runs:
 #   MEASURE_STATS_EVERY  seconds between gateway and row samples (default 5)
@@ -299,25 +317,28 @@ summarize() {
 }
 
 # A cap run's requests as the gateway logged them, read after the run: the access log lines of the
-# alias's route between two epochs, each kept as its time (docker's, UTC), status, path, and the
-# `retry_after` field config.yaml adds, empty when the reply had no Retry-After. The rest of each
-# line, the caller's address among it, is left out. Each alias has its own route, so a line is the
+# alias's route between two epochs, each kept as its time (docker's, UTC), status, path, the
+# `retry_after` and `overflow` fields config.yaml adds, empty when the reply had neither header, and
+# `retry.attempt`, empty when the request wasn't retried. The rest of each line, the caller's
+# address and the endpoint among it, is left out. Each alias has its own route, so a line is the
 # alias's by the route the access log names, `route=default/<alias>`.
 _measure_requests() {
   local name=$1 alias=$2 since=$3 until=$4
   local out=$MEASURE_STATE/cells/$name/gateway-requests.tsv
   local remote="docker logs --timestamps --since $since --until $until agentgateway 2>&1"
-  _measure_log laptop "ssh -n $MEASURE_GATEWAY_HOST '$remote' | the lines of route=default/$alias as time, status, path, retry_after > $out"
+  _measure_log laptop "ssh -n $MEASURE_GATEWAY_HOST '$remote' | the lines of route=default/$alias as time, status, path, retry_after, overflow, retry_attempt > $out"
   {
-    printf 'time\tstatus\tpath\tretry_after\n'
+    printf 'time\tstatus\tpath\tretry_after\toverflow\tretry_attempt\n'
     # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
     ssh -n "$MEASURE_GATEWAY_HOST" "$remote" |
       awk -v route=" route=default/$alias " 'index($0, route) {
-        st = ""; p = ""; ra = ""
+        st = ""; p = ""; ra = ""; of = ""; rt = ""
         if (match($0, / http\.status=[0-9]+/)) st = substr($0, RSTART + 13, RLENGTH - 13)
         if (match($0, / http\.path=[^ ]+/)) p = substr($0, RSTART + 11, RLENGTH - 11)
         if (match($0, / retry_after=[^ ]+/)) ra = substr($0, RSTART + 13, RLENGTH - 13)
-        printf "%s\t%s\t%s\t%s\n", $1, st, p, ra }'
+        if (match($0, / overflow="[a-z]+"/)) of = substr($0, RSTART + 11, RLENGTH - 12)
+        if (match($0, / retry\.attempt=[0-9]+/)) rt = substr($0, RSTART + 15, RLENGTH - 15)
+        printf "%s\t%s\t%s\t%s\t%s\t%s\n", $1, st, p, ra, of, rt }'
   } >"$MEASURE_ROOT/$out"
   printf '%s: %d request lines from the gateway log\n' "$name" \
     "$(($(wc -l <"$MEASURE_ROOT/$out") - 1))" | _measure_say cell
@@ -404,6 +425,61 @@ compare() {
   _measure_log laptop "compare $*"
   jq -nr --slurpfile d1 "$cells/$1/result.json" --slurpfile g "$cells/$2/result.json" \
     --slurpfile d2 "$cells/$3/result.json" "$_MEASURE_COMPARE_JQ" | _measure_say compare
+}
+
+overflow_read() {
+  local name=${1:?usage: overflow_read <name>}
+  local dir=$MEASURE_ROOT/$MEASURE_STATE/cells/$name start end iso_s iso_e
+  for f in gateway-requests.tsv result.json; do
+    [[ -f $dir/$f ]] || {
+      echo "overflow_read: no $f in $MEASURE_STATE/cells/$name; run it with cell ... cap <alias>" >&2
+      return 2
+    }
+  done
+  if ! head -1 "$dir/gateway-requests.tsv" | grep -q $'\toverflow\t'; then
+    echo "overflow_read: $MEASURE_STATE/cells/$name was read before the overflow column; nothing to read" >&2
+    return 2
+  fi
+  _measure_log laptop "overflow_read $name"
+  start=$(jq '[.benchmarks[].start_time] | min' "$dir/result.json")
+  end=$(jq '[.benchmarks[].end_time] | max' "$dir/result.json")
+  iso_s=$(date -u -d "@${start%.*}" +%Y-%m-%dT%H:%M:%S)
+  iso_e=$(date -u -d "@$((${end%.*} + 1))" +%Y-%m-%dT%H:%M:%S)
+  # The lines inside the benchmark, the gateway's /models lines (GuideLLM's backend check) left out,
+  # in time order; docker's RFC 3339 times, all UTC, sort as text.
+  tail -n +2 "$dir/gateway-requests.tsv" | sort |
+    awk -F'\t' -v s="$iso_s" -v e="$iso_e" -v secs="$(( ${end%.*} - ${start%.*} ))" '
+      substr($1, 1, 19) < s || substr($1, 1, 19) >= e || $3 ~ /\/models$/ { next }
+      {
+        k++; src = ($5 == "azure") ? "azure" : "row"
+        by[src, $2]++; n[src]++
+        if (src == "row" && $2 == 503) row503++
+        if ($6 != "") { retried++; tries += $6; if (src == "azure") rescued++ }
+        if (src == "azure" && last != "azure") windows++
+        last = src
+        if (!first && ((src == "row" && $2 == 503) || $6 != "" || src == "azure")) first = $1
+      }
+      END {
+        if (!k) { print "  no request lines inside the benchmark"; exit }
+        for (x in n) {
+          line = ""
+          for (key in by) { split(key, ks, SUBSEP); if (ks[1] == x) line = line (line ? ", " : "") ks[2] " x" by[key] }
+          printf "  answered by %s: %d (%s)\n", x, n[x], line
+        }
+        printf "  503 from the row to the client: %d\n", row503
+        printf "  retried: %d requests, %d retries; of them answered by Azure: %d, so a refused request %s Azure\n",
+          retried, tries, rescued, (rescued ? "reached" : "did not reach")
+        printf "  eviction windows (estimated from the log order): %d in %d s, %.1f a minute\n",
+          windows, secs, (secs ? windows * 60 / secs : 0)
+        printf "  first refusal: %s\n", (first ? first : "none")
+      }' | while IFS= read -r line; do
+      # The first refusal'"'"'s time, as seconds from the benchmark'"'"'s start.
+      if [[ $line == '  first refusal: '* && $line != *none ]]; then
+        t=${line#'  first refusal: '}
+        line="  first refusal: $(awk -v a="$(date -u -d "$t" +%s.%N)" -v b="$start" 'BEGIN { printf "%.1f", a - b }') s after the benchmark's start ($t)"
+      fi
+      printf '%s\n' "$line"
+    done | { echo "$name: benchmark C"; cat; } | _measure_say overflow_read
 }
 
 mkdir -p "$MEASURE_ROOT/$MEASURE_STATE/cells"

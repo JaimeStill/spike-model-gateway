@@ -24,6 +24,9 @@
 #   #@ after <line>      the lines below are inserted after the one line of the copy equal to
 #                        <line>, the rest of the directive exactly, its indentation included; no
 #                        such line, or more than one, is refused
+#   #@ replace <line>    the lines below take the place of the one line of the copy equal to
+#                        <line>, matched as `after` matches, for a value YAML can't hold twice,
+#                        such as a provider's hostOverride
 #
 # Lines before the first directive must be comments or blank. The copy's first line names the
 # overlays it carries (`# overlays: none` without), so `head -1 ~/gateway/agentgateway/config.yaml`
@@ -162,20 +165,24 @@ for overlay in "$@"; do
           done
           lines+=("${section[@]}")
           ;;
-        after)
+        after | replace)
           at=() i=
           for i in "${!lines[@]}"; do
             [[ ${lines[i]} != "$anchor" ]] || at+=("$i")
           done
           ((${#at[@]} == 1)) ||
             overlay_fail "$overlay" "${#at[@]} lines equal \"$anchor\"; one is needed"
-          lines=("${lines[@]:0:at[0]+1}" "${section[@]}" "${lines[@]:at[0]+1}")
+          # after keeps the anchor line, replace drops it.
+          keep=$((at[0] + 1))
+          [[ $mode == after ]] || keep=${at[0]}
+          lines=("${lines[@]:0:keep}" "${section[@]}" "${lines[@]:at[0]+1}")
           ;;
       esac
       section=()
       case $raw in
         '#@ append') mode=append ;;
         '#@ after '*) mode=after anchor=${raw#'#@ after '} ;;
+        '#@ replace '*) mode=replace anchor=${raw#'#@ replace '} ;;
         '#@ end') mode= ;;
         *) overlay_fail "$overlay" "unknown directive \"$raw\"" ;;
       esac

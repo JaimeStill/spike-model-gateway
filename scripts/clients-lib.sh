@@ -30,6 +30,12 @@
 #                     and with no key, each generating <max tokens> (512 by default) with
 #                     ignore_eos so all are in flight together; prints how many replies had each
 #                     status, so a count one past the row's --max-num-queued-reqs shows its 503
+#   azure_count <since> [<until>]
+#                     the requests Azure AI Foundry answered, read from the gateway's access log on
+#                     gb10-2 since <since> (and until <until>), a time `docker logs` takes: an RFC
+#                     3339 time such as 2026-11-16T14:05:00 (local), or a Unix time. Counted per
+#                     alias, so per deployment, and per status; read-only, and it prints counts
+#                     only (below)
 #   logged <command>  any other step, given as one string: run with bash from the root, logged as
 #                     written, and its output, stdout and stderr, appended to the log as printed;
 #                     for a command that prints no key, such as `mise run agentgateway-deploy`, a
@@ -59,6 +65,18 @@
 # together, so neither is in a process's argv, printed, or logged: the log shows the expressions
 # that read them. A curl error that names its host would print the account's name, so pass -s
 # without -S, and no --write-out naming the URL.
+#
+# The Azure request count. Each reply an Azure deployment answers carries `x-gateway-overflow:
+# azure`, which the gateway's access log records on that request's line as `overflow="azure"`
+# (gateway/agentgateway/config.yaml); the line's route names the alias, and each alias overflows to
+# one deployment (CLIENTS_DEPLOYMENT). azure_count reads `docker logs` of the agentgateway container
+# over SSH and keeps only counts: a log line names the Azure account's host in `endpoint`, so no
+# line is printed or logged. It also counts the lines that went to Azure with no marker, a request
+# Azure never answered (`gen_ai.provider.name=azure`: a failed connection, or a reply the gateway
+# couldn't read), and flags Azure's 429, a stop condition of the task's cap. One line is one client
+# request, its last attempt: an Azure 503 that the route retried leaves no line of its own. The log
+# lasts as long as the container, which compose recreates only when the config's `config` section
+# or the stack changes, so the count is read after each step, not once at the end.
 #
 # The command log. Each helper call and each command it runs is appended to
 # .state/priority/commands-<YYYY-MM-DD>.log and printed to stderr as
@@ -92,6 +110,14 @@ declare -gA CLIENTS_ROLE=(
   [vision]=VISION
   [audio]=AUDIO
   [embedding]=EMBEDDING
+)
+
+# Each alias's Azure AI Foundry deployment, its overflow (config.yaml's `<alias>-azure` provider).
+declare -gA CLIENTS_DEPLOYMENT=(
+  [agent]=gpt-oss-120b
+  [vision]=gpt-5-mini
+  [audio]=gpt-audio-mini
+  [embedding]=text-embedding-3-small
 )
 
 # Each alias's row, as host:port, as measure-lib.sh's MEASURE_ROW.
@@ -338,6 +364,48 @@ row_burst() {
   local body
   body=$(printf '{"model":"%s","messages":[{"role":"user","content":"Count upward from 1, one number a line."}],"max_tokens":%d,"ignore_eos":true}' "$alias" "$tokens")
   logged "for i in \$(seq $count); do curl -s -o /dev/null -w '%{http_code}\\n' -H 'content-type: application/json' -d '$body' http://${CLIENTS_ROW[$alias]}/v1/chat/completions & done | sort | uniq -c"
+}
+
+azure_count() {
+  (($# == 1 || $# == 2)) || {
+    echo 'usage: azure_count <since> [<until>]' >&2
+    return 2
+  }
+  local t
+  for t in "$@"; do
+    [[ $t =~ ^[0-9][0-9T:.Z+-]*$ ]] || {
+      echo "azure_count: $t isn't a time docker logs takes (2026-11-16T14:05:00, or a Unix time)" >&2
+      return 2
+    }
+  done
+  local remote="docker logs --since $1${2:+ --until $2} agentgateway 2>&1" a deployments=''
+  for a in agent vision audio embedding; do
+    deployments+="$a=${CLIENTS_DEPLOYMENT[$a]} "
+  done
+  _clients_log laptop "ssh -n $CLIENTS_HOST '$remote' | the request lines with overflow=\"azure\" or gen_ai.provider.name=azure, counted per route and status"
+  # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
+  ssh -n "$CLIENTS_HOST" "$remote" |
+    awk -v since="$1" -v until="${2:-now}" -v deployments="$deployments" '
+      BEGIN { n = split(deployments, d, " "); for (i = 1; i <= n; i++) { split(d[i], kv, "="); ord[i] = kv[1]; dep[kv[1]] = kv[2] } }
+      /[ \t]request / {
+        answered = index($0, " overflow=\"azure\"") > 0
+        if (!answered && $0 !~ / gen_ai\.provider\.name=azure( |$)/) next
+        alias = "?"; st = "-"
+        if (match($0, / route=default\/[a-z]+ /)) alias = substr($0, RSTART + 15, RLENGTH - 16)
+        if (match($0, / http\.status=[0-9]+/)) st = substr($0, RSTART + 13, RLENGTH - 13)
+        if (!answered) { unanswered[alias]++; nu++; next }
+        total++; per[alias]++; status[alias, st]++; if (st == 429) limited++
+      }
+      END {
+        printf "Azure answered %d requests from %s to %s\n", total, since, until
+        for (i = 1; i <= n; i++) {
+          a = ord[i]; line = ""
+          for (k in status) { split(k, ks, SUBSEP); if (ks[1] == a) line = line (line ? ", " : "") ks[2] " x" status[k] }
+          printf "  %s (%s): %d%s%s\n", a, dep[a], per[a], (line ? ": " line : ""), (unanswered[a] ? sprintf("; %d sent with no reply from Azure", unanswered[a]) : "")
+        }
+        if (limited) printf "  STOP: Azure answered 429 %d times; the task stops and escalates\n", limited
+      }' | _clients_say azure_count
+  return "${PIPESTATUS[0]}"
 }
 
 logged() {

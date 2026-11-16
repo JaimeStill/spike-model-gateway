@@ -1,0 +1,41 @@
+# C-vision, benchmark C's vision cell (the priority task's behavior 9; evidence 7): the vision row,
+# NVFP4 26B-A4B (vision on gb10-2's 8000), through the gateway only, at 36 concurrent for 60 s:
+# past the 32 the row holds before it refuses (twice its cap of 16 in flight,
+# --max-num-queued-reqs), so the row answers 503, two in a row evict it for 5 s, and the gateway
+# sends the vision alias to its Azure AI Foundry deployment, gpt-5-mini, while it is out. The cell
+# reads 503s from the row, the requests Azure answered, whether a refused request reached Azure,
+# the eviction windows a minute, and the time to the row's first refusal, which vLLM #58192 delays
+# on vision (overflow_read, scripts/measure-lib.sh). Every request Azure answers counts against the
+# task's cap of 300 (azure_count, scripts/clients-lib.sh). Each request's body, a 1440p JPEG, is
+# past the 64 KiB the gateway buffers for a retry, so the route's retry never re-sends it: a
+# refused request is answered 503. Derived from cap-vision.yaml, its requests unchanged: one
+# synthetic 1440p JPEG beside 200 synthetic text tokens, exactly 100 output tokens. Adapted: one
+# level, 36, where the cap cell ran 16 and 20. The model is the alias, vision, given on the command
+# line with its tokenizer (google/gemma-4-26B-A4B-it) by `cell`, which sets the target, the
+# gateway's base URL, in GUIDELLM__SPEC__BACKEND__TARGET, the bench key in
+# GUIDELLM__SPEC__BACKEND__API_KEY, and the run's own seed. It needs GuideLLM's vision extra, which
+# mise.bench.toml installs. Run from the repository root.
+spec:
+  backend:
+    kind: openai_http
+    request_format: /v1/chat/completions
+    # GuideLLM checks the backend before a run with GET <target>/health, the target's /v1 cut off.
+    # Through the gateway that is /vision/health, which no route serves (404), so the check reads
+    # /v1/models instead, which the gateway answers itself and which also proves the key before any
+    # load is sent.
+    api_routes:
+      /health: v1/models
+  profile:
+    kind: concurrent
+    streams: [36]
+  data:
+    - kind: synthetic_text
+      prompt_tokens: 200
+    - kind: synthetic_image
+      resolution: 1440p
+      format: jpeg
+      output_tokens: 100
+  # The level stops at 60 s; the requests in flight then are counted incomplete.
+  constraints:
+    - kind: max_duration
+      seconds: 60

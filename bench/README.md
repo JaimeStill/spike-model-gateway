@@ -26,6 +26,8 @@ endpoints alone.
 | C-vision | `cap-vision.yaml` | vision, through the gateway | `google/gemma-4-26B-A4B-it` | O-vision's requests at 16, then 20 concurrent; 60 s a level |
 | C-audio | `cap-audio.yaml` | audio, through the gateway | `google/gemma-4-E4B-it` | O-audio's requests at 4, then 8 concurrent; 30 s or 64 requests a level |
 | C-embed | `cap-embed.yaml` | embedding, through the gateway | `ibm-granite/granite-embedding-english-r2` | O-embed's requests at 128, then 160 in flight; 60 s a level |
+| C-agent, benchmark C | `overflow-agent.yaml` | agent, through the gateway | `openai/gpt-oss-120b` | O-agent's sessions at 28; 60 s |
+| C-vision, benchmark C | `overflow-vision.yaml` | vision, through the gateway | `google/gemma-4-26B-A4B-it` | O-vision's requests at 36 concurrent; 60 s |
 
 The overhead cells (O-) run direct and through the gateway; the cap cells (C-) run through the
 gateway only, with `cell <name> <scenario> cap <alias>`, two levels in one run, past each row's
@@ -33,3 +35,9 @@ target. The plans, the step commands, and how the runs are read are in the findi
 slice 3 sections,
 [`docs/findings/agentgateway.md`](../docs/findings/agentgateway.md#slice-2--overhead) and
 [its cap cells](../docs/findings/agentgateway.md#the-cap-cells).
+
+Benchmark C's two cells (the priority task's behavior 9) run the same way, through the gateway with
+`cap`, one level each, past the row's queue limit (agent 24, vision 32), where the row answers 503
+and the gateway sends the alias to its Azure AI Foundry deployment while the row is evicted.
+`overflow_read <name>` reads each run. Their finding is
+[`docs/findings/priority.md`](../docs/findings/priority.md).
