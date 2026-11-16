@@ -371,7 +371,9 @@ reads them as written. The `llm` route's name is in the docs only as log output.
 **Behaviors 1–6 all hold, so the `llm` section stays**, served beside route `ai` as in the trial.
 Slice 3 settles the form. Nothing fell back, and no tier ran on route `ai`.
 
-Architect's call on the flagged figure: pending
+Architect's call on the flagged figure (2026-11-16): accepted. 2.45 ms on a 4.7 s request is
+noise-sized, beside a TTFT difference inside its spread and no ITL change, and on the relay a
+1.78 ms spread is tighter than the path's own jitter. The `llm` section stays.
 
 ### Behavior 3: the tiers and the infer CLI
 
@@ -428,7 +430,8 @@ pong from framework (<addr>) via DERP(nyc) in 53ms
 Ten pings each at 09:16:03 went the same way, through DERP(nyc): 54–55 ms to gb10-2 and 60–81 ms
 to the Framework. `tailscale netcheck` reported `MappingVariesByDestIP: true`, a hard NAT, so no
 direct path could be made from this network. The agentgateway task's cells ran on a direct path,
-at 1 ms or under.
+at 1 ms or under ([agentgateway.md](agentgateway.md): "Every `tailscale ping` from the laptop is
+direct, at 1 ms or less, before and after").
 
 **The architect's decision** (2026-11-16, an escalation answered during BUILD): run the cells now,
 on the relay. "We have to be okay with the idea that we're not always going to be on the direct

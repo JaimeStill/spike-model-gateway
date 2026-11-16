@@ -82,7 +82,7 @@ Door          two-way: one config file, the losing form is a deletion,
 
 ## Progress
 
-slices 1/4 committed (00d340d: llm trial, interim verdict pass) · standards — · spec — · editor — · transcription verified (2deeca6) · slice 2 waits for the architect to watch
+slices 2/4 committed (00d340d trial, 2deeca6 transcription verified, fbb5796 tiers, verdict, cells) · standards — · spec — · editor —
 
 ## Decisions
 
@@ -228,6 +228,9 @@ slices 1/4 committed (00d340d: llm trial, interim verdict pass) · standards —
   - It is a script like currency.sh, using `gh` and `jq`, so it is not a new tool.
   - Rejected: a schema check inside currency, which would mix version gaps with upstream risk.
 - routing: behavior 2's transcription line is met by the gateway's handling only (architect, 2026-11-16, "but we should at least verify it"): the audio row (Gemma 4 E4B, vLLM v0.33.0) registers no `/v1/audio/*` route, since `Gemma4ForConditionalGeneration` doesn't implement `SupportsTranscription`; both forms forward the full multipart body (the row's `/metrics` counts its Content-Length) and `llm` refuses a wrong-alias model with 403. A row that serves transcription needs a different model, such as Gemma 3n.
+- routing: the overhead cells ran on Tailscale's DERP relay (architect, 2026-11-16: "we have to be okay with the idea that we're not always going to be on the direct network path"); the laptop's network had no direct path (netcheck MappingVariesByDestIP true). `llm` against route `ai` is the comparable figure, since both share the path. Rejected: waiting for a direct path, and running GuideLLM from gb10-1.
+- routing: the verdict is `llm`: behaviors 1–6 hold. The one flagged figure, vision's median request latency `llm` +2.45 ms over route `ai` against a 1.78 ms direct spread, is accepted by the architect (2026-11-16) as noise-sized on a 4.7 s request.
+- routing: each model's authorization reads `proxy.listener.name`, not `proxy.gateway.name`: standalone agentgateway makes each `gateways` entry a listener of one gateway, `default`. Every model lists all four formats, audio included, since agentgateway classifies `/v1/chat/completions` before `passthrough`. The route form keeps its prefix match and refuses off-list paths with a conditional `directResponse` 404, since a prefix rewrite needs a prefix match.
 
 ## Pending edits
 
