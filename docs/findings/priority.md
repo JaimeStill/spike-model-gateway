@@ -56,7 +56,8 @@ updates, the gb10-2 reboot) and the Azure walk, Foundry's first.
 Azure deployment. A request goes to the first group with a provider not evicted, so Azure answers
 only while the row is out, and only for its own alias: nothing fails over between hosts. The row's
 health policy evicts it after two consecutive unhealthy replies, a 503 or a failed connection, for
-5 s; a route retry makes up to 2 more attempts on 503, with no backoff. Chat Completions,
+5 s; a route retry makes up to 2 more attempts on 503, each after a 20 ms backoff (the slice 2
+escalation, below). Chat Completions,
 embeddings, Messages, and Responses are typed request formats, so the gateway names each
 deployment as the model and builds its path; the rest stay `detect`. Each alias's `/v1/models` is
 answered by the gateway itself. Every reply Azure answers carries `x-gateway-overflow: azure`, and
@@ -99,8 +100,9 @@ stop condition. Only synthetic and test-fixture content is sent to Azure.
 
 **Benchmark C.** Two GuideLLM cells through the gateway, run with `cell <name> <scenario> cap
 <alias>` and read with `overflow_read <name>`: C-agent,
-[`bench/overflow-agent.yaml`](../../bench/overflow-agent.yaml), 28 sessions for 60 s; then
-C-vision, [`bench/overflow-vision.yaml`](../../bench/overflow-vision.yaml), 36 concurrent for 60 s.
+[`bench/overflow-agent.yaml`](../../bench/overflow-agent.yaml), 28 concurrent for 60 s; then
+C-vision, [`bench/overflow-vision.yaml`](../../bench/overflow-vision.yaml), 36 concurrent for 60 s,
+each sized to Azure's capacity (the slice 2 escalation, below).
 
 ## Slice 1 · setup
 
@@ -202,6 +204,35 @@ volume kept its 178 `request_logs` rows (13:56:33).
 ## Slice 2 · overflow
 
 Pending.
+
+### Escalation (2026-11-16)
+
+Slice 2's rows-up checks passed; three questions went to the architect before benchmark C, and
+were answered:
+
+- **Retry backoff: 20 ms.** An eviction reaches the load balancer through a spawned task
+  (`types/loadbalancer.rs`, `finish_request`) [src], so it lands asynchronously, and a retry sent
+  with no backoff reaches the row again: on the laptop mock, the request whose two 503s evicted the
+  row got its third 503 from the row. With 20 ms the same request went to Azure on its third
+  attempt. The route retry (`&retry-503`) now sets `backoff: 20ms`; benchmark C is to show it live.
+- **Azure provider health: the rows' policy.** Each `<alias>-azure` provider now carries
+  `&row-health`: two 503s or failed connections in a row evict it for 5 s. It had none, so
+  agentgateway's default for several groups held: one 5xx or failed connection evicted it for 3 s.
+  A 429 doesn't evict it.
+- **Benchmark C sized to Azure's capacity.** gpt-5-mini has 10 units, about 10,000 tokens a minute,
+  and gpt-oss-120b 50 units, about 50,000 tokens a minute. The briefed loads, C-agent's sessions of
+  an 8,192-token first turn and C-vision's 1440p images, would pass them within seconds of an
+  overflow, and a 1440p body is past the 64 KiB the gateway retries, so a refused request could
+  never reach Azure. C-agent now sends single-turn prompts of 512 tokens, 128 out, at 28
+  concurrent for 60 s; C-vision a synthetic 720p JPEG (base64 21 to 46 KB in GuideLLM 0.8.1) beside
+  200 text tokens, 100 out, at 36 concurrent for 60 s, so the row fills on concurrency and each
+  vision body is retried. Each cell stops early if Azure answers 429: no GuideLLM 0.8.1 constraint
+  tells a 429 from the row's 503s (`max_errors` and the error-rate constraints count every errored
+  request), so the session watches `azure_count` and the access log and interrupts the run by hand.
+
+The implementer's earlier checks "on the mock" used a throwaway Python mock upstream in the
+session's scratchpad, never committed: an exception to the experiment's no-authored-Python rule,
+which the architect was told about.
 
 ## Slice 3 · keys and limits
 
