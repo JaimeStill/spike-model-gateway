@@ -461,6 +461,7 @@ slices 0/4 committed (slice 1 files committed: engines 6f5a1f1, 7574391; gateway
 - priority: confirmed at approval (architect, 2026-11-16): each deployment is DataZoneStandard where the model offers it, and GlobalStandard otherwise; the Azure resource name stays untracked and is filled in at deploy; the budget Block is shown by a probe overlay that lowers bulk's budget.
 - priority: Postgres is pinned at 18.7-alpine, the latest `-alpine` tag, per rolling currency (the convention's example was 18.6). The compose FROM pin is read by crane, which go-web-service's currency already uses, so it is a known tool, not a new one.
 - priority: in the compose stack, agentgateway runs from its image pin rather than a Dockerfile, keeps `container_name: agentgateway` for the helpers, and is recreated only when its `config:` section changes (a hash label), since `config.*` is read at start. Tailnet addresses are looked up on gb10-2 at run time, and Postgres publishes no port.
+- priority: vision overflows to gpt-5-mini 2025-08-07, GlobalStandard at capacity 10, not gpt-5.4-mini (architect, 2026-11-16, escalation in slice 1). The subscription's gpt-5.4-mini quota is 0 in every SKU in eastus2, and gpt-5-mini has quota only in GlobalStandard, so vision overflow is processed globally. The soft-deleted accounts tau-ai, spike-harness-ai, and herald-ai held gpt-5-mini's quota until the architect purged them. Amends R2 Q1.
 
 ## Pending edits
 
