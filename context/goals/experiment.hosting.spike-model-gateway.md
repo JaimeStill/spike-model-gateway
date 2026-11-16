@@ -468,6 +468,7 @@ slices 2/4 committed (slice 2 done: overflow on all four aliases, tiers on Azure
 - priority: benchmark C-agent ran once and breached the Azure stop rule. It sent 2,944 requests to Azure in 60 s (429 x2845, 400 x99, no 2xx), because each row eviction sent the alias's whole load to an Azure group that stayed in rotation while it throttled. C-vision is dropped, and C-agent is recorded as it ran: under saturation, a row's 503 with eviction sends nearly the whole load to Azure (architect, 2026-11-16, escalation). Amends R2 Q9 and the C sizing decision.
 - priority: each Azure provider is also evicted on 429 (`&azure-health`: 503, 429, or a failed connection, 2 in a row, 5 s), so a throttling Azure leaves rotation (architect, 2026-11-16, escalation).
 - priority: the Azure cap of 300 counts Azure's 2xx and its 4xx other than 429. 429s are reported separately, since Azure refuses them without processing. The count after C-agent is 180: 81 before it and its 99 400s (architect, 2026-11-16, escalation). Amends behavior 18.
+- priority: Azure stream incompatibilities in go-ai are fixed at their root in a v1.ai.client hotfix task that blocks v1.ai.client's remaining tasks, never by a gateway transformation (architect, 2026-11-16).
 
 ## Pending edits
 
@@ -505,4 +506,7 @@ slices 2/4 committed (slice 2 done: overflow on all four aliases, tiers on Azure
   capstone's stack.
 - coordinator · roadmap: priority's summary covers all four aliases overflowing to Foundry, with a
   cap of 300.
-- coordinator · v1.ai.client: go-ai at tools/infer/v0.1.0 doesn't read Azure AI Foundry's streams. Its Chat Completions parser rejects a chunk with an empty reply id, which Azure's chat streams start with. Its Responses parser rejects how Azure adds a reasoning item. Other gaps against Foundry: gpt-oss-120b refuses `tool_choice: required`; gpt-5-mini refuses `max_tokens` and reasoning effort `none`; a Responses reply cut off at its limit reports `max_tokens`; a translated Messages stream reports 0 input tokens (spike-model-gateway `docs/findings/priority.md`, slice 2).
+- coordinator · v1.ai.client: add a hotfix task, run ahead of v1.ai.client's remaining tasks, which wait on it (architect, 2026-11-16: "always fix problems at their root and avoid hiding them behind band aids"). It fixes go-ai, at tools/infer/v0.1.0, wherever go-ai is at fault in reading Azure AI Foundry's streams, with no gateway workaround:
+  - its Chat Completions parser rejects a chunk with an empty reply id, which Azure's chat streams start with;
+  - its Responses parser rejects how Azure adds a reasoning item.
+  The task first confirms the root cause of each against Azure's wire format and the OpenAI spec. It also weighs the other Foundry gaps, which are model differences rather than go-ai's faults: gpt-oss-120b refuses `tool_choice: required`; gpt-5-mini refuses `max_tokens` and reasoning effort `none`; a Responses reply cut off at its limit reports `max_tokens`; a translated Messages stream reports 0 input tokens (spike-model-gateway `docs/findings/priority.md`, slice 2). This edit goes through a coordinator `plan` session, since BUILD doesn't change the coordinator.
