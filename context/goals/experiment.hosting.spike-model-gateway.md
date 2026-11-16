@@ -465,6 +465,9 @@ slices 1/4 committed (slice 1 done; slice 2: escalation answers 01e6c4d deployed
 - priority: the route retry waits 20 ms before trying again (architect, 2026-11-16, slice 2 escalation). Eviction lands asynchronously, so with no backoff the retry reaches the row again and the refused request itself gets 503. Amends R2 Q7.
 - priority: each Azure provider gets the rows' health policy, evicting after 2 consecutive 503s or failed connections for 5 s, so a single Azure error doesn't leave the alias without a healthy group (architect, 2026-11-16, slice 2 escalation).
 - priority: benchmark C is sized to Azure's capacity (architect, 2026-11-16, slice 2 escalation). C-agent sends single-turn 512-in, 128-out prompts at 28 concurrent for 60 s. C-vision sends a small synthetic image under 64 KiB, so the retry applies, at 36 concurrent for 60 s. Each is stopped early if Azure answers 429. The briefed loads would have tripped Azure's 429s: gpt-5-mini at 10 units and gpt-oss-120b at 50 units against 1440p images and 8k-token prompts. The 1440p case, never retried past 64 KiB, is recorded from the mock and the source. Amends R2 Q9.
+- priority: benchmark C-agent ran once and breached the Azure stop rule. It sent 2,944 requests to Azure in 60 s (429 x2845, 400 x99, no 2xx), because each row eviction sent the alias's whole load to an Azure group that stayed in rotation while it throttled. C-vision is dropped, and C-agent is recorded as it ran: under saturation, a row's 503 with eviction sends nearly the whole load to Azure (architect, 2026-11-16, escalation). Amends R2 Q9 and the C sizing decision.
+- priority: each Azure provider is also evicted on 429 (`&azure-health`: 503, 429, or a failed connection, 2 in a row, 5 s), so a throttling Azure leaves rotation (architect, 2026-11-16, escalation).
+- priority: the Azure cap of 300 counts Azure's 2xx and its 4xx other than 429. 429s are reported separately, since Azure refuses them without processing. The count after C-agent is 180: 81 before it and its 99 400s (architect, 2026-11-16, escalation). Amends behavior 18.
 
 ## Pending edits
 
@@ -502,3 +505,4 @@ slices 1/4 committed (slice 1 done; slice 2: escalation answers 01e6c4d deployed
   capstone's stack.
 - coordinator · roadmap: priority's summary covers all four aliases overflowing to Foundry, with a
   cap of 300.
+- coordinator · v1.ai.client: go-ai at tools/infer/v0.1.0 doesn't read Azure AI Foundry's streams. Its Chat Completions parser rejects a chunk with an empty reply id, which Azure's chat streams start with. Its Responses parser rejects how Azure adds a reasoning item. Other gaps against Foundry: gpt-oss-120b refuses `tool_choice: required`; gpt-5-mini refuses `max_tokens` and reasoning effort `none`; a Responses reply cut off at its limit reports `max_tokens`; a translated Messages stream reports 0 input tokens (spike-model-gateway `docs/findings/priority.md`, slice 2).
