@@ -1294,4 +1294,6 @@ gh api "repos/agentgateway/agentgateway/contents/examples/llm-keyed-rate-limit/c
 gh api "repos/agentgateway/agentgateway/contents/examples/llm-keyed-rate-limit/README.md?ref=v1.7.0" --jq .content
 ```
 
-`jq length` printed 1247 and 3108.
+`jq length` printed 1247 and 3108. Not quoted: fourteen two-word `gh search issues` queries that returned
+nothing (GitHub's search matched them too narrowly, which is why the full lists were read), and the
+local `jq` greps over the two lists, by gap.
