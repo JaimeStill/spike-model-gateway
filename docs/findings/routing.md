@@ -580,7 +580,8 @@ publish. The keys now live in one list, `llm.policies.apiKey`, with the same
   `    apiKey:`, now `llm.policies.apiKey`'s and the only such line; only its comment changed.
   `in-flight-1` inserts under `frontendPolicies:`, unchanged. No overlay was deployed. The deploy
   has no dry path, so each was rendered on the laptop the deploy's way, its markers replaced with a
-  placeholder hash, and validated with the pinned image there (`docker run ... --validate-only`):
+  placeholder hash, and validated with the pinned image there (`docker run ... --validate-only`;
+these laptop runs went through no helper, so their exact commands are not recorded):
   `key-header` alone, and `rate-limit-agent` with `in-flight-1`, each "Configuration is valid!".
   `apiKey.location` is a field of `LocalAPIKeys` in v1.7.0's schema, the type `llm.policies.apiKey`
   takes, and a field added under it is refused (``llm.policies: unknown field `bogusField` ``).
@@ -672,7 +673,8 @@ agentgateway always-passthrough for `llm` models
 
 Its `differs` path was tried on a scratch edit of the register, then restored: a recorded state
 changed, a text field's value flipped, and a path that doesn't exist each printed `differs` (the
-missing file as `unreadable`), and the check exited 1.
+missing file as `unreadable`), and the check exited 1. That test went through no helper, so its
+commands are not recorded.
 
 The standards review then changed the first entry's `json` line. Its expression ended in `| any`,
 so a schema with no `ai` variant left would also read `false`, as recorded, and the variant's
@@ -1250,3 +1252,46 @@ keyless request, through `logged`:
 + 2026-11-16T09:41:01-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
 + 2026-11-16T09:41:01-05:00 laptop: curl -sS -o /dev/null -w '3010 no key: %{http_code}\n' http://gb10-2:3010/v1/models
 ```
+
+### 2026-11-16 · after the standards review
+
+The comment-only config change the standards review made was deployed, so the walkthrough's first
+deploy changes nothing, and the watch check was rerun after its `json` line changed; the
+register's "Last checked" lines cite this run (14:48Z).
+
+```
++ 2026-11-16T09:48:14-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:48:14-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-16T09:48:14-05:00 gb10-2: mkdir -p ~/agentgateway
++ 2026-11-16T09:48:15-05:00 laptop: ssh gb10-2 'cat > ~/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.urVTez.yaml
++ 2026-11-16T09:48:16-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T09:48:16-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T09:48:17-05:00 gb10-2: mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml
++ 2026-11-16T09:48:18-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "spike.spec"}} {{.State.Running}}' 2>/dev/null || true
++ 2026-11-16T09:48:18-05:00 gb10-2: docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'
++ 2026-11-16T09:48:19-05:00 laptop: mise run watch
+```
+
+### 2026-11-16 · the upstream survey
+
+Run by the session on the laptop, outside the helpers, so the times were not recorded; the
+commands are as run. The two lists were read once and searched locally with `jq`.
+
+```
+gh search issues --repo agentgateway/agentgateway "legacy" --limit 30 --json number,title,state,isPullRequest,createdAt
+gh search issues --repo agentgateway/agentgateway "deprecate" --limit 30 --json number,title,state,isPullRequest,createdAt
+gh issue view 3655 -R agentgateway/agentgateway --json title,state,body,comments
+gh issue view 2767 -R agentgateway/agentgateway --json title,state,body,comments
+gh issue view 3204 -R agentgateway/agentgateway --json title,state,body,comments
+gh pr view 2473 -R agentgateway/agentgateway --json body
+gh pr view 1091 -R agentgateway/website --json title,body,files
+gh issue list -R agentgateway/agentgateway --state all --limit 6000 --json number,title,state,body,createdAt > agw-issues.json
+gh pr list -R agentgateway/agentgateway --state all --limit 6000 --json number,title,state,body,createdAt > agw-prs.json
+jq length agw-issues.json agw-prs.json
+gh issue view 2719 -R agentgateway/agentgateway --json comments,stateReason
+gh issue view 4307 -R agentgateway/agentgateway --json comments
+gh api "repos/agentgateway/agentgateway/contents/examples/llm-keyed-rate-limit/config.yaml?ref=v1.7.0" --jq .content
+gh api "repos/agentgateway/agentgateway/contents/examples/llm-keyed-rate-limit/README.md?ref=v1.7.0" --jq .content
+```
+
+`jq length` printed 1247 and 3108.

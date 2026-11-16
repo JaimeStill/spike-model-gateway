@@ -103,7 +103,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
   `ai.groups` ([`docs/findings/agentgateway.md`](findings/agentgateway.md), "The paper
   inventory"), and record what `llm` must gain for parity.
 - **State:** watching.
-- **Last checked:** 2026-11-16T14:44Z, `mise run watch`: every line as recorded, at v1.7.0, the
+- **Last checked:** 2026-11-16T14:48Z, `mise run watch`: every line as recorded, at v1.7.0, the
   latest release.
 
 ## agentgateway `llm` serving several base URLs on one port
@@ -132,7 +132,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Action:** weigh moving the aliases back to one port, against the four ports' cost to
   consumers (four base URLs either way) and to the deploy (four published ports).
 - **State:** watching.
-- **Last checked:** 2026-11-16T14:44Z, `mise run watch`: as recorded, at v1.7.0.
+- **Last checked:** 2026-11-16T14:48Z, `mise run watch`: as recorded, at v1.7.0.
 
 ## agentgateway always-passthrough for `llm` models
 
@@ -156,5 +156,5 @@ and the project has acted on it; the finding or decision that acted keeps the re
   formats each model lists, whether streams still gain `include_usage`, and whether usage is still
   read for the access log and for `priority`'s budgets; then decide `passthrough` per model.
 - **State:** watching.
-- **Last checked:** 2026-11-16T14:44Z, `mise run watch`: as recorded; v1.7.0, the latest
+- **Last checked:** 2026-11-16T14:48Z, `mise run watch`: as recorded; v1.7.0, the latest
   release, doesn't carry the merge.
