@@ -251,7 +251,7 @@ Door          two-way, except what reached Azure:
 
 ## Progress
 
-slices 1/4 committed (slice 1 done; slice 2: files 4ed570c deployed 14:17; rows-up matrix, /models, usage on streams, 401/404, go-ai 20/0/1, infer 13/0/1 pass; escalation open: retry backoff, benchmark C sizing, Azure provider health; Azure requests 5/300) · standards — · spec — · editor —
+slices 1/4 committed (slice 1 done; slice 2: escalation answers 01e6c4d deployed; rows-down overflow shown on all four aliases; tiers on Azure: go-ai 10/10/1, infer 9/4/1, parity gaps recorded in .state/priority; back to rows at 14:37:03; benchmark C-agent ran 14:37:10–14:38:31 and breached the Azure stop rule: 2944 requests to Azure, 0 answered 2xx (429 x2845, 400 x99). STOPPED: escalation open; C-vision not run. Azure requests before C: 81/300) · standards — · spec — · editor —
 
 ## Decisions
 
