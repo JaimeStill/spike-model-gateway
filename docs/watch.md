@@ -65,10 +65,10 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Relies on:** the gateway's four routes, `/<alias>/v1` on the `consumer` port, each with an
   inline `ai` backend ([`gateway/agentgateway/config.yaml`](../gateway/agentgateway/config.yaml)).
   Task `routing` trialled the `llm` section and shipped it, then realigned on route `ai`, the form
-  agentgateway's docs recommend for path-based routing ([`docs/findings/routing.md`](findings/routing.md),
-  "Realignment on route `ai`"). The entry watches whether route `ai` is deprecated after all, and
-  whether it goes the way `binds` went: deprecated before the replacement could express everything
-  it did.
+  agentgateway's docs recommend for path-based routing
+  ([`docs/findings/routing.md`](findings/routing.md), "Realignment on route `ai`"). The entry
+  watches whether route `ai` is deprecated after all, and whether it goes the way `binds` went:
+  deprecated before the replacement could express everything it did.
 - **Evidence**, at v1.7.0. For route `ai` staying a supported form:
   - The current docs recommend routing-based configuration for path-based LLM routing. The
     decision table in `content/docs/standalone/latest/documentation/llm/configuration-modes.md`
@@ -146,7 +146,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
   - `json agentgateway/agentgateway schema/config.json .["$defs"].LocalLLMConfig.properties.pathPrefix.type = "string"`
     one prefix; an array, or an object, would be the change.
 - **Parity:** a release whose `llm` section lists only a prefix's own models on that prefix's
-  `/models`, and refuses another prefix's, as each port does today.
+  `/models`, and refuses another prefix's, as each port did in the trial.
 - **Action:** when standalone `llm` serves several prefixes (Kubernetes has it, #2973), weigh
   moving the gateway to it: the same `/<alias>/v1` base URLs, served by the `llm` section, against
   re-checking its body handling (the always-passthrough entry below).

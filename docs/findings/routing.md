@@ -11,7 +11,7 @@ runs as slice 4; and the realignment on route `ai` the architect decided after s
 - **Measured:** 2026-11-16, 07:54–07:59 local time, from the laptop, and the transcription
   verification at 09:06–09:08; slice 2 at 09:13–09:30, on Tailscale's relay ("The network
   path"); slice 3 at 09:37–09:41; the realignment at 11:29–11:34. Every command is under
-"Commands as run".
+  "Commands as run".
 - **Gateway:** agentgateway v1.7.0, `cr.agentgateway.dev/agentgateway:v1.7.0`, on gb10-2,
   configured from [`gateway/agentgateway/config.yaml`](../../gateway/agentgateway/config.yaml).
 - **Rows:** as in the agentgateway task's finding
@@ -567,7 +567,8 @@ architect's call, not a fail.
 
 ### The settled form
 
-> Superseded by the realignment on route `ai`, below ("Realignment on route `ai`"): the gateway serves the aliases at `http://gb10-2:3000/<alias>/v1` again.
+> Superseded by the realignment on route `ai`, below ("Realignment on route `ai`"): the gateway
+> serves the aliases at `http://gb10-2:3000/<alias>/v1` again.
 
 **The `llm` section serves the four aliases; route `ai` is deleted.** Behaviors 1–6 held, the
 tiers passed, and the architect accepted the one flagged overhead figure, so the losing form went:
@@ -601,7 +602,8 @@ these laptop runs went through no helper, so their exact commands are not record
 
 ### The base URLs
 
-> Superseded by the realignment on route `ai`, below ("Realignment on route `ai`"): the gateway serves the aliases at `http://gb10-2:3000/<alias>/v1` again.
+> Superseded by the realignment on route `ai`, below ("Realignment on route `ai`"): the gateway
+> serves the aliases at `http://gb10-2:3000/<alias>/v1` again.
 
 Each alias's base URL is its own port's `/v1`, and its `/v1/models` lists that alias alone:
 
@@ -626,7 +628,8 @@ A consumer changes only the base URL and the key, as the tiers showed (behavior 
 
 ### The deprecation risk
 
-> Superseded by the realignment on route `ai`, below ("Realignment on route `ai`"): the gateway serves the aliases at `http://gb10-2:3000/<alias>/v1` again.
+> Superseded by the realignment on route `ai`, below ("Realignment on route `ai`"): the gateway
+> serves the aliases at `http://gb10-2:3000/<alias>/v1` again.
 
 The gateway moved to `llm` ahead of a likely deprecation of route `ai`, on this evidence, read at
 v1.7.0:
@@ -690,6 +693,10 @@ deprecation, and `[]` a removal. The check also counts an empty reading as a dif
 the recorded value is empty.
 
 ### For an upstream feature request
+
+> Since the realignment on route `ai`, below, the gateway serves `/<alias>/v1` through route `ai`:
+> "Today's workaround" here is the trial's `llm` form, not the gateway's. The issue still names
+> what would move the gateway to `llm` ([`docs/watch.md`](../watch.md)).
 
 The trial passed, but every gap it found against route `ai` was closed by a workaround, not by
 `llm` reaching parity. Before the architect files anything, the session searched every
@@ -841,12 +848,12 @@ reopened the task to realign rather than plan a new one. Each alias's base URL i
 ### The decision
 
 - **The docs recommend the routing form for path-based routing.** agentgateway's current page on
-  the two LLM configuration modes, `content/docs/standalone/latest/documentation/llm/configuration-modes.md`
-  in agentgateway/website (edited 2026-11-10, `d35d036`), is titled "Routing-based configuration
-  for LLMs", and its decision table has the row "Do you need custom, path-based routing (e.g.,
-  `/openai`, `/anthropic`)? | Yes | Routing-based configuration". Per-alias base URLs on one port
-  are exactly that. The same table sends "serve different content on different ports" to the
-  routing form too.
+  the two LLM configuration modes,
+  `content/docs/standalone/latest/documentation/llm/configuration-modes.md` in agentgateway/website
+  (edited 2026-11-10, `d35d036`), is titled "Routing-based configuration for LLMs", and its
+  decision table has the row "Do you need custom, path-based routing (e.g., `/openai`,
+  `/anthropic`)? | Yes | Routing-based configuration". Per-alias base URLs on one port are exactly
+  that. The same table sends "serve different content on different ports" to the routing form too.
 - **The UI's "legacy" label may not mean deprecation.** The MCP page of the same name, from the
   same edit, says the top-level `mcp` section "is a simplified form of the same MCP backend that
   `routes[].backends[].mcp` configures. It is not a different feature", yet the UI labels an
@@ -876,9 +883,10 @@ reopened the task to realign rather than plan a new one. Each alias's base URL i
   no `AGW_ALIAS_PORTS`; [the deploy](../../scripts/agentgateway-deploy.sh) publishes 3000 on the
   tailnet address. Its `sort -u` over key names stays.
 - **Probes.** [`rate-limit-agent`](../../gateway/agentgateway/probes/rate-limit-agent.yaml)
-  targets route `default/agent` again, as before slice 1. [`key-header`](../../gateway/agentgateway/probes/key-header.yaml)'s
-  anchor, `    apiKey:`, is the consumer gateway's and the only such line, so only its comment
-  changed; `in-flight-1` is unchanged.
+  targets route `default/agent` again, as before slice 3.
+  [`key-header`](../../gateway/agentgateway/probes/key-header.yaml)'s anchor, `    apiKey:`, is
+  the consumer gateway's and the only such line, so only its comment changed; `in-flight-1` is
+  unchanged.
 - **Helpers.** [`clients-lib.sh`](../../scripts/clients-lib.sh)'s `gw_base <alias>` gives
   `http://gb10-2:3000/<alias>/v1`, with no form selector, and keeps `logged`.
   [`measure-lib.sh`](../../scripts/measure-lib.sh)'s cap-cell reader picks `route=default/<alias>`
@@ -886,11 +894,21 @@ reopened the task to realign rather than plan a new one. Each alias's base URL i
 
 **The overlays, validated on the laptop.** The deploy has no dry path, so each overlay was rendered
 with the deploy's own overlay code and validated with the pinned image on the laptop, this time
-through `logged`, so the commands are below. The render script, `.state/routing/render-overlays.sh`
-(untracked), reads the overlay block out of `scripts/agentgateway-deploy.sh` with `sed`, runs it,
-and replaces each key marker with the sha256 of the key's name as a placeholder:
+through `logged`, so the commands are below. The render script, `.state/routing/render-overlays.sh`,
+is the session's own one-off, untracked and not a repository tool: the repository renders a config
+only inside the deploy. It reads the overlay block out of `scripts/agentgateway-deploy.sh` with
+`sed`, runs it, and replaces each key marker with the sha256 of the key's name as a placeholder.
+In full, as run:
 
 ```bash
+#!/usr/bin/env bash
+# Renders config.yaml with the named overlays the deploy's way, for a laptop --validate-only run:
+# the deploy's own overlay code, read from scripts/agentgateway-deploy.sh, and each key marker
+# replaced by a placeholder hash, the sha256 of the key's name. Writes .state/routing/render/<out>.
+# Usage: bash .state/routing/render-overlays.sh <out> [<overlay>...]
+set -euo pipefail
+out=$1
+shift
 config=gateway/agentgateway/config.yaml
 eval "$(sed -n '/^# The overlays, applied/,/^done$/p' scripts/agentgateway-deploy.sh)"
 marker='^(.*)sha256:@@([a-z0-9-]+)@@(.*)$'
@@ -901,6 +919,7 @@ for line in "${lines[@]}"; do
   fi
   printf '%s\n' "$line"
 done >".state/routing/render/$out.yaml"
+echo "rendered .state/routing/render/$out.yaml"
 ```
 
 The base config, `key-header`, `rate-limit-agent`, `in-flight-1`, and `rate-limit-agent` with
@@ -1484,7 +1503,9 @@ local `jq` greps over the two lists, by gap.
 
 ### 2026-11-16 · the realignment on route `ai`
 
-The overlay renders and laptop validations, the deploy (the container recreated for the ports), the checks, the 429 probe and its removal, the tiers, the released infer, the docs reads, and the watch rerun:
+The overlay renders and laptop validations, the deploy (the container recreated for the ports),
+the checks, the 429 probe and its removal, the tiers, the released infer, the docs reads, and the
+watch rerun:
 
 ```text
 + 2026-11-16T11:29:56-05:00 laptop: source scripts/clients-lib.sh
