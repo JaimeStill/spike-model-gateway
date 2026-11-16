@@ -251,8 +251,7 @@ Door          two-way, except what reached Azure:
 
 ## Progress
 
-slices 2/4 committed (slice 2 done: overflow on all four aliases, tiers on Azure (go-ai 10/10/1, infer 9/4/1, parity gaps), back to rows 14:37:03, C-agent recorded as run, C-vision dropped, Azure groups evict on 429 (validated, not shown live); Azure count 180/300, 429 x2845 separate; slice 2 finding section pending, written with slice 3) · standards — · spec — · editor —
-slice 3 WIP, uncommitted and not deployed: the implementer was stopped while adding the UI tunnel mise task. It had changed config.yaml, mise.toml, clients-lib.sh and measure-lib.sh, and added bench/{bulk-vision-120,bulk-vision-150,limited-embed}.yaml and probes/{bulk-budget-low,bulk-rate-low,priority-flat}.yaml. The slice 2 finding section is not started. Paused for the architect (2026-11-16 afternoon).
+slices 3/4 committed (slices 1–2 done; slice 3: a69766b and 4cb9e52 deployed 16:15:59 on a direct tailnet path; behaviors 13–17 shown live; A: audio RTFx median 5.38 beside embedding held to 34/s, anchors 5.28 direct and 6.46 gateway; B: agent ITL median 47.05 ms beside bulk vision, anchors 47.63 and 48.54; D: interactive vision median latency 10.47 s with priority against 11.87 s flat, TTFT 2.61 against 3.55 s, missing the 10 s mark by 0.47 s on 7 requests; Azure 0 in slice 3, count 180/300; next: slice 3 finding section and the slice 4 walkthrough) · standards — · spec — · editor —
 
 ## Decisions
 
