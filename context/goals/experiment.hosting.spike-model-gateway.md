@@ -82,7 +82,7 @@ Door          two-way: one config file, the losing form is a deletion,
 
 ## Progress
 
-slices 0/4 committed · standards — · spec — · editor —
+slices 1/4 committed (00d340d: llm trial, interim verdict pass) · standards — · spec — · editor — · awaiting the architect on the transcription escalation
 
 ## Decisions
 
