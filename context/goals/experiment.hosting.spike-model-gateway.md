@@ -82,7 +82,7 @@ Door          two-way: one config file, the losing form is a deletion,
 
 ## Progress
 
-slices 3/4 committed (00d340d trial, 2deeca6 transcription, fbb5796 tiers and cells, 6c4bbe9 d9063fe c138802 settled form and watch register, upstream survey) · standards running · spec — · editor — · walkthrough (slice 4) after the reviews
+slices 3/4 committed · standards ✓ (ccc398d, 74f57a1) · spec ✓ (behaviors 1–11 met; context/README.md gap closed by the editor) · editor ✓ · slice 4, the architect's walkthrough, next
 
 ## Decisions
 
@@ -232,6 +232,10 @@ slices 3/4 committed (00d340d trial, 2deeca6 transcription, fbb5796 tiers and ce
 - routing: the verdict is `llm`: behaviors 1–6 hold. The one flagged figure, vision's median request latency `llm` +2.45 ms over route `ai` against a 1.78 ms direct spread, is accepted by the architect (2026-11-16) as noise-sized on a 4.7 s request.
 - routing: each model's authorization reads `proxy.listener.name`, not `proxy.gateway.name`: standalone agentgateway makes each `gateways` entry a listener of one gateway, `default`. Every model lists all four formats, audio included, since agentgateway classifies `/v1/chat/completions` before `passthrough`. The route form keeps its prefix match and refuses off-list paths with a conditional `directResponse` 404, since a prefix rewrite needs a prefix match.
 - routing: before any upstream issue, the session searched every agentgateway issue and pull request (2026-11-16). Only one gap has nothing upstream: several model routers per listener in standalone `llm`, which Kubernetes has (agentgateway#2973). The finding's "For an upstream feature request" holds the facts for the architect to file it in their own words. Per-model limits are agentgateway#4307's (comment there if priority needs them), typed parsing is #4185's, and `/models` scoping is closed (#2719).
+- routing: the watch register keeps the always-passthrough entry (#4185) although the trial
+  passed, where the brief named it only on a fallback: `llm` parses chat, Messages, Responses, and
+  embeddings as typed requests and adds `include_usage` to streams, so the release carrying #4185
+  is re-checked before any upgrade.
 
 ## Pending edits
 
@@ -239,3 +243,16 @@ slices 3/4 committed (00d340d trial, 2deeca6 transcription, fbb5796 tiers and ce
   `models.md` are stale since its pull request #17: requests to the four standing rows now name the
   alias, while the guide's examples send the Hugging Face repository. This spike changes only
   `host/` there, so the fix is left to the experiment's intake.
+- coordinator · v1.ai.hosting: agentgateway's route `ai` backends are UI-labelled "legacy", the
+  docs moved to the `llm` section (website#1091), `binds` was deprecated without parity (#3204),
+  and there is no deprecation policy (#2767, closed as premature); since 1.7 the Kubernetes model
+  form is called the recommended one (#4307). The gateway's config form may change under it;
+  spike-model-gateway's watch register (`docs/watch.md`) tracks it.
+- coordinator · experiment.hosting intake: propose the watch register as a shared feature for the
+  infrastructure repositories (architect, 2026-11-16): one entry per dependency for anticipated
+  capabilities, deprecations, and other changes that would affect the infrastructure we maintain,
+  with a read-only `gh` check run at each PLAN beside currency.
+- coordinator · roadmap: the spike's summary and its tasks' wording change from `/<alias>/v1` to
+  each alias's own port, `http://<gateway>:<port>/v1`, whose `/models` lists only that alias
+  (routing's `llm` form); priority's summary "in the form routing settles" can name the `llm`
+  section.
