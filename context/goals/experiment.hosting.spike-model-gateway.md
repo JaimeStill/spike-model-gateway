@@ -1,88 +1,15 @@
 # goal · experiment.hosting.spike-model-gateway
 
-- **State:** brief ready
-- **Task:** routing
-- **Branch:** routing
+- **State:** idle
+- **Task:** none
+- **Branch:** none
 
 ## Tasks
 
 1. [x] agentgateway
-2. [ ] routing
+2. [x] routing
 3. [ ] priority
 4. [ ] answer
-
-## Task brief · routing
-
-```
-Problem       agentgateway serves the four aliases through route `ai`
-              backends, which its UI labels "legacy". Upstream has
-              deprecated a form without parity before (`binds`, #3204)
-              and has no deprecation policy (#2767). Its new features
-              (virtual models, per-key model lists) live only in the
-              `llm` section. priority needs the form settled first.
-Behaviors
-  1. The `llm` section serves each alias on its own port (agent 3010,
-     vision 3011, audio 3012, embedding 3013); each base URL's
-     /models lists exactly its alias.
-  2. Each alias's row answers chat, streamed chat with usage,
-     Messages, Responses, vision chat, audio chat, multipart
-     transcription, and embeddings; a model named on another alias's
-     port is refused with 403.
-  3. go-ai's and infer's integration tiers pass with only base URLs
-     and keys changed, and infer with no model sends to the one
-     listed.
-  4. With a valid key, a path outside the serving endpoints is
-     refused: 403 on the alias ports, 404 on the route form. A
-     missing or revoked key gets 401 on every port.
-  5. A request-rate limit on one alias alone answers 429 with
-     Retry-After there while the other aliases keep answering.
-  6. The configuration passes the pinned image's validation and uses
-     only documented fields.
-  7. Verdict: `llm` stays only if 1–6 all hold; otherwise the config
-     returns to route `ai` (/<alias>/v1 on one port, other paths
-     404), and the finding lists each unmet behavior with its
-     evidence for the architect's upstream issue.
-  8. Every access-log line carries the reply's Retry-After without
-     an overlay, and the 503 probe still applies on its own.
-  9. If `llm` stays: O-embed and O-vision run direct, route `ai`,
-     `llm`, direct, back to back in one session; each figure is
-     reported beside the direct runs' spread, and an `llm` figure
-     beyond route `ai` by more than it is flagged for the architect.
-  10. A watch register tracks any dependency for anticipated
-      capabilities, deprecations, and other changes; a read-only
-      check prints each entry's upstream issues and PRs and its
-      watched release fields beside the recorded values. First
-      entries: route `ai`'s deprecation risk; `llm` gaining
-      per-prefix model lists or several prefixes; on a fallback, the
-      release carrying always-passthrough (#4185).
-  11. The base-URL choice is recorded in the spike's documents, with
-      coordinator pending edits: the deprecation risk for
-      v1.ai.hosting, and the register as a shared feature.
-Test seams    the gateway's consumer ports over HTTP through the step
-              helpers (curl, go-ai's tier, infer, GuideLLM); the watch
-              check's output
-Slices
-  1. The `llm` trial: alias ports beside route `ai`, the allow-list
-     on both forms, the log field; behaviors 1, 2, 4, 5, 6, 8 and an
-     interim verdict
-  2. Tiers through the surviving form (3), the final verdict (7),
-     and, if `llm` stays, the benchmark (9)
-  3. Settle and record: losing form deleted, helpers and documents on
-     the winner, the watch register and its check, the finding, the
-     pending edits (10, 11)
-  4. Walkthrough, run by the architect from the finding
-Out of scope  priority's overflow, budgets, include_usage, embedding's
-              34 rps limit; dot-segment hardening (answer); filing the
-              upstream issue (the architect's); any spike-model-engines
-              host/ change; an agentgateway upgrade; deprecation checks
-              in currency; any benchmark beyond behavior 9
-Door          two-way: one config file, the losing form is a deletion,
-              and the port change only recreates the container
-```
-
-## Progress
-
-slices 4/4 committed · standards ✓ · spec ✓ · editor ✓ · walkthrough ✓ (architect, 10:46–10:50, every step as expected)
 
 ## Decisions
 
