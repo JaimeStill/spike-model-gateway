@@ -15,6 +15,11 @@ description = "Report every pin behind its latest, exiting nonzero if any"
 run = "scripts/currency.sh"
 quiet = true
 
+[tasks.watch]
+description = "Report each watch entry's upstream state and watched release fields beside the recorded values, exiting nonzero if any differ; reads the network, writes nothing"
+run = "scripts/watch.sh"
+quiet = true
+
 [tasks.agentgateway-deploy]
 description = "Deploy agentgateway to gb10-2 over Tailscale SSH, idempotently, printing each command run"
 run = "scripts/agentgateway-deploy.sh"
