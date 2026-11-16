@@ -6,8 +6,8 @@ keeps it only if behaviors 1–6 of the task brief all hold, and otherwise retur
 (evidence 1 and 8 of [`context/README.md`](../../context/README.md#the-evidence)). This finding
 holds slice 1, the trial; slices 2 and 3 add the tiers, the final verdict, and the settled form.
 
-- **Measured:** 2026-11-16, 07:54–07:59 local time, from the laptop. Every command is under
-  "Commands as run".
+- **Measured:** 2026-11-16, 07:54–07:59 local time, from the laptop, and the transcription
+  verification at 09:06–09:08. Every command is under "Commands as run".
 - **Gateway:** agentgateway v1.7.0, `cr.agentgateway.dev/agentgateway:v1.7.0`, on gb10-2,
   configured from [`gateway/agentgateway/config.yaml`](../../gateway/agentgateway/config.yaml).
 - **Rows:** as in the agentgateway task's finding
@@ -93,7 +93,7 @@ agentgateway's docs show it only in example log lines (`standalone/llm/arize.md`
 | Behavior | Result | Evidence |
 | --- | --- | --- |
 | 1. Each port's `/v1/models` lists exactly its alias | pass | `["agent"]`, `["vision"]`, `["audio"]`, `["embedding"]` on 3010–3013 at 07:55:12. The route form lists the same at 07:54:48. |
-| 2. The pass-through matrix on each port; another alias's model refused with 403 | pass (one row gap) | Every request answers on both forms, and on 3010 `model: vision` gets 403 `model_authorization_denied`. The audio row serves no `/v1/audio/transcriptions` (404 direct, route, and `llm` alike); the gateway forwarded it. |
+| 2. The pass-through matrix on each port; another alias's model refused with 403 | pass; transcription by the gateway's handling only | Every request answers on both forms, and on 3010 `model: vision` gets 403 `model_authorization_denied`. Transcription: the gateway delivers the multipart request to the audio row whole on both forms (192,398 bytes in, 192,398 at the row) and refuses `model: vision` on 3012 with 403, but no row serves transcription at vLLM v0.33.0: Gemma 4 doesn't implement it ("Transcription, verified"). |
 | 4. Non-serving paths refused (403 `llm`, 404 route); missing or revoked key 401 everywhere | pass | 9 paths on 3010 get 403, 7 paths on 3000 get 404; no key gets 401 on all five ports; `bench` revoked gets 401 on all five ports and 200 once restored |
 | 5. A rate limit on one alias alone: 429 with Retry-After there, the others answer | pass | 3010: 200, 200, then 429 `retry-after: 3` twice; 3011 200 throughout, and 3012, 3013, and route `agent` 200 |
 | 6. The pinned image validates the config; documented fields only | pass | `Configuration is valid!` on every deploy. An undocumented field is refused: ``gateways.agent: unknown field `undocumentedField` ``. Every field is in `schema/config.json`, and `proxy.listener.name` is in the CEL reference. |
@@ -164,8 +164,9 @@ forwarded the request to `framework:8001`. The row answered 404:
 ```
 
 The same multipart request naming `vision` on 3012 got 403 "Model authorization denied", so the
-router reads a multipart model and holds it to the port. The architect decides whether behavior 2
-needs a row that serves transcription.
+router reads a multipart model and holds it to the port. The architect counts behavior 2's
+transcription line as met by the gateway's handling only (2026-11-16), and asked for it verified:
+"Transcription, verified", below.
 
 **The base URL's `/v1`.** `params.baseUrl` is the upstream base path, and a format's path is
 appended to it. The schema's own example: `https://api.openai.com/v1` sends completions to
@@ -185,6 +186,94 @@ vLLM doesn't serve. Each base URL ends in `/v1`. A `detect` request keeps its ow
   gateway reads the stream's tokens from it.
 - **It logs the usage it reads** on each line, as the route form does: `gen_ai.usage.input_tokens=73
   gen_ai.usage.output_tokens=82 gen_ai.usage.reasoning_tokens=65` for the agent chat.
+
+### Transcription, verified
+
+Behavior 2's transcription line is met by the gateway's handling only (architect, 2026-11-16):
+the gateway delivers the request to the right row, and no row serves transcription at vLLM
+v0.33.0. Three facts, checked at 09:06–09:08, with no host changed and no row restarted.
+
+**1. The audio row registers no transcription route.** Its own route list,
+`GET framework:8001/openapi.json` (09:06:48), has 23 paths and no `/v1/audio/*`: the `/v1` ones are
+`chat/completions`, `chat/completions/batch`, `completions`, `decisions`, `messages`,
+`messages/count_tokens`, `models`, `responses` (with its `{response_id}` and `cancel`), and
+`systemone`. `/v1/models` lists `audio`, root `google/gemma-4-E4B-it`, and `/version` is `0.33.0`.
+The row's start log says so too (container `vllm-audio`, 11-13):
+
+```text
+(APIServer pid=1) INFO 11-13 16:26:41 [model.py:744] Resolved architecture: Gemma4ForConditionalGeneration
+(APIServer pid=1) INFO 11-13 16:27:37 [entry.py:135] Supported tasks: ['generate']
+```
+
+**2. Why: Gemma 4 doesn't implement transcription at v0.33.0.** vLLM registers the transcription
+and translation routers only for a model whose supported tasks include `transcription`, and a
+model has that task only when its class implements `SupportsTranscription`. Read at the `v0.33.0`
+tag, commit `4ba787ec99`, the commit the row's image is built from (spike-model-engines
+`host/vllm.env`, and `host/vllm-rocm-audio/Dockerfile`, which builds on
+`vllm/vllm-openai-rocm:v0.33.0`):
+
+- `vllm/entrypoints/launchers/api_server/routers.py`: `if "transcription" in supported_tasks or
+  "realtime" in supported_tasks:` calls `register_speech_to_text_api_routers`.
+- `vllm/entrypoints/speech_to_text/factories.py`: that function includes the transcription and
+  translation routers only `if "transcription" in supported_tasks`.
+- `vllm/v1/worker/gpu/model_states/interface.py`, `get_supported_generation_tasks`: appends
+  `transcription` only `if supports_transcription(self.model)`, which is
+  `getattr(model, "supports_transcription", False)`, the class attribute the
+  `SupportsTranscription` protocol sets (`vllm/model_executor/models/interfaces.py`).
+- `vllm/model_executor/models/gemma4_mm.py`: `Gemma4ForConditionalGeneration`, the architecture
+  the row resolves (`registry.py`), implements `SupportsMultiModal`, `SupportsQuant`,
+  `SupportsPP`, `SupportsLoRA`, `SupportsEagle3`, and `SupportsEncoderCudaGraph`, not
+  `SupportsTranscription`, and the file never names transcription.
+- `vllm/model_executor/models/gemma3n_mm.py`: the older family's
+  `Gemma3nForConditionalGeneration` does implement `SupportsTranscription`. A Gemma 3n row would
+  register the route; Gemma 4 E4B can't.
+
+No server flag adds the task: it comes from the model class alone. No release follows v0.33.0
+yet, and `gemma4_mm.py` on vLLM's main branch (`a4910b4128`, 2026-11-16) still doesn't implement
+`SupportsTranscription`.
+
+**3. The gateway delivers the multipart request whole.** The same multipart request (`model`, and
+the 192,078-byte 6 s WAV as `file`) was sent direct, through route `ai`, through `llm`, and naming
+`vision` on 3012 (09:08:18–09:08:20). The row's `/metrics` counts each request whose path matches
+no route under `handler="none"`, with its `Content-Length` (prometheus-fastapi-instrumentator's
+default metrics, which `vllm/entrypoints/serve/instrumentator/metrics.py` installs), read before and
+after each request:
+
+| Request | Reply | Laptop sent (`size_upload`) | At the row: requests, `Content-Length` |
+| --- | --- | --- | --- |
+| direct, `framework:8001` | 404 `{"detail":"Not Found"}` | 130,854 | +1, 192,398 |
+| route `ai`, `:3000/audio/v1/...` | 404 `{"detail":"Not Found"}` | 192,398 | +1, 192,398 |
+| `llm`, `:3012/v1/...` | 404 `{"detail":"Not Found"}` | 192,398 | +1, 192,398 |
+| `llm`, `:3012`, `model=vision` | 403 `model_authorization_denied` | 192,399 | +0 |
+
+The request is 192,398 bytes on both forms, sent whole by the laptop and arriving at the row with
+the same length. Direct, the row answers 404 before it reads the body, so curl stops uploading
+after 130,854 bytes; the gateway reads the whole body to find the multipart `model`, so the laptop
+sends all of it. The `vision` request is one byte longer for its model name, is refused by the
+gateway, and never reaches the row. The row's counter stood at 3 requests and 577,194 bytes before,
+three times 192,398: slice 1's three forwarded transcriptions arrived the same way. The row never
+reads a body on an unregistered path, so the evidence is the length the row received, not its
+bytes.
+
+The gateway's lines for the three gateway requests (09:08:29), both forms forwarding to the row as
+a `transcription` for `audio`, and the `vision` request answered by the gateway itself:
+
+```text
+2026-11-16T14:08:19.608242Z	info	request gateway=default/default listener=consumer route=default/audio endpoint=framework:8001 src.addr=<laptop> http.method=POST http.host=gb10-2 http.path=/audio/v1/audio/transcriptions http.version=HTTP/1.1 http.status=404 protocol=llm gen_ai.operation.name=transcription gen_ai.provider.name=custom gen_ai.request.model=audio duration=611ms
+2026-11-16T14:08:20.296515Z	info	request gateway=default/default listener=audio route=internal/llm:request endpoint=framework:8001 src.addr=<laptop> http.method=POST http.host=gb10-2 http.path=/v1/audio/transcriptions http.version=HTTP/1.1 http.status=404 protocol=llm gen_ai.operation.name=transcription gen_ai.provider.name=custom gen_ai.request.model=audio agw.ai.original_model=audio duration=304ms
+2026-11-16T14:08:20.962891Z	info	request gateway=default/default listener=audio route=internal/llm:request src.addr=<laptop> http.method=POST http.host=gb10-2 http.path=/v1/audio/transcriptions http.version=HTTP/1.1 http.status=403 protocol=llm agw.ai.original_model=vision reason=DirectResponse duration=275ms
+```
+
+and the row's own log over the same window, three POSTs, the caller's address replaced with
+`<client>`:
+
+```text
+INFO:     <client> - "POST /v1/audio/transcriptions HTTP/1.1" 404 Not Found
+INFO:     <client> - "POST /v1/audio/transcriptions HTTP/1.1" 404 Not Found
+INFO:     <client> - "POST /v1/audio/transcriptions HTTP/1.1" 404 Not Found
+```
+
+The access log carries no request size, and no probe overlay adds one, so the size is the row's.
 
 ### Behavior 4: paths and keys
 
@@ -549,4 +638,35 @@ copy removed, and the stream usage comparison:
 + 2026-11-16T07:59:48-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -N -H Content-Type: application/json -d {"model":"agent","stream":true,"messages":[{"role":"user","content":"Count from 1 to 3."}],"max_tokens":120} http://gb10-2:3010/v1/chat/completions
 + 2026-11-16T07:59:50-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -N -H Content-Type: application/json -d {"model":"agent","stream":true,"messages":[{"role":"user","content":"Count from 1 to 3."}],"max_tokens":120} http://gb10-2:3000/agent/v1/chat/completions
 + 2026-11-16T07:59:51-05:00 laptop: curl -sS -N -H 'Content-Type: application/json' -d '{"model":"agent","stream":true,"messages":[{"role":"user","content":"Count from 1 to 3."}],"max_tokens":120}' http://gb10-1:8000/v1/chat/completions | grep -c '"usage":{'
+```
+
+### 2026-11-16 · transcription, verified
+
+The row's route list, model, and version, its log of slice 1's transcriptions and of its start, then
+the four transcriptions with the row's counter read before and after each, and the gateway's and the
+row's logs of them. One read of the row's `/metrics` between 09:06:49 and 09:08:07, to find the
+counter, is not in the log. The vLLM sources were read with `gh api`, on the laptop, and are cited
+where they are used:
+
+```text
++ 2026-11-16T09:06:48-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:06:48-05:00 laptop: curl -sS http://framework:8001/openapi.json > .state/routing/transcription/openapi.json && jq -r '.paths | keys[]' .state/routing/transcription/openapi.json
++ 2026-11-16T09:06:49-05:00 laptop: curl -sS http://framework:8001/v1/models | jq -c '[.data[] | {id, root, max_model_len}]'
++ 2026-11-16T09:06:49-05:00 laptop: curl -sS http://framework:8001/version
++ 2026-11-16T09:08:07-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:08:07-05:00 framework: docker logs --since 2026-11-16T12:55:00Z --until 2026-11-16T12:57:00Z vllm-audio 2>&1 | grep -F /v1/audio/transcriptions | sed -E 's/[0-9]+(\.[0-9]+){3}:[0-9]+/<client>/'
++ 2026-11-16T09:08:08-05:00 framework: docker logs vllm-audio 2>&1 | grep -E 'Resolved architecture|Supported tasks|supported_tasks' | head -5
++ 2026-11-16T09:08:18-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:08:18-05:00 laptop: curl -sS http://framework:8001/metrics | grep -E '^http_request(s_total|_size_bytes_(count|sum))\{handler="none"'
++ 2026-11-16T09:08:18-05:00 laptop: curl -sS -w '\n%{http_code} %{size_upload}\n' -F model=audio -F file=@.state/routing/assets/clip-6s.wav http://framework:8001/v1/audio/transcriptions
++ 2026-11-16T09:08:18-05:00 laptop: curl -sS http://framework:8001/metrics | grep -E '^http_request(s_total|_size_bytes_(count|sum))\{handler="none"'
++ 2026-11-16T09:08:18-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -w \n%{http_code} %{size_upload}\n -F model=audio -F file=@.state/routing/assets/clip-6s.wav http://gb10-2:3000/audio/v1/audio/transcriptions
++ 2026-11-16T09:08:19-05:00 laptop: curl -sS http://framework:8001/metrics | grep -E '^http_request(s_total|_size_bytes_(count|sum))\{handler="none"'
++ 2026-11-16T09:08:19-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -w \n%{http_code} %{size_upload}\n -F model=audio -F file=@.state/routing/assets/clip-6s.wav http://gb10-2:3012/v1/audio/transcriptions
++ 2026-11-16T09:08:20-05:00 laptop: curl -sS http://framework:8001/metrics | grep -E '^http_request(s_total|_size_bytes_(count|sum))\{handler="none"'
++ 2026-11-16T09:08:20-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -w \n%{http_code} %{size_upload}\n -F model=vision -F file=@.state/routing/assets/clip-6s.wav http://gb10-2:3012/v1/audio/transcriptions
++ 2026-11-16T09:08:20-05:00 laptop: curl -sS http://framework:8001/metrics | grep -E '^http_request(s_total|_size_bytes_(count|sum))\{handler="none"'
++ 2026-11-16T09:08:29-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:08:29-05:00 gb10-2: docker logs --since 2026-11-16T14:08:15Z --until 2026-11-16T14:08:25Z agentgateway 2>&1 | grep -F /v1/audio/transcriptions | sed -E 's/src\.addr=[^ ]+/src.addr=<laptop>/'
++ 2026-11-16T09:08:29-05:00 framework: docker logs --since 2026-11-16T14:08:15Z --until 2026-11-16T14:08:25Z vllm-audio 2>&1 | grep -F /v1/audio/transcriptions | sed -E 's/[0-9]+(\.[0-9]+){3}:[0-9]+/<client>/'
 ```
