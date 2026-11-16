@@ -82,7 +82,7 @@ Door          two-way: one config file, the losing form is a deletion,
 
 ## Progress
 
-slices 1/4 committed (00d340d: llm trial, interim verdict pass) · standards — · spec — · editor — · awaiting the architect on the transcription escalation
+slices 1/4 committed (00d340d: llm trial, interim verdict pass) · standards — · spec — · editor — · transcription verified (2deeca6) · slice 2 waits for the architect to watch
 
 ## Decisions
 
@@ -227,6 +227,7 @@ slices 1/4 committed (00d340d: llm trial, interim verdict pass) · standards —
   - Its read-only check, `mise run watch`, runs at every task's PLAN as its own block.
   - It is a script like currency.sh, using `gh` and `jq`, so it is not a new tool.
   - Rejected: a schema check inside currency, which would mix version gaps with upstream risk.
+- routing: behavior 2's transcription line is met by the gateway's handling only (architect, 2026-11-16, "but we should at least verify it"): the audio row (Gemma 4 E4B, vLLM v0.33.0) registers no `/v1/audio/*` route, since `Gemma4ForConditionalGeneration` doesn't implement `SupportsTranscription`; both forms forward the full multipart body (the row's `/metrics` counts its Content-Length) and `llm` refuses a wrong-alias model with 403. A row that serves transcription needs a different model, such as Gemma 3n.
 
 ## Pending edits
 
