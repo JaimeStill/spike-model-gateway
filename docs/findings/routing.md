@@ -4,10 +4,12 @@ Whether agentgateway's `llm` section can serve the four aliases the way the inli
 backends do, which agentgateway's UI labels "legacy". The task trials `llm` live beside route `ai`,
 keeps it only if behaviors 1–6 of the task brief all hold, and otherwise returns to route `ai`
 (evidence 1 and 8 of [`context/README.md`](../../context/README.md#the-evidence)). This finding
-holds slice 1, the trial; slices 2 and 3 add the tiers, the final verdict, and the settled form.
+holds slice 1, the trial, and slice 2, the tiers, the final verdict, and the overhead cells; slice 3
+adds the settled form.
 
 - **Measured:** 2026-11-16, 07:54–07:59 local time, from the laptop, and the transcription
-  verification at 09:06–09:08. Every command is under "Commands as run".
+  verification at 09:06–09:08; slice 2 at 09:13–09:30, on Tailscale's relay ("The network
+  path"). Every command is under "Commands as run".
 - **Gateway:** agentgateway v1.7.0, `cr.agentgateway.dev/agentgateway:v1.7.0`, on gb10-2,
   configured from [`gateway/agentgateway/config.yaml`](../../gateway/agentgateway/config.yaml).
 - **Rows:** as in the agentgateway task's finding
@@ -355,6 +357,205 @@ reads them as written. The `llm` route's name is in the docs only as log output.
   The deploy at 07:59:03 removed the overlay (`# overlays: none`), and every alias listed itself on
   both forms.
 
+## Results · slice 2
+
+### Final verdict
+
+| Behavior | Result | Evidence |
+| --- | --- | --- |
+| 1, 2, 4, 5, 6 | pass | slice 1, above |
+| 3. go-ai's and infer's tiers pass with only base URLs and keys changed; infer with no model sends to the one listed | pass | go-ai 20 passed, 0 failed, 1 skipped; infer 13 passed, 0 failed, 1 skipped; the one skip in each is the transcription route, which no row serves. `infer models` lists exactly its alias on each port, and a modelless `chat` or `embed` answers on each. |
+| 7. `llm` stays only if 1–6 all hold | **`llm` stays** | behaviors 1–6 all hold |
+| 9. O-embed and O-vision, direct, route `ai`, `llm`, direct | run; one figure flagged | every run exited 0 with no errored request; the `llm` − route `ai` difference is within the direct runs' spread on every figure but two: embedding's p95, beyond in `llm`'s favour, and vision's request latency median, +2.45 ms against a 1.78 ms spread, flagged below |
+
+**Behaviors 1–6 all hold, so the `llm` section stays**, served beside route `ai` as in the trial.
+Slice 3 settles the form. Nothing fell back, and no tier ran on route `ai`.
+
+Architect's call on the flagged figure: pending
+
+### Behavior 3: the tiers and the infer CLI
+
+go-ai's tier and infer's tier ran from a detached worktree of go-ai at `tools/infer/v0.1.0`
+(09:13:42), with all four roles on the `llm` form's base URLs, `http://gb10-2:3010/v1` to
+`http://gb10-2:3013/v1`, and the `go-ai` key. Nothing else changed from the agentgateway task's
+runs. The helpers' summaries:
+
+```text
+= 2026-11-16T09:14:52-05:00 goai_tier: goai-llm: exit 0
+= 2026-11-16T09:14:52-05:00 goai_tier: goai-llm: the key is not in .state/routing/clients/goai-llm.log
+= 2026-11-16T09:14:52-05:00 goai_tier: goai-llm: 20 passed, 0 failed, 1 skipped (top-level tests)
+= 2026-11-16T09:15:28-05:00 infer_tier: infer-llm: exit 0
+= 2026-11-16T09:15:28-05:00 infer_tier: infer-llm: the key is not in .state/routing/clients/infer-llm.log
+= 2026-11-16T09:15:28-05:00 infer_tier: infer-llm: 13 passed, 0 failed, 1 skipped (top-level tests)
+```
+
+The one skip in each is `TestTranscribeRoute`, for want of a transcription endpoint to point it at.
+go-ai's, as logged (infer's reads the same, from `media_test.go:56`):
+
+```text
+    transcribe_test.go:53: AI_TRANSCRIPTION_BASE_URL is unset: set it to the endpoint's API root, such as http://localhost:8000/v1
+--- SKIP: TestTranscribeRoute (0.00s)
+```
+
+`AI_TRANSCRIPTION_BASE_URL` is left unset because no row serves transcription at vLLM v0.33.0
+("Transcription, verified", above). The same subtest of `TestModels` skips for the same reason.
+`TestTranscribeChat`, audio through chat on 3012, passes in both tiers. A search of each tier's log
+for each of the three keys, read from its key file, finds none.
+
+**The released infer, with no `--model`.** `infer` v0.1.0, installed from its tag with `go
+install`, ran against each port with only `INFER_BASE_URL` and `INFER_TOKEN` set (09:15:35–09:15:37):
+
+- `infer models` listed exactly the port's alias on each of 3010–3013: `agent`, `vision`,
+  `audio`, `embedding`.
+- `infer chat` answered on agent, vision, and audio, each sent to the one model its port lists.
+- `infer embed "gateway routing"` on embedding returned one vector of 768 values.
+
+Those four steps' output was read live and is not kept on disk; the commands are under "Commands as
+run".
+
+### The network path
+
+**Every slice-2 request crossed Tailscale's DERP relay.** On this network the laptop had no direct
+path to either host. The stack record at 09:15:51 (`.state/routing/stack-2026-11-16.txt`):
+
+```text
+direct connection not established
+pong from gb10-2 (<addr>) via DERP(nyc) in 55ms
+direct connection not established
+pong from framework (<addr>) via DERP(nyc) in 53ms
+```
+
+Ten pings each at 09:16:03 went the same way, through DERP(nyc): 54–55 ms to gb10-2 and 60–81 ms
+to the Framework. `tailscale netcheck` reported `MappingVariesByDestIP: true`, a hard NAT, so no
+direct path could be made from this network. The agentgateway task's cells ran on a direct path,
+at 1 ms or under.
+
+**The architect's decision** (2026-11-16, an escalation answered during BUILD): run the cells now,
+on the relay. "We have to be okay with the idea that we're not always going to be on the direct
+network path."
+
+**What the relay does to the reading.** Each form's runs cross a different set of legs:
+
+| Cell | Direct runs | Gateway runs, both forms |
+| --- | --- | --- |
+| embedding | laptop → Framework, on the relay | laptop → gb10-2, on the relay, then gb10-2 → Framework |
+| vision | laptop → gb10-2, on the relay | laptop → gb10-2, on the relay; the row is on gb10-2 itself |
+
+- **Embedding: gateway against direct is not the gateway's overhead.** The direct runs cross the
+  laptop's relay leg to the Framework; the gateway runs cross its relay leg to gb10-2 and then
+  gb10-2's own leg to the Framework, whose path this session did not record. The two relay legs
+  differ by several ms and jitter independently, so `compare`'s gateway-against-direct figures
+  for embedding measure the paths as much as the gateway.
+- **Route `ai` against `llm` is the comparable figure.** Both forms run in one container on gb10-2
+  and reach the same row over the same legs. Their difference is the reading for behavior 9, set
+  beside the direct runs' spread as the measure of run-to-run noise.
+- **Vision: all four runs share the laptop's one relay leg to gb10-2.** The gateway's extra hop is
+  inside gb10-2, from the container to the row on the same host.
+
+The relay sets the scale too: an embedding request took about 78 ms here, against about 10 ms on
+the agentgateway task's direct path.
+
+**The host stack** at 09:15:51, from the same record: gb10-2 on kernel `7.0.0-1025-nvidia`, running
+`agentgateway` (`cr.agentgateway.dev/agentgateway:v1.7.0`) and `vllm-vision`
+(`vllm/vllm-openai:v0.33.0`); the Framework on kernel `7.2.15-1-omarchy`, running `vllm-embed`
+(`vllm/vllm-openai-rocm:v0.33.0`) and `vllm-audio`
+(`spike-model-engines/vllm-openai-rocm-audio:v0.33.0`). Both benchmarked rows answered `/version`
+with `0.33.0`.
+
+### Behavior 9: the overhead cells
+
+Run on 2026-11-16: O-embed from 09:17:30 to 09:22:49, then O-vision from 09:22:56 to 09:29:57, each
+cell's four runs back to back in the order direct-1, route `ai`, `llm`, direct-2.
+[`overhead-embed.yaml`](../../bench/overhead-embed.yaml) holds a constant 34 requests a second of
+512 prompt tokens for 60 s; [`overhead-vision.yaml`](../../bench/overhead-vision.yaml) holds 4
+concurrent streams of a 1440p JPEG, 200 prompt and 100 output tokens, for 90 s. Each seed comes
+from the run's name. All eight runs exited 0, under the 10-minute cap, with no errored request,
+and the bench key was in none of the four gateway runs' files. The figures are `summarize`'s, read
+again from each run's `result.json` after the session, and match the log.
+
+**O-embed.** Latency in ms; the gateway's CPU in docker's figure, 100% being one of gb10-2's cores,
+from the samples inside the benchmark:
+
+| Run | Base URL | Requests ok / errored / incomplete | Latency median | Latency p95 | Gateway CPU % median / max | Gateway memory MiB median / max |
+| --- | --- | --- | --- | --- | --- | --- |
+| `r-embed-direct-1` | `http://framework:8002/v1` | 2,039 / 0 / 2 | 77.69 | 89.05 | | |
+| `r-embed-route` | `http://gb10-2:3000/embedding/v1` | 2,038 / 0 / 2 | 73.95 | 153.92 | 2.86 / 3.47 (9 samples) | 30.8 / 33.6 |
+| `r-embed-llm` | `http://gb10-2:3013/v1` | 2,039 / 0 / 2 | 77.70 | 108.32 | 2.73 / 3.42 (9 samples) | 31.6 / 32.3 |
+| `r-embed-direct-2` | `http://framework:8002/v1` | 2,039 / 0 / 2 | 83.12 | 118.56 | | |
+
+**O-vision.** TTFT, ITL, and latency in ms:
+
+| Run | Base URL | Requests ok / errored / incomplete | TTFT median / p95 | ITL median / p95 | Latency median / p95 | Gateway CPU % median / max | Gateway memory MiB median / max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `r-vision-direct-1` | `http://gb10-2:8000/v1` | 72 / 0 / 4 | 1,411.91 / 1,628.77 | 33.43 / 35.09 | 4,717.01 / 5,102.50 | | |
+| `r-vision-route` | `http://gb10-2:3000/vision/v1` | 72 / 0 / 4 | 1,370.89 / 1,426.46 | 33.77 / 35.21 | 4,719.01 / 4,778.92 | 1.96 / 2.38 (14 samples) | 30.3 / 31.8 |
+| `r-vision-llm` | `http://gb10-2:3011/v1` | 72 / 0 / 4 | 1,379.32 / 1,559.32 | 33.61 / 35.35 | 4,721.46 / 4,833.84 | 1.52 / 2.59 (14 samples) | 32.4 / 34.7 |
+| `r-vision-direct-2` | `http://gb10-2:8000/v1` | 72 / 0 / 4 | 1,370.33 / 1,426.39 | 33.73 / 35.26 | 4,715.23 / 4,758.03 | | |
+
+The incomplete requests are those running when each benchmark's time ended: 2 an embedding run, 4
+a vision run, one per stream. No gateway sample failed. At its most the gateway used under 3.5% of
+one core and under 35 MiB, on either form.
+
+**`compare`, each gateway run against the direct pair** (09:30:00–09:30:01). "Adds" is
+`gateway − (direct-1 + direct-2) / 2`, and "spread" is `|direct-1 − direct-2|`:
+
+```text
++ 2026-11-16T09:30:00-05:00 laptop: compare r-embed-direct-1 r-embed-route r-embed-direct-2
+= 2026-11-16T09:30:00-05:00 compare: request_latency median ms: direct 77.69, 83.12, spread 5.43; gateway 73.95, adds -6.45, beyond the spread
+= 2026-11-16T09:30:00-05:00 compare: request_latency p95 ms: direct 89.05, 118.56, spread 29.51; gateway 153.92, adds 50.12, beyond the spread
++ 2026-11-16T09:30:00-05:00 laptop: compare r-embed-direct-1 r-embed-llm r-embed-direct-2
+= 2026-11-16T09:30:00-05:00 compare: request_latency median ms: direct 77.69, 83.12, spread 5.43; gateway 77.7, adds -2.7, within the spread
+= 2026-11-16T09:30:00-05:00 compare: request_latency p95 ms: direct 89.05, 118.56, spread 29.51; gateway 108.32, adds 4.51, within the spread
++ 2026-11-16T09:30:01-05:00 laptop: compare r-vision-direct-1 r-vision-route r-vision-direct-2
+= 2026-11-16T09:30:01-05:00 compare: time_to_first_token median ms: direct 1411.91, 1370.33, spread 41.58; gateway 1370.89, adds -20.23, within the spread
+= 2026-11-16T09:30:01-05:00 compare: time_to_first_token p95 ms: direct 1628.77, 1426.39, spread 202.37; gateway 1426.46, adds -101.12, within the spread
+= 2026-11-16T09:30:01-05:00 compare: inter_token_latency median ms: direct 33.43, 33.73, spread 0.3; gateway 33.77, adds 0.19, within the spread
+= 2026-11-16T09:30:01-05:00 compare: inter_token_latency p95 ms: direct 35.09, 35.26, spread 0.18; gateway 35.21, adds 0.04, within the spread
+= 2026-11-16T09:30:01-05:00 compare: request_latency median ms: direct 4717.01, 4715.23, spread 1.78; gateway 4719.01, adds 2.89, beyond the spread
+= 2026-11-16T09:30:01-05:00 compare: request_latency p95 ms: direct 5102.5, 4758.03, spread 344.46; gateway 4778.92, adds -151.35, within the spread
++ 2026-11-16T09:30:01-05:00 laptop: compare r-vision-direct-1 r-vision-llm r-vision-direct-2
+= 2026-11-16T09:30:01-05:00 compare: time_to_first_token median ms: direct 1411.91, 1370.33, spread 41.58; gateway 1379.32, adds -11.79, within the spread
+= 2026-11-16T09:30:01-05:00 compare: time_to_first_token p95 ms: direct 1628.77, 1426.39, spread 202.37; gateway 1559.32, adds 31.75, within the spread
+= 2026-11-16T09:30:01-05:00 compare: inter_token_latency median ms: direct 33.43, 33.73, spread 0.3; gateway 33.61, adds 0.03, within the spread
+= 2026-11-16T09:30:01-05:00 compare: inter_token_latency p95 ms: direct 35.09, 35.26, spread 0.18; gateway 35.35, adds 0.18, within the spread
+= 2026-11-16T09:30:01-05:00 compare: request_latency median ms: direct 4717.01, 4715.23, spread 1.78; gateway 4721.46, adds 5.34, beyond the spread
+= 2026-11-16T09:30:01-05:00 compare: request_latency p95 ms: direct 5102.5, 4758.03, spread 344.46; gateway 4833.84, adds -96.42, within the spread
+```
+
+For embedding these are path readings, not the gateway's cost, as above. For vision both forms'
+request latency median reads "beyond" a spread of 1.78 ms, route `ai` by 2.89 ms and `llm` by
+5.34 ms.
+
+**`llm` against route `ai`, the behavior-9 reading.** "`llm` − route" is `llm`'s figure minus route
+`ai`'s, in ms; a positive difference is `llm` slower. "Spread" is the direct runs' spread, as above:
+
+| Cell | Figure | Route `ai` | `llm` | `llm` − route | Spread | Reading |
+| --- | --- | --- | --- | --- | --- | --- |
+| embedding | latency median | 73.95 | 77.70 | +3.75 | 5.43 | within |
+| embedding | latency p95 | 153.92 | 108.32 | −45.60 | 29.51 | beyond, in `llm`'s favour |
+| vision | TTFT median | 1,370.89 | 1,379.32 | +8.43 | 41.58 | within |
+| vision | TTFT p95 | 1,426.46 | 1,559.32 | +132.86 | 202.37 | within |
+| vision | ITL median | 33.77 | 33.61 | −0.16 | 0.30 | within |
+| vision | ITL p95 | 35.21 | 35.35 | +0.14 | 0.18 | within |
+| vision | latency median | 4,719.01 | 4,721.46 | +2.45 | 1.78 | **beyond: flagged** |
+| vision | latency p95 | 4,778.92 | 4,833.84 | +54.92 | 344.46 | within |
+
+The gateway's CPU median: embedding, route `ai` 2.86% and `llm` 2.73%; vision, route `ai` 1.96% and
+`llm` 1.52%. Its memory median: embedding 30.8 and 31.6 MiB, vision 30.3 and 32.4 MiB. Neither form
+costs measurably more to run.
+
+**Embedding's p95 is relay jitter, not a form property.** Route `ai`'s p95, 153.92 ms, is above
+both direct runs' p95s, 89.05 and 118.56 ms, while its median, 73.95 ms, is below both direct
+medians. A tail that wide on the run with the lowest median is what jitter on the relay legs
+gives. Read as a property of either form, it would favour `llm`; it is read as neither.
+
+**The flagged figure: vision's request latency median.** `llm` took 2.45 ms longer than route
+`ai` at the median, against a 1.78 ms spread between the direct runs. That is about 0.05% of a
+4.72 s request, and the spread it exceeds is itself 0.04%. Both forms read "beyond" the direct runs
+on this figure, by 2.89 and 5.34 ms, and every other vision figure, TTFT and ITL included, is
+within. Per behavior 9, an `llm` figure beyond route `ai` by more than the spread is the
+architect's call, not a fail.
+
 ## Commands as run
 
 Every command the log holds, as logged, with its time, from `.state/routing/commands-2026-11-16.log`,
@@ -669,4 +870,85 @@ where they are used:
 + 2026-11-16T09:08:29-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-16T09:08:29-05:00 gb10-2: docker logs --since 2026-11-16T14:08:15Z --until 2026-11-16T14:08:25Z agentgateway 2>&1 | grep -F /v1/audio/transcriptions | sed -E 's/src\.addr=[^ ]+/src.addr=<laptop>/'
 + 2026-11-16T09:08:29-05:00 framework: docker logs --since 2026-11-16T14:08:15Z --until 2026-11-16T14:08:25Z vllm-audio 2>&1 | grep -F /v1/audio/transcriptions | sed -E 's/[0-9]+(\.[0-9]+){3}:[0-9]+/<client>/'
+```
+
+### 2026-11-16 · the tiers and the infer CLI
+
+The go-ai worktree at `tools/infer/v0.1.0` and the released infer, go-ai's and infer's tiers on the
+`llm` form's base URLs, then infer with no `--model` on each port. Each tier helper logs the
+command it runs on the line after its own:
+
+```text
++ 2026-11-16T09:13:42-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:13:42-05:00 laptop: git -C ~/architecture/go-ai worktree add --detach .state/routing/go-ai tools/infer/v0.1.0
++ 2026-11-16T09:13:42-05:00 laptop: GOBIN=.state/routing/bin go install github.com/standards-lab/go-ai/tools/infer/cmd/infer@v0.1.0 && .state/routing/bin/infer version
++ 2026-11-16T09:13:51-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:13:51-05:00 laptop: goai_tier goai-llm agent vision audio embedding
++ 2026-11-16T09:13:51-05:00 laptop: cd .state/routing/go-ai/. && AI_AGENT_BASE_URL=http://gb10-2:3010/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_VISION_BASE_URL=http://gb10-2:3011/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3012/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3013/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/routing/clients/goai-llm.log
++ 2026-11-16T09:14:56-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:14:56-05:00 laptop: infer_tier infer-llm agent vision audio embedding
++ 2026-11-16T09:14:56-05:00 laptop: cd .state/routing/go-ai/tools/infer && AI_AGENT_BASE_URL=http://gb10-2:3010/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_VISION_BASE_URL=http://gb10-2:3011/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3012/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3013/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/routing/clients/infer-llm.log
++ 2026-11-16T09:15:31-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:15:35-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T09:15:35-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3010/v1 .state/routing/bin/infer models
++ 2026-11-16T09:15:35-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3011/v1 .state/routing/bin/infer models
++ 2026-11-16T09:15:36-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3012/v1 .state/routing/bin/infer models
++ 2026-11-16T09:15:36-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3013/v1 .state/routing/bin/infer models
++ 2026-11-16T09:15:36-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3010/v1 .state/routing/bin/infer chat Answer with one word: the capital of France?
++ 2026-11-16T09:15:37-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3011/v1 .state/routing/bin/infer chat Answer with one word: the color of the sky on a clear day?
++ 2026-11-16T09:15:37-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3012/v1 .state/routing/bin/infer chat Answer with one word: the opposite of up?
++ 2026-11-16T09:15:37-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3013/v1 .state/routing/bin/infer embed gateway routing
+```
+
+### 2026-11-16 · the stack and the path
+
+The host stack record, then ten pings to each host and the netcheck, with every address replaced
+with `<addr>`:
+
+```text
++ 2026-11-16T09:15:51-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T09:15:51-05:00 laptop: { date -Is; for h in gb10-2 framework; do echo "== $h"; timeout 60 ssh -o BatchMode=yes $h 'uptime -p; uname -r; docker ps --format "{{.Names}} {{.Image}} {{.Status}}"'; done; for hp in gb10-2:8000 framework:8002; do printf "%s version " $hp; curl -s --max-time 5 http://$hp/version; echo; done; for h in gb10-2 framework; do tailscale ping -c 1 $h | sed -E "s/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?/<addr>/g"; done; } 2>&1 | tee .state/routing/stack-$(date +%F).txt
++ 2026-11-16T09:16:03-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T09:16:03-05:00 laptop: for h in gb10-2 framework; do tailscale ping -c 10 $h | sed -E "s/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?/<addr>/g" | tail -3; done; tailscale netcheck 2>&1 | grep -E "UDP|IPv4|Nearest|MappingVariesByDestIP|PortMapping" | sed -E "s/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?/<addr>/g"
+```
+
+### 2026-11-16 · the overhead cells
+
+O-embed's four runs, O-vision's four, and the four `compare`s. `cell` logs the GuideLLM command it
+runs, and for a gateway run the sampler beside it, on the lines after its own:
+
+```text
++ 2026-11-16T09:17:30-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T09:17:30-05:00 laptop: cell r-embed-direct-1 overhead-embed direct embedding
++ 2026-11-16T09:17:30-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://framework:8002/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-embed.yaml --backend kind=openai_http,model=embedding --tokenizer kind=huggingface_auto,model=ibm-granite/granite-embedding-english-r2 --seed kind=static,value=618426062 --output kind=json,path=.state/routing/cells/r-embed-direct-1/result.json --disable-console-interactive > .state/routing/cells/r-embed-direct-1/guidellm.log 2>&1
++ 2026-11-16T09:18:50-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T09:18:50-05:00 laptop: cell r-embed-route overhead-embed gateway embedding
++ 2026-11-16T09:18:50-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/embedding/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-embed.yaml --backend kind=openai_http,model=embedding --tokenizer kind=huggingface_auto,model=ibm-granite/granite-embedding-english-r2 --seed kind=static,value=2762826689 --output kind=json,path=.state/routing/cells/r-embed-route/result.json --disable-console-interactive > .state/routing/cells/r-embed-route/guidellm.log 2>&1
++ 2026-11-16T09:18:50-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/routing/cells/r-embed-route/gateway-stats.tsv
++ 2026-11-16T09:20:13-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T09:20:13-05:00 laptop: cell r-embed-llm overhead-embed gateway embedding
++ 2026-11-16T09:20:13-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3013/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-embed.yaml --backend kind=openai_http,model=embedding --tokenizer kind=huggingface_auto,model=ibm-granite/granite-embedding-english-r2 --seed kind=static,value=2813028374 --output kind=json,path=.state/routing/cells/r-embed-llm/result.json --disable-console-interactive > .state/routing/cells/r-embed-llm/guidellm.log 2>&1
++ 2026-11-16T09:20:13-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/routing/cells/r-embed-llm/gateway-stats.tsv
++ 2026-11-16T09:21:35-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T09:21:35-05:00 laptop: cell r-embed-direct-2 overhead-embed direct embedding
++ 2026-11-16T09:21:35-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://framework:8002/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-embed.yaml --backend kind=openai_http,model=embedding --tokenizer kind=huggingface_auto,model=ibm-granite/granite-embedding-english-r2 --seed kind=static,value=1446457629 --output kind=json,path=.state/routing/cells/r-embed-direct-2/result.json --disable-console-interactive > .state/routing/cells/r-embed-direct-2/guidellm.log 2>&1
++ 2026-11-16T09:22:56-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T09:22:56-05:00 laptop: cell r-vision-direct-1 overhead-vision direct vision
++ 2026-11-16T09:22:56-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:8000/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-vision.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=4267744146 --output kind=json,path=.state/routing/cells/r-vision-direct-1/result.json --disable-console-interactive > .state/routing/cells/r-vision-direct-1/guidellm.log 2>&1
++ 2026-11-16T09:24:39-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T09:24:39-05:00 laptop: cell r-vision-route overhead-vision gateway vision
++ 2026-11-16T09:24:39-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/vision/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-vision.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=1434110204 --output kind=json,path=.state/routing/cells/r-vision-route/result.json --disable-console-interactive > .state/routing/cells/r-vision-route/guidellm.log 2>&1
++ 2026-11-16T09:24:39-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/routing/cells/r-vision-route/gateway-stats.tsv
++ 2026-11-16T09:26:25-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T09:26:25-05:00 laptop: cell r-vision-llm overhead-vision gateway vision
++ 2026-11-16T09:26:25-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3011/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-vision.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=2786512739 --output kind=json,path=.state/routing/cells/r-vision-llm/result.json --disable-console-interactive > .state/routing/cells/r-vision-llm/guidellm.log 2>&1
++ 2026-11-16T09:26:25-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/routing/cells/r-vision-llm/gateway-stats.tsv
++ 2026-11-16T09:28:12-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T09:28:12-05:00 laptop: cell r-vision-direct-2 overhead-vision direct vision
++ 2026-11-16T09:28:12-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:8000/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-vision.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=2357969985 --output kind=json,path=.state/routing/cells/r-vision-direct-2/result.json --disable-console-interactive > .state/routing/cells/r-vision-direct-2/guidellm.log 2>&1
++ 2026-11-16T09:30:00-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T09:30:00-05:00 laptop: compare r-embed-direct-1 r-embed-route r-embed-direct-2
++ 2026-11-16T09:30:00-05:00 laptop: compare r-embed-direct-1 r-embed-llm r-embed-direct-2
++ 2026-11-16T09:30:01-05:00 laptop: compare r-vision-direct-1 r-vision-route r-vision-direct-2
++ 2026-11-16T09:30:01-05:00 laptop: compare r-vision-direct-1 r-vision-llm r-vision-direct-2
 ```
