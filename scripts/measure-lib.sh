@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # The step helpers for the GuideLLM cells: the agentgateway task's overhead cells (its slice 2,
 # behavior 7) and cap cells (its slice 3, behavior 8), and the routing task's overhead cells,
-# per gateway form, adapted from spike-model-layout's scripts/measure-lib.sh (`cell`, `watch`,
-# `summarize`) and kept to what these cells need: no host loads or memory floors. Sourced from the
-# repository root on the laptop, then called one step at a time in the architect's view:
+# adapted from spike-model-layout's scripts/measure-lib.sh (`cell`, `watch`, `summarize`) and kept
+# to what these cells need: no host loads or memory floors. Sourced from the repository root on the
+# laptop, then called one step at a time in the architect's view:
 #
 #   source scripts/measure-lib.sh
 #
 #   cell <name> <scenario> <direct|gateway|cap> <alias>
 #                     one GuideLLM run of bench/<scenario>.yaml against the alias's row (direct)
-#                     or its base URL on the gateway (gateway, cap), in the form GATEWAY_FORM names
-#                     (below), into .state/routing/cells/<name>/; on a gateway or cap run, the
-#                     gateway container's CPU and memory sampled on gb10-2. A cap run is a gateway
+#                     or its base URL on the gateway (gateway, cap), http://gb10-2:<port>/v1 with
+#                     the alias's port from gateway/agentgateway/deploy.env, into
+#                     .state/routing/cells/<name>/; on a gateway or cap run, the gateway
+#                     container's CPU and memory sampled on gb10-2. A cap run is a gateway
 #                     run that also samples the row's running and waiting requests from its /metrics,
 #                     read direct from the row, and afterwards reads each of the run's requests
 #                     from the gateway's access log
@@ -46,16 +47,12 @@
 # ("Server error '503 Service Unavailable' for url ...") and none of the reply's headers; a
 # successful request passed raise_for_status, so it was 2xx. So the status comes from GuideLLM, and
 # Retry-After from the gateway's access log: after the run, `cell` reads the log lines of the
-# alias's route inside the run's time (`docker logs --timestamps --since --until` on gb10-2) into
+# alias's port inside the run's time (`docker logs --timestamps --since --until` on gb10-2) into
 # gateway-requests.tsv, keeping each line's time, status, path, and `retry_after`, a field
 # gateway/agentgateway/config.yaml adds to every line; the caller's address and every other field
-# stay out. The lines are picked by the route form's `route=default/<alias>`, so a cap run reads the
-# route form only.
+# stay out.
 #
 # Settings, each an environment variable read when a helper runs:
-#   GATEWAY_FORM         the gateway form a gateway or cap run targets: llm (the default),
-#                        http://gb10-2:<port>/v1 with the alias's port from
-#                        gateway/agentgateway/deploy.env; or route, http://gb10-2:3000/<alias>/v1
 #   MEASURE_STATS_EVERY  seconds between gateway and row samples (default 5)
 #   MEASURE_CELL_CAP     a run's cap, given to timeout (default 10m)
 
@@ -70,7 +67,7 @@ MEASURE_STATE=.state/routing
 MEASURE_KEY=.state/agentgateway/keys/bench
 MEASURE_GATEWAY_HOST=gb10-2
 
-# Each alias's port on the llm form, from deploy.env's AGW_ALIAS_PORTS, and the route form's port.
+# Each alias's port, from deploy.env's AGW_ALIAS_PORTS.
 # shellcheck disable=SC1091 # check.sh runs shellcheck without -x; deploy.env is assignments.
 source "$MEASURE_ROOT/gateway/agentgateway/deploy.env"
 declare -gA MEASURE_PORT=()
@@ -131,14 +128,7 @@ cell() {
   case $target in
     direct) url=http://${MEASURE_ROW[$alias]}/v1 ;;
     gateway | cap)
-      case ${GATEWAY_FORM:-llm} in
-        llm) url=http://$MEASURE_GATEWAY_HOST:${MEASURE_PORT[$alias]}/v1 ;;
-        route) url=http://$MEASURE_GATEWAY_HOST:$AGW_PORT/$alias/v1 ;;
-        *)
-          echo "cell: GATEWAY_FORM is ${GATEWAY_FORM}; llm or route" >&2
-          return 2
-          ;;
-      esac
+      url=http://$MEASURE_GATEWAY_HOST:${MEASURE_PORT[$alias]}/v1
       if [[ ! -s $MEASURE_ROOT/$MEASURE_KEY ]]; then
         echo "cell: no key at $MEASURE_KEY; run mise run agentgateway-deploy first" >&2
         return 2
@@ -314,19 +304,21 @@ summarize() {
 }
 
 # A cap run's requests as the gateway logged them, read after the run: the access log lines of the
-# alias's route between two epochs, each kept as its time (docker's, UTC), status, path, and the
+# alias's port between two epochs, each kept as its time (docker's, UTC), status, path, and the
 # `retry_after` field config.yaml adds, empty when the reply had no Retry-After. The rest of each
-# line, the caller's address among it, is left out.
+# line, the caller's address among it, is left out. The `llm` section serves every alias through
+# one route, so a line is the alias's by its listener, the alias's gateway, beside that route:
+# `listener=<alias> route=internal/llm:request` (docs/findings/routing.md quotes such lines).
 _measure_requests() {
   local name=$1 alias=$2 since=$3 until=$4
   local out=$MEASURE_STATE/cells/$name/gateway-requests.tsv
   local remote="docker logs --timestamps --since $since --until $until agentgateway 2>&1"
-  _measure_log laptop "ssh -n $MEASURE_GATEWAY_HOST '$remote' | the lines of route=default/$alias as time, status, path, retry_after > $out"
+  _measure_log laptop "ssh -n $MEASURE_GATEWAY_HOST '$remote' | the lines of listener=$alias route=internal/llm:request as time, status, path, retry_after > $out"
   {
     printf 'time\tstatus\tpath\tretry_after\n'
     # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
     ssh -n "$MEASURE_GATEWAY_HOST" "$remote" |
-      awk -v route=" route=default/$alias " 'index($0, route) {
+      awk -v sel=" listener=$alias route=internal/llm:request " 'index($0, sel) {
         st = ""; p = ""; ra = ""
         if (match($0, / http\.status=[0-9]+/)) st = substr($0, RSTART + 13, RLENGTH - 13)
         if (match($0, / http\.path=[^ ]+/)) p = substr($0, RSTART + 11, RLENGTH - 11)

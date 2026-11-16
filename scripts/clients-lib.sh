@@ -6,7 +6,8 @@
 #
 #   source scripts/clients-lib.sh
 #
-#   gw_base <alias>   the alias's base URL on the gateway, in the form GATEWAY_FORM names (below)
+#   gw_base <alias>   the alias's base URL on the gateway, http://gb10-2:<port>/v1, its port read
+#                     from gateway/agentgateway/deploy.env
 #   goai_checkout     a worktree of go-ai at tools/infer/v0.1.0, detached, under
 #                     .state/routing/go-ai; go-ai's own working tree is not touched
 #   infer_install     the released infer, `go install ...tools/infer/cmd/infer@v0.1.0`, into
@@ -20,12 +21,13 @@
 #                     the released infer once, INFER_BASE_URL at the alias's base URL, no model
 #   gw_curl <key> <curl argument>...
 #                     curl with the named key's credential header, read from its key file
+#   logged <command>  any other step, given as one string: run with bash from the root, logged as
+#                     written, and its output, stdout and stderr, appended to the log as printed;
+#                     for a command that prints no key, such as `mise run agentgateway-deploy`, a
+#                     curl without a key, or `mise run watch`
 #
-# The form. Two forms serve the aliases while the routing task trials the second
-# (gateway/agentgateway/config.yaml); GATEWAY_FORM, read when a helper runs, picks the base URL:
-#   llm     http://gb10-2:<port>/v1, each alias on its own port (the default), the ports read from
-#           gateway/agentgateway/deploy.env
-#   route   http://gb10-2:3000/<alias>/v1, each alias a route on the consumer port
+# The base URL. The gateway's `llm` section serves each alias on its own port, so its base URL is
+# that port's /v1, whose /v1/models lists the alias alone (gateway/agentgateway/config.yaml).
 #
 # The keys. Every helper reads a key from .state/agentgateway/keys/<name>, where the deploy keeps
 # them, with bash's `$(<file)` inside a subshell, with xtrace off there, into the environment of the
@@ -62,7 +64,7 @@ CLIENTS_GOAI_TAG=tools/infer/v0.1.0
 CLIENTS_WORKTREE=$CLIENTS_STATE/go-ai
 CLIENTS_INFER=$CLIENTS_STATE/bin/infer
 
-# Each alias's port on the llm form, from deploy.env's AGW_ALIAS_PORTS, and the route form's port.
+# Each alias's port, from deploy.env's AGW_ALIAS_PORTS.
 # shellcheck disable=SC1091 # check.sh runs shellcheck without -x; deploy.env is assignments.
 source "$CLIENTS_ROOT/gateway/agentgateway/deploy.env"
 declare -gA CLIENTS_PORT=()
@@ -85,14 +87,7 @@ gw_base() {
     echo "gw_base: unknown alias $alias (agent, vision, audio, embedding)" >&2
     return 2
   }
-  case ${GATEWAY_FORM:-llm} in
-    llm) echo "http://$CLIENTS_HOST:${CLIENTS_PORT[$alias]}/v1" ;;
-    route) echo "http://$CLIENTS_HOST:$AGW_PORT/$alias/v1" ;;
-    *)
-      echo "gw_base: GATEWAY_FORM is ${GATEWAY_FORM}; llm or route" >&2
-      return 2
-      ;;
-  esac
+  echo "http://$CLIENTS_HOST:${CLIENTS_PORT[$alias]}/v1"
 }
 
 _clients_log() {
@@ -279,6 +274,17 @@ gw_curl() {
     # shellcheck disable=SC2059 # The format is built from a fixed header name.
     printf "header = \"$header%s\"\n" "$(<"$CLIENTS_KEYS/$name")" | curl -K - "$@"
   )
+}
+
+logged() {
+  (($# == 1)) || {
+    echo 'usage: logged <command, as one string>' >&2
+    return 2
+  }
+  _clients_log laptop "$1"
+  (cd "$CLIENTS_ROOT" && bash -c "$1") 2>&1 |
+    tee -a "$CLIENTS_ROOT/$CLIENTS_STATE/commands-$(date +%F).log"
+  return "${PIPESTATUS[0]}"
 }
 
 mkdir -p "$CLIENTS_ROOT/$CLIENTS_STATE"
