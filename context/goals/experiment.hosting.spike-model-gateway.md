@@ -1,8 +1,8 @@
 # goal · experiment.hosting.spike-model-gateway
 
-- **State:** idle
-- **Task:** none
-- **Branch:** none
+- **State:** building
+- **Task:** priority
+- **Branch:** priority
 
 ## Tasks
 
@@ -10,6 +10,248 @@
 2. [x] routing
 3. [ ] priority
 4. [ ] answer
+
+## Task brief · priority
+
+```
+Goal          experiment.hosting.spike-model-gateway · task 3/4 · priority
+Branch        priority
+Repos         spike-model-gateway (root); spike-model-engines, host/ only,
+              through one pull request that cites this task's finding
+Problem       The gateway fronts the four rows with keys and per-alias base
+              URLs, but it can't yet show evidence 5–7:
+              - Nothing holds embedding to 34 req/s beside audio.
+              - No key's work ranks ahead of another's, and no budget
+                counts a stream's tokens.
+              - Nothing answers when a row is down or full: the rows queue
+                without bound and never refuse.
+              v1.ai.client's acceptance is waiting on this task, so that
+              the gateway's final form is settled first.
+
+              New tool: Azure AI Foundry, Microsoft's hosted model service.
+              It is an AIServices account in a resource group, with one
+              deployment per model, each at a capacity measured in requests
+              and tokens per minute. Each deployment serves an
+              OpenAI-compatible v1 API, reached with the account's key. You
+              set it up from the az CLI in slice 1, which the session walks
+              you through. It gives each alias a cloud deployment that takes
+              over, under the same alias, when the alias's row can't answer.
+Behaviors
+  Setup
+  1. spike-model-engines is current: its uv is at 0.13.8, and its
+     currency reports only held items (llama.cpp b12098, held against
+     b12407; native Python; vLLM's release-name artifact). Its check
+     passes.
+  2. The host/ pull request:
+     - the agent, vision, and audio rows refuse with 503 once twice
+       their cap is in flight (agent 24, vision 32, audio 8);
+       embedding gets no limit;
+     - the agent and vision rows schedule by request priority.
+     Once it is merged and the rows have restarted, a direct request
+     past the limit gets 503.
+  3. Azure AI Foundry: the spike has its own resource group and
+     AIServices account in eastus2, with four deployments:
+       gpt-oss-120b (agent, capacity 50)
+       gpt-5.4-mini (vision, 10)
+       gpt-audio-mini 2025-12-15 (audio, 10)
+       text-embedding-3-small (embedding, 10)
+     Each uses DataZoneStandard where the model offers it, and
+     GlobalStandard otherwise. The key and the resource name stay
+     untracked on the deploying machine and reach gb10-2 only in the
+     deployed copy, as the gateway keys do. Each deployment answers
+     one direct request.
+  4. The gateway and Postgres run as one compose project on gb10-2,
+     to ~/architecture's compose convention:
+     - one file per service group;
+     - Postgres from its own Dockerfile, its FROM line the pin, with a
+       health check and a named volume;
+     - mise up, down, and reset tasks.
+     The gateway's config is bind-mounted read-only, an exception to
+     the convention recorded in the finding, so it still reloads in
+     place. The stack restarts with the host unattended, and every
+     check from earlier tasks still passes on it.
+  Overflow (evidence 7)
+  5. Each alias route has two priority groups, its row and then its
+     Azure deployment, with Azure's key on that provider alone:
+     - Chat Completions, Messages, Responses, and embeddings are typed
+       request formats; the rest stay detect.
+     - A stream carries usage whether or not the client asks.
+     - With the rows up, the pass-through matrix still passes.
+  6. The gateway answers each alias's /v1/models itself, listing
+     exactly that alias, whether its row is up or not.
+  7. A row down: with a probe overlay that makes every row
+     unreachable, each alias is answered by its Azure deployment under
+     the alias. Removing the overlay returns each alias to its row.
+     The access log names the provider that answered. Nothing fails
+     over between hosts.
+  8. Embedding overflow returns 768-dimension vectors. Every reply
+     Azure answers carries a response header marking it as overflow,
+     and a reply from a row doesn't.
+  9. A row full: two consecutive 503s evict the row for 5 s, and a
+     route retry of 2 attempts on 503, with no backoff, re-sends a
+     body up to 64 KiB. Benchmark C records whether a refused request
+     reaches Azure.
+  10. go-ai's and infer's integration tiers run through the rows-down
+      overlay with their base URLs and keys unchanged, and each
+      scenario's result is recorded:
+      - Responses fails on agent and audio, a parity gap, because
+        neither cloud model serves it.
+      - Any failure from a model difference is a parity finding.
+      - Transcription is skipped.
+      The released infer CLI, setting no model, picks the alias that
+      /models lists.
+  11. The Framework down until /health: while it is rebooted and
+      locked, audio and embedding are answered by Azure. After the
+      unlock, the finding records the time from the unlock to the
+      rows' /health, and to the first request a row answers again.
+  12. The finding records, per alias, the cloud model, its SKU's
+      processing scope, and its parity gaps: which workloads may leave
+      the self-hosted machines. Only synthetic and test-fixture content
+      is sent to Azure.
+  Keys and limits (evidence 5, 6)
+  13. A new key, bulk, joins architect, bench, and go-ai. On the agent
+      and vision rows, each key's requests carry a priority that ranks
+      interactive keys ahead of bulk. It is set on the row's provider
+      alone, so no request to Azure carries it.
+  14. Each key has its own request-rate bucket. A probe shows bulk
+      refused with 429 while another key keeps answering on the same
+      alias.
+  15. Token budgets are kept in Postgres: Block on bulk, Audit on the
+      others, over a rolling window. A streamed chat sent without
+      include_usage is charged to its key. A probe that lowers bulk's
+      budget gets 429 with Retry-After. A count survives a gateway
+      restart.
+  16. Every request writes a metadata row to Postgres (usage, timing,
+      the key's name) and no prompt or completion content. The UI's
+      Logs and Analytics pages read it over the SSH tunnel.
+  17. The embedding route holds a global 34 req/s limit and answers
+      429 with Retry-After past it.
+  Records
+  18. Azure answers at most 300 requests in the task, counted from the
+      access log per deployment and recorded in the finding.
+  19. The finding records versions, each host's stack, the laptop's
+      path to each host, and every command quoted from the logs as
+      run. It holds no address, key, Azure resource name, or secret,
+      and raw output stays untracked.
+  20. `mise run currency` reports agentgateway's image pin and the
+      compose FROM pins, with nothing trailing beyond held items.
+      `mise run check` passes. The watch register is read and updated
+      at the start and end of the task.
+Test seams    each alias's base URL on the gateway as the laptop reaches it
+              (curl, go-ai's and infer's tiers, the infer CLI, GuideLLM,
+              all through the step helpers); in slice 1, each row and
+              Azure deployment directly; `mise run check` and
+              `mise run currency`
+Slices
+  1 Setup: behaviors 1–4. The session runs the engines upgrade, the
+    host/ pull request and its merge, the row restarts, the compose
+    stack's deploy, and the checks. It walks you through the Azure
+    account first: what each az step creates, what it costs, and what
+    it provides. You run the az steps; they are Foundry's first walk.
+    Yours too: the host updates at session start, and the compose
+    plugin's install if gb10-2 lacks it (root).
+    Demo:
+    - a direct request past a row's limit gets 503;
+    - each Foundry deployment answers directly;
+    - the gateway on compose passes the matrix.
+  2 Overflow: behaviors 5–10 and 12, then benchmark C. All the
+    session's.
+    Demo:
+    - every alias answered by Azure under its alias with the rows
+      down, and by its row again once they're back;
+    - the tiers' results recorded.
+  3 Keys and limits: behaviors 13–17, then benchmarks A, B, and D. All
+    the session's.
+    Demo:
+    - bulk refused while another key answers;
+    - a stream charged to its key;
+    - audio's RTFx beside the embedding limit.
+  4 Walkthrough: you run it from the finding:
+    - an alias's /models;
+    - a row-down overflow;
+    - a budget Block;
+    - the request log in the UI;
+    - the Framework reboot as the last step (root).
+    The session pauses at the reboot until you are home to unlock the
+    Framework, and the task stays unshipped until behavior 11's reading
+    is in. Behaviors 18–20 hold throughout.
+Benchmarks    Every run: GuideLLM 0.8.1 from the laptop, the model sent as
+              the alias with its tokenizer given separately, each seeded
+              from its name, built and run a step at a time in your view,
+              at most 10 min. Two runs at once use two terminals. Only
+              cells in the same session compare.
+  A Embedding limited, audio beside it (slice 3; evidence 5):
+    - through the gateway, C-embed at 160 in flight for 90 s, held to
+      34 req/s;
+    - O-audio (4 streams, 30 s or 64 requests) starting inside it;
+    - anchor: O-audio alone, direct and through the gateway.
+    It informs whether a 34/1s bucket's burst lets audio hold its RTFx
+    median ≥5. A miss escalates to a paced bucket.
+  B Chat beside bulk vision (slice 3; evidence 6):
+    - the bulk key runs C-vision at 20 concurrent for 150 s;
+    - the go-ai key runs O-agent (4 sessions, 110 s) inside it;
+    - anchor: O-agent alone, direct and through the gateway.
+    It informs whether chat holds its floor (agent ITL ≤100 ms), and
+    the change in TTFT, ITL, and the gateway's CPU against the direct
+    spread.
+  C Overflow when full (slice 2; evidence 7):
+    - through the gateway, C-agent at 28 sessions for 60 s, then
+      C-vision at 36 concurrent for 60 s.
+    It reads 503s per row, requests Azure answered, whether a refused
+    request reached Azure, evictions per minute, and vision's time to
+    its 503 (vLLM #58192). It informs whether a row's 503 with eviction
+    is a usable "full" signal.
+  D Priority on vision (slice 3; evidence 6):
+    - the bulk key runs C-vision at 20 concurrent for 120 s;
+    - an interactive key runs O-vision at 1 concurrent inside it;
+    - control: the same pair, with the interactive run sent at bulk's
+      priority.
+    It informs whether interactive vision's median latency stays ≤10 s
+    with priority, and how far it moves without.
+  No other benchmark runs; a new or widened one is an escalation.
+Azure cap     At most 300 Azure-answered requests in the whole task,
+              counted from the access log after each step that can
+              overflow. The deployments' capacities are a hard stop. The
+              session stops and escalates when:
+              - a step would take the count past 300;
+              - Azure answers 429 for its own capacity (never retried
+                around);
+              - a row stays evicted outside an overflow step;
+              - any content other than synthetic or test-fixture data
+                would be sent to Azure.
+              Only the rows-down overlay, benchmark C, the probes, and the
+              walkthrough send requests to Azure.
+Guided        Yours:
+              - the session-start host updates (root);
+              - the Azure walk in slice 1, Foundry's first walk;
+              - any compose install (root);
+              - slice 4's walkthrough;
+              - the Framework's reboot and LUKS unlock.
+              The session's, over Tailscale SSH with no root, each step in
+              your view and logged through the helpers: the engines
+              upgrade, row restarts, compose deploys and reloads,
+              overlays, probes, tiers, cells, and read-outs.
+Out of scope  transcription through the gateway (no row serves it); a
+              gateway-side queue; admission on /metrics; traces and the
+              OpenTelemetry Collector, the paper comparison, and
+              dot-segment hardening (answer); USD budgets and a model
+              catalog; an agentgateway upgrade; any change to go-ai;
+              spike-model-engines outside host/ and its upgrade; ~/docs
+              content to Azure; Bifrost
+Door          two-way, except what reached Azure:
+              - the gateway config and overlays are in git;
+              - the host/ pull request can be reverted;
+              - the compose move can go back to docker run, and Postgres's
+                volume can be dropped;
+              - a key is revoked by removing its name and deploying;
+              - the Azure account and deployments can be deleted.
+              One-way: the Azure spend, and the test content sent to Azure
+              under its data-processing terms.
+```
+
+## Progress
+
+slices 0/4 committed · standards — · spec — · editor —
 
 ## Decisions
 
@@ -177,6 +419,47 @@
   `completions`, which forces `include_usage`, and `/v1/embeddings` as `embeddings`, which Azure
   overflow needs too (`context/priority-on-route-ai.md`).
 
+- priority: the Azure resource is the spike's own resource group and AIServices account, set up
+  by the architect from a walk in the setup slice (R1 Q1).
+- priority: all four aliases overflow to Foundry at parity with the rows, and go-ai and infer are
+  exercised on cloud-answered responses. This supersedes agent-only (R1 Q2; R2 Q1, Q2).
+- priority: a full row refuses with vLLM's `--max-num-queued-reqs`, so eviction moves its traffic
+  to Azure, and Bifrost stays on paper. Research: priority groups with eviction are the standard
+  pattern, using vLLM's 503 as the "full" signal is this design's own, and vLLM #58192 delays
+  vision's 503 (R1 Q3).
+- priority: Azure answers at most 300 requests in the task, with each deployment's capacity as a
+  hard stop. This supersedes 50 (R1 Q4; R2 Q11).
+- priority: per-key priority comes from vLLM's priority scheduling on agent and vision, set by
+  the gateway on the row provider only, with per-key rate limits beside it (R1 Q5).
+- priority: Chat Completions, embeddings, Messages, and Responses are typed request formats on
+  all four routes (R1 Q6; R2 Q5).
+- priority: budgets and the request log live in Postgres, in one compose stack with the gateway on
+  gb10-2, following `~/architecture`'s convention. Compose and Postgres are known tools, not new
+  ones. This supersedes SQLite (R1 Q7; R2 Q13).
+- priority: Azure AI Foundry is the task's one new tool (R1 Q8).
+- priority: embedding is held by a global 34/1s limit answering 429 with Retry-After, and a paced
+  bucket is an escalation (R1 Q9).
+- priority: the Framework-down evidence is a real reboot with the architect's LUKS unlock, as the
+  walkthrough's last step, and the session pauses there (R1 Q10; R2 Q16).
+- priority: benchmarks A and B run as briefed (R1 Q11, Q12). C and D run as briefed (R2 Q9, Q10).
+- priority: the cloud models are gpt-oss-120b, gpt-5.4-mini, and gpt-audio-mini 2025-12-15
+  (R2 Q1).
+- priority: embedding overflows under its alias to text-embedding-3-small at 768 dimensions,
+  marked by a header, and the marker is a gateway-document requirement (R2 Q2).
+- priority: transcription is out of scope (R2 Q3).
+- priority: the gateway answers each alias's `/v1/models` itself (R2 Q4).
+- priority: the tiers reach Azure through a rows-down probe overlay (R2 Q6).
+- priority: a row is evicted after 2 consecutive 503s for 5 s, and a route retry makes 2 attempts
+  on 503 with no backoff (R2 Q7).
+- priority: the queue limits are twice each cap (agent 24, vision 32, audio 8), and embedding has
+  none (R2 Q8).
+- priority: the request log stores metadata only (R2 Q12).
+- priority: the engines upgrade and the `host/` pull request fold into the setup slice, keeping
+  four slices (R2 Q14).
+- priority: held spike-model-engines' llama.cpp at b12098, declining b12407: inert, kept for
+  reference (R2 Q15).
+- priority: confirmed at approval (architect, 2026-11-16): each deployment is DataZoneStandard where the model offers it, and GlobalStandard otherwise; the Azure resource name stays untracked and is filled in at deploy; the budget Block is shown by a probe overlay that lowers bulk's budget.
+
 ## Pending edits
 
 - coordinator · experiment.hosting intake: spike-model-engines' `docs/engines/vllm/api.md` and
@@ -196,3 +479,20 @@
 - coordinator · roadmap: the per-alias base URL stays `/<alias>/v1`, whose `/models` lists only
   that alias, served by route `ai`, the docs' routing form; priority's summary "in the form
   routing settles" can name the route `ai` form.
+- coordinator · experiment.hosting intake: spike-model-layout's `docs/layout.md` requirement 3
+  says traffic past embedding's 34 req/s limit "queues or overflows". agentgateway answers it with
+  429 and Retry-After instead, and the client waits. `answer`'s gateway document records this.
+- coordinator · v1.ai.hosting: cloud embedding replies carry an overflow marker and come from
+  another vector space (text-embedding-3-small at 768 dimensions). A client that stores vectors
+  must refuse or re-route a marked reply. This is a gateway-document requirement.
+- coordinator · v1.ai.hosting: vLLM's queue limit counts every key alike, so a bulk flood also
+  refuses interactive requests, which then overflow. agentgateway's eviction multiplier has no
+  cap, so after a long outage a row can stay out for minutes after it is back.
+- coordinator · v1.ai.client: acceptance can run once priority ships. The gateway's form is
+  settled: typed routes, `/models` answered by the gateway, overflow to Foundry, and per-key
+  priority and budgets.
+- coordinator · experiment.hosting intake: the gateway's compose stack bind-mounts its config
+  read-only, an exception to `~/architecture`'s convention, for the intake to weigh for the
+  capstone's stack.
+- coordinator · roadmap: priority's summary covers all four aliases overflowing to Foundry, with a
+  cap of 300.
