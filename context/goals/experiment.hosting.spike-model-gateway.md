@@ -1,8 +1,8 @@
 # goal · experiment.hosting.spike-model-gateway
 
-- **State:** idle
-- **Task:** none
-- **Branch:** none
+- **State:** building
+- **Task:** routing (realign)
+- **Branch:** routing-realign
 
 ## Tasks
 
@@ -10,6 +10,23 @@
 2. [x] routing
 3. [ ] priority
 4. [ ] answer
+
+## Task brief · routing (realign)
+
+Reopened by the architect (2026-11-16) after shipping, instead of planning a new task: the
+gateway returns to route `ai`, the form agentgateway's docs recommend for path-based LLM routing
+(`llm/configuration-modes.md`, edited 2026-11-10: "custom, path-based routing (e.g., `/openai`,
+`/anthropic`)" → routing-based configuration). Behaviors: each alias on `http://gb10-2:3000/<alias>/v1`
+listing only its alias; the serving-path allow-list answering 404; a missing or revoked key 401;
+`retry_after` in the base access log; probes, helpers, and cap-cell reader on the route form;
+go-ai's and infer's tiers pass through it; the `llm` section and alias ports removed; the watch
+register turned around (route `ai` relied on; `llm` parity as the migration trigger, with the docs
+as counter-evidence to the deprecation reading); the finding records the realignment. No
+benchmark: slice 2 measured both forms equal within noise. Door: two-way.
+
+## Progress
+
+realign: implementer — · docs research for priority — · reviews —
 
 ## Decisions
 
