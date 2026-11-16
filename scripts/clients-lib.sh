@@ -155,7 +155,6 @@ _clients_tier() {
       echo "${kind}_tier: unknown alias $alias (agent, vision, audio, embedding)" >&2
       return 2
     }
-    gw_base "$alias" >/dev/null || return
   done
   _clients_key_ok go-ai || return
   [[ -d $CLIENTS_ROOT/$CLIENTS_WORKTREE ]] || {
@@ -227,7 +226,6 @@ infer_at() {
     echo "infer_at: unknown alias $alias" >&2
     return 2
   }
-  gw_base "$alias" >/dev/null || return
   _clients_key_ok go-ai || return
   [[ -x $CLIENTS_ROOT/$CLIENTS_INFER ]] || {
     echo 'infer_at: no infer; run infer_install first' >&2
