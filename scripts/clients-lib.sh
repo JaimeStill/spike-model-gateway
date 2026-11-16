@@ -6,8 +6,8 @@
 #
 #   source scripts/clients-lib.sh
 #
-#   gw_base <alias>   the alias's base URL on the gateway, http://gb10-2:<port>/v1, its port read
-#                     from gateway/agentgateway/deploy.env
+#   gw_base <alias>   the alias's base URL on the gateway, http://gb10-2:3000/<alias>/v1, the port
+#                     read from gateway/agentgateway/deploy.env
 #   goai_checkout     a worktree of go-ai at tools/infer/v0.1.0, detached, under
 #                     .state/routing/go-ai; go-ai's own working tree is not touched
 #   infer_install     the released infer, `go install ...tools/infer/cmd/infer@v0.1.0`, into
@@ -26,8 +26,9 @@
 #                     for a command that prints no key, such as `mise run agentgateway-deploy`, a
 #                     curl without a key, or `mise run watch`
 #
-# The base URL. The gateway's `llm` section serves each alias on its own port, so its base URL is
-# that port's /v1, whose /v1/models lists the alias alone (gateway/agentgateway/config.yaml).
+# The base URL. The gateway serves each alias through its own route on the consumer port, so its
+# base URL is /<alias>/v1 there, whose /v1/models lists the alias alone
+# (gateway/agentgateway/config.yaml).
 #
 # The keys. Every helper reads a key from .state/agentgateway/keys/<name>, where the deploy keeps
 # them, with bash's `$(<file)` inside a subshell, with xtrace off there, into the environment of the
@@ -64,14 +65,9 @@ CLIENTS_GOAI_TAG=tools/infer/v0.1.0
 CLIENTS_WORKTREE=$CLIENTS_STATE/go-ai
 CLIENTS_INFER=$CLIENTS_STATE/bin/infer
 
-# Each alias's port, from deploy.env's AGW_ALIAS_PORTS.
+# The consumer port, deploy.env's AGW_PORT.
 # shellcheck disable=SC1091 # check.sh runs shellcheck without -x; deploy.env is assignments.
 source "$CLIENTS_ROOT/gateway/agentgateway/deploy.env"
-declare -gA CLIENTS_PORT=()
-for _ap in $AGW_ALIAS_PORTS; do
-  CLIENTS_PORT[${_ap%%:*}]=${_ap#*:}
-done
-unset _ap
 
 # Each alias's role in go-ai's tiers.
 declare -gA CLIENTS_ROLE=(
@@ -83,11 +79,11 @@ declare -gA CLIENTS_ROLE=(
 
 gw_base() {
   local alias=${1:?usage: gw_base <alias>}
-  [[ -n ${CLIENTS_PORT[$alias]-} ]] || {
+  [[ -n ${CLIENTS_ROLE[$alias]-} ]] || {
     echo "gw_base: unknown alias $alias (agent, vision, audio, embedding)" >&2
     return 2
   }
-  echo "http://$CLIENTS_HOST:${CLIENTS_PORT[$alias]}/v1"
+  echo "http://$CLIENTS_HOST:$AGW_PORT/$alias/v1"
 }
 
 _clients_log() {

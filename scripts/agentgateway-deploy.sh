@@ -27,7 +27,7 @@
 #
 # Each command is printed to stderr before it runs, as `+ <time> <host>: <command>`, the form of
 # .state/<task>/commands-*.log, so a finding can quote it exactly. Commands run on gb10-2 are sent
-# as written: `$(tailscale ip -4)`, `$(id -u)`, and `$HOME` expand there, so the alias ports are
+# as written: `$(tailscale ip -4)`, `$(id -u)`, and `$HOME` expand there, so the consumer port is
 # published on gb10-2's tailnet address with no address written down or printed. Needs no root.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -172,10 +172,7 @@ on_host 'mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml'
 # label runs the same image with the same flags. The tailnet address isn't in the hash; a node keeps
 # its address.
 flags="--restart unless-stopped $user"
-# The alias ports, each on gb10-2's tailnet address.
-for ap in $AGW_ALIAS_PORTS; do
-  flags+=" --publish \"\$(tailscale ip -4):${ap#*:}:${ap#*:}\""
-done
+flags+=" --publish \"\$(tailscale ip -4):$AGW_PORT:$AGW_PORT\""
 flags+=" --publish 127.0.0.1:$AGW_UI_PORT:$AGW_UI_PORT $mount"
 # gb10-2 resolves names through systemd-resolved's stub (127.0.0.53), which a container can't
 # reach, so docker gives it an outside resolver that doesn't know the tailnet's short names. Each
