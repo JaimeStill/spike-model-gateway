@@ -1,9 +1,9 @@
 # yaml-language-server: $schema=https://agentgateway.dev/schema/config
 #
-# agentgateway v1.7.0 in front of the four vLLM rows, run on gb10-2 by scripts/agentgateway-deploy.sh,
-# which mounts this file's directory read-only at /config. agentgateway watches the file and reloads
-# it in place, so a deploy that changes only this file needs no restart. Fields under `config` are
-# read once, at start.
+# agentgateway v1.7.0 in front of the four vLLM rows, run on gb10-2 by
+# scripts/agentgateway-deploy.sh, which mounts this file's directory read-only at /config.
+# agentgateway watches the file and reloads it in place, so a deploy that changes only this file
+# needs no restart. Fields under `config` are read once, at start.
 #
 # The `llm` section serves the four aliases, each on its own gateway and port: agent 3010, vision
 # 3011, audio 3012, and embedding 3013 (deploy.env). Each alias's base URL is
@@ -41,7 +41,7 @@ frontendPolicies:
 gateways:
   # One gateway an alias, each published on gb10-2's tailnet address (deploy.env). None is named
   # `default`: the UI attaches itself to a gateway of that name when `ui.gateways` is unset, and the
-  # `llm` section to one when `llm.gateways` is.
+  # `llm` section to one when `llm.gateways` is unset.
   agent:
     port: 3010
   vision:

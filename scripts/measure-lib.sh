@@ -12,8 +12,8 @@
 #                     or its base URL on the gateway (gateway, cap), http://gb10-2:<port>/v1 with
 #                     the alias's port from gateway/agentgateway/deploy.env, into
 #                     .state/routing/cells/<name>/; on a gateway or cap run, the gateway
-#                     container's CPU and memory sampled on gb10-2. A cap run is a gateway
-#                     run that also samples the row's running and waiting requests from its /metrics,
+#                     container's CPU and memory sampled on gb10-2. A cap run is a gateway run
+#                     that also samples the row's running and waiting requests from its /metrics,
 #                     read direct from the row, and afterwards reads each of the run's requests
 #                     from the gateway's access log
 #   summarize <name>  a run's requests and errors, TTFT, ITL and request latency (median, p95),
