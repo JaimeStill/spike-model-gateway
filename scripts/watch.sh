@@ -60,10 +60,11 @@ state_of() {
     gh issue view "$n" -R "$repo" --json state --jq '.state | ascii_downcase' 2>/dev/null
 }
 
-# Prints one item's line, recorded beside now, and counts a difference.
+# Prints one item's line, recorded beside now, and counts a difference; a read that failed, an empty
+# now, always differs, even from an empty recorded value.
 report() {
   local what=$1 recorded=$2 now=$3
-  if [[ $now == "$recorded" ]]; then
+  if [[ -n $now && $now == "$recorded" ]]; then
     printf '  %s: recorded %s, now %s\n' "$what" "$recorded" "$now"
   else
     printf '  %s: recorded %s, now %s; differs\n' "$what" "$recorded" "${now:-unreadable}"

@@ -641,11 +641,11 @@ v1.7.0:
 `mise run watch` ([`scripts/watch.sh`](../../scripts/watch.sh)), runs at every task's PLAN as its
 own block, separate from `mise run currency`. Three entries:
 
-- **Deprecation: agentgateway route `ai` backends.** Upstream #3204, #2767, #3655, and
-  website#1091; watched, whether the `ai` variant's description mentions deprecation (false) and
-  the UI's "legacy LLM backend" (present).
-- **Capability: `llm` serving several base URLs on one port.** Watched, `llm.pathPrefix`'s type
-  (`"string"`).
+- **Deprecation: agentgateway route `ai` backends.** Upstream #4307, #3204, #2767, #3655, and
+  website#1091; watched, whether the `ai` variant's description mentions deprecation (`[false]`;
+  `[]` if the variant is removed) and the UI's "legacy LLM backend" (present).
+- **Capability: `llm` serving several base URLs on one port.** Upstream #2973; watched,
+  `llm.pathPrefix`'s type (`"string"`).
 - **Capability: always-passthrough (#4185).** Merged 2026-10-27, after v1.7.0's tag. At v1.7.0
   `passthrough` covers only paths agentgateway doesn't classify, so `llm` parses the typed
   requests and adds `include_usage` to streams (behavior 2); #4185, marked breaking, makes it pass
@@ -673,6 +673,12 @@ agentgateway always-passthrough for `llm` models
 Its `differs` path was tried on a scratch edit of the register, then restored: a recorded state
 changed, a text field's value flipped, and a path that doesn't exist each printed `differs` (the
 missing file as `unreadable`), and the check exited 1.
+
+The standards review then changed the first entry's `json` line. Its expression ended in `| any`,
+so a schema with no `ai` variant left would also read `false`, as recorded, and the variant's
+removal would never show as a difference. The line now records the array, `[false]`: `[true]` is a
+deprecation, and `[]` a removal. The check also counts an empty reading as a difference even if
+the recorded value is empty.
 
 ### For an upstream feature request
 

@@ -90,8 +90,9 @@ and the project has acted on it; the finding or decision that acted keeps the re
   - `upstream agentgateway/agentgateway#3655 = closed` the docs' legacy backend configuration.
   - `upstream agentgateway/website#1091 = merged` the client docs moved to `llm`.
 - **Watched:**
-  - `json agentgateway/agentgateway schema/config.json [.["$defs"].LocalRouteBackend.oneOf[] | select(.properties.ai) | .description // "" | test("deprecated"; "i")] | any = false`
-    the route backend's `ai` variant's description says "Deprecated", as `binds`' does.
+  - `json agentgateway/agentgateway schema/config.json [.["$defs"].LocalRouteBackend.oneOf[] | select(.properties.ai) | .description // "" | test("deprecated"; "i")] = [false]`
+    whether the route backend's `ai` variant's description says "Deprecated", as `binds`' does:
+    `[true]` is its deprecation, and `[]` its removal from the schema.
   - `text agentgateway/agentgateway ui/src/traffic.ts legacy LLM backend = present` the UI's
     label.
 - **Trigger:** the `ai` variant's description says deprecated, or the UI's label changes, or a
@@ -100,8 +101,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Fallback:** none needed: the gateway is on `llm` already. On a trigger, check that nothing in
   this project, and nothing `priority` plans, still needs route `ai`, such as route retries or
   `ai.groups` ([`docs/findings/agentgateway.md`](findings/agentgateway.md), "The paper
-  inventory"), and
-  record what `llm` must gain for parity.
+  inventory"), and record what `llm` must gain for parity.
 - **State:** watching.
 - **Last checked:** 2026-11-16T14:44Z, `mise run watch`: every line as recorded, at v1.7.0, the
   latest release.
