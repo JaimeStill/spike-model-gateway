@@ -932,6 +932,11 @@ The laptop's path, recorded after the checks (11:39:14, `tailscale ping`): every
 Tailscale's DERP relay (nyc), as in slice 2, with no direct path: gb10-1 117 ms, gb10-2 58 ms, the
 Framework 144 ms. The checks here are functional, so the relay bears on no figure; no benchmark ran.
 
+A revoked key was not revoked again here: slice 1 proved it on this same route form (07:57:27,
+`bench` revoked, 401 on `:3000/agent/v1/models`, 200 once restored), and the `consumer` gateway's
+`apiKey` policy is unchanged since (`git diff 6c4bbe9^ -- gateway/agentgateway/config.yaml`
+differs only in comments and the removed `llm` section).
+
 The deploy at 11:30:15 validated the config and recreated the container for the changed ports
 (label `spike.spec=e1d1d93a9f78`), publishing 3000 on the tailnet address and 3001 on loopback.
 Then, through the helpers, with the architect's key unless noted:
