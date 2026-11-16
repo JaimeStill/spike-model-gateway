@@ -251,7 +251,7 @@ Door          two-way, except what reached Azure:
 
 ## Progress
 
-slices 0/4 committed (slice 1 files committed: engines 6f5a1f1, 7574391; gateway b6321a8; host steps pending: architect host updates and Azure walk, then the host/ PR, row restarts, compose deploy) · standards — · spec — · editor —
+slices 0/4 committed (slice 1: files committed (engines PR #18 merged; gateway b6321a8); rows restarted with the queue limits and priority, each refusing one past its limit with 503; four Foundry deployments answer directly (vision gpt-5-mini, escalation); compose stack with Postgres up on gb10-2, matrix, 401, 404, go-ai 20/0/1 and infer 13/0/1 pass; Azure requests 5/300; pending: gb10-2 reboot (architect) for unattended restart, then the slice commit) · standards — · spec — · editor —
 
 ## Decisions
 
