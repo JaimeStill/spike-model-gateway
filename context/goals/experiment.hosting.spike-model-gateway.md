@@ -26,7 +26,7 @@ benchmark: slice 2 measured both forms equal within noise. Door: two-way.
 
 ## Progress
 
-realign: implementer — · docs research for priority — · reviews —
+realign: implementer ✓ (2b06f94, 5f08907; live checks pass, tiers 20/0/1 and 13/0/1) · docs research for priority running · standards running · spec — · editor —
 
 ## Decisions
 
