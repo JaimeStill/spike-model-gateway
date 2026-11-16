@@ -36,6 +36,17 @@
 #                     3339 time such as 2026-11-16T14:05:00 (local), or a Unix time. Counted per
 #                     alias, so per deployment, and per status; read-only, and it prints counts
 #                     only (below)
+#   budget_status [<key>]
+#                     each key's token budget, or the named key's, as the gateway counts it now:
+#                     its limit, its use in the current window, whether it is exceeded, its action
+#                     (Block or Audit), and the window's end; read from the UI's
+#                     /api/budgets/status on gb10-2's loopback over SSH, read-only (below)
+#   request_log [<count>]
+#                     the newest <count> rows (10 by default) of the request log in Postgres on
+#                     gb10-2, read-only, a fixed set of columns: time (UTC), status, the key's
+#                     name as agentgateway logged it and as the UI's user, provider, model,
+#                     tokens, duration, and whether a payload row was kept; then the count of
+#                     payload rows, which `llm: metadata` keeps at none (below)
 #   logged <command>  any other step, given as one string: run with bash from the root, logged as
 #                     written, and its output, stdout and stderr, appended to the log as printed;
 #                     for a command that prints no key, such as `mise run agentgateway-deploy`, a
@@ -76,7 +87,19 @@
 # couldn't read), and flags Azure's 429, a stop condition of the task's cap. One line is one client
 # request, its last attempt: an Azure 503 that the route retried leaves no line of its own. The log
 # lasts as long as the container, which compose recreates only when the config's `config` section
-# or the stack changes, so the count is read after each step, not once at the end.
+# or the stack changes, so the count is read after each step, not once at the end. What counts
+# toward the cap of 300 is Azure's 2xx and its 4xx other than 429; its 429s, refused without being
+# processed, are printed apart (the architect's decision after benchmark C-agent, 2026-11-16).
+#
+# Budgets and the request log (the priority task's behaviors 15 and 16). budget_status reads
+# agentgateway's own count, which the UI serves at /api/budgets/status, filtered by key name
+# (crates/agentgateway/src/ui.rs, budget_status) [src]; the UI's port is published on gb10-2's
+# loopback only (gateway/agentgateway.yml), so it is read there with curl over SSH. Each budget is
+# printed by its key's name, never by the key's hash, which names it in Postgres's budget_usage.
+# request_log reads Postgres's request_logs table from inside its container with psql, the query
+# sent on psql's stdin; it selects named columns only, never attributes_json whole, which holds the
+# caller's address and an overflow's endpoint, the Azure account's host. The UI itself is reached
+# through an SSH tunnel, `mise run gateway:ui`, at http://localhost:3001/ui.
 #
 # The command log. Each helper call and each command it runs is appended to
 # .state/priority/commands-<YYYY-MM-DD>.log and printed to stderr as
@@ -394,7 +417,7 @@ azure_count() {
         if (match($0, / route=default\/[a-z]+ /)) alias = substr($0, RSTART + 15, RLENGTH - 16)
         if (match($0, / http\.status=[0-9]+/)) st = substr($0, RSTART + 13, RLENGTH - 13)
         if (!answered) { unanswered[alias]++; nu++; next }
-        total++; per[alias]++; status[alias, st]++; if (st == 429) limited++
+        total++; per[alias]++; status[alias, st]++; if (st == 429) limited++; else if (st ~ /^[24][0-9][0-9]$/) counted++
       }
       END {
         printf "Azure answered %d requests from %s to %s\n", total, since, until
@@ -403,8 +426,51 @@ azure_count() {
           for (k in status) { split(k, ks, SUBSEP); if (ks[1] == a) line = line (line ? ", " : "") ks[2] " x" status[k] }
           printf "  %s (%s): %d%s%s\n", a, dep[a], per[a], (line ? ": " line : ""), (unanswered[a] ? sprintf("; %d sent with no reply from Azure", unanswered[a]) : "")
         }
+        printf "  toward the cap of 300: %d (2xx, and 4xx other than 429); 429, reported apart: %d\n", counted, limited
         if (limited) printf "  STOP: Azure answered 429 %d times; the task stops and escalates\n", limited
       }' | _clients_say azure_count
+  return "${PIPESTATUS[0]}"
+}
+
+budget_status() {
+  (($# <= 1)) || {
+    echo 'usage: budget_status [<key>]' >&2
+    return 2
+  }
+  [[ $# == 0 || $1 =~ ^[a-z0-9-]+$ ]] || {
+    echo "budget_status: $1 isn't a key name" >&2
+    return 2
+  }
+  local remote="curl -sS --max-time 5 'http://127.0.0.1:$AGW_UI_PORT/api/budgets/status${1:+?apiKeyName=$1}'"
+  _clients_log laptop "ssh -n $CLIENTS_HOST \"$remote\" | jq -r '.budgets[] | one line each'"
+  # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
+  ssh -n "$CLIENTS_HOST" "$remote" |
+    jq -r '.budgets | sort_by(.apiKeyName)[]
+      | "\(.apiKeyName) \(.name): used \(.usage.used) of \(.limit.amount) \(.limit.unit), exceeded \(.usage.exceeded), \(.onBudgetExceeded); window ends \(if .window.end then (.window.end / 1000 | localtime | strftime("%H:%M:%S")) else "never" end)"' |
+    _clients_say budget_status
+  return "${PIPESTATUS[0]}"
+}
+
+request_log() {
+  (($# <= 1)) || {
+    echo 'usage: request_log [<count>]' >&2
+    return 2
+  }
+  local count=${1:-10}
+  [[ $count =~ ^[1-9][0-9]*$ ]] || {
+    echo 'request_log: <count> is a positive integer' >&2
+    return 2
+  }
+  local query
+  query="select to_char(completed_at at time zone 'UTC', 'HH24:MI:SS') as completed_utc,
+  http_status as status, attributes_json->>'agw.api_key.name' as key, agentgateway_user as ui_user,
+  gen_ai_provider_name as provider, gen_ai_request_model as model, input_tokens as input,
+  output_tokens as output, total_tokens as total, duration_ms, has_payload
+  from request_logs order by completed_at desc limit $count;
+select count(*) as payload_rows from request_log_payloads;"
+  _clients_log laptop "ssh $CLIENTS_HOST 'docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -P pager=off' <<< \"${query//$'\n'/ }\""
+  ssh "$CLIENTS_HOST" 'docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -P pager=off' \
+    <<<"$query" | _clients_say request_log
   return "${PIPESTATUS[0]}"
 }
 

@@ -1,0 +1,9 @@
+# Benchmark D's control (the priority task's behavior 13): every key's requests carry bulk's
+# priority, 10, on the agent and vision rows, so an interactive request is scheduled as bulk's are.
+# The rows' priority comes from config.yaml's &row-priority, a CEL expression on the key's name;
+# this overlay replaces it with the constant 10, on both rows' providers at once, since the vision
+# row's is an alias of the agent row's. A request to Azure still carries none. Applied by
+# `scripts/agentgateway-deploy.sh priority-flat`, removed, restoring priority by key, by a deploy
+# without it. It sends nothing to Azure.
+#@ replace                 priority: 'apiKey.name == "bulk" ? 10 : 0'
+                priority: '10'

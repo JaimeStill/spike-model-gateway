@@ -49,11 +49,31 @@ config:
 #   request count reads (scripts/clients-lib.sh, azure_count). `gen_ai.provider.name`, logged on
 #   every LLM request, reads `azure` there too (providerOverride), and `custom` on a row's.
 #   `endpoint` names the Azure account's host, so a quoted line has it replaced.
+# - `key_name`, the name of the key the request was admitted with (its `metadata.name`, which
+#   agentgateway flattens into `apiKey`; schema/cel.md), absent on a 401. It tells two runs on one
+#   alias apart, such as benchmark D's bulk and interactive runs, and shows which key a probe's 429
+#   refused (scripts/measure-lib.sh reads it).
+#
+# The request log in Postgres (`database`): every request also writes one row of `request_logs`
+# in config.database, which the UI's Logs and Analytics pages read. `llm: metadata` stores the
+# request's metadata, usage, timing, and cost, and no prompt or completion content: no
+# `request_log_payloads` row is written (telemetry/log.rs, database_llm_payload) [src]. The row
+# carries every field of the access log line, the key's name among them as `agw.api_key.name`,
+# which agentgateway adds itself (telemetry/log.rs, api_key_name) [src]; `agentgateway.user` is
+# set to the key's name too, so it fills the row's indexed `agentgateway_user` column, the user the
+# UI's Logs and Analytics filter and group by (telemetry/log_store.rs, promoted_attribute_column)
+# [src]. A row also holds the caller's address and the endpoint, as the access log line does, so a
+# quoted row names its columns.
 frontendPolicies:
   accessLog:
     add:
       retry_after: 'response.headers["retry-after"]'
       overflow: 'response.headers["x-gateway-overflow"]'
+      key_name: 'apiKey.name'
+    database:
+      llm: metadata
+      add:
+        agentgateway.user: 'apiKey.name'
 
 gateways:
   # The consumer port, published on gb10-2's tailnet address (deploy.env). It isn't named
@@ -70,18 +90,69 @@ gateways:
     # missing key, then sends gb10-2 a copy of this file with each marker replaced by its key's
     # `sha256:<hex>`; a marker never reaches gb10-2. Adding an entry and deploying issues a key;
     # removing one and deploying revokes it with no restart (docs/findings/agentgateway.md, "Keys").
+    #
+    # Four keys: architect, bench, and go-ai are interactive, and bulk is for batch work. Each key's
+    # `metadata.name` is what every per-key policy reads: its priority on the agent and vision rows
+    # (&row-priority), its request-rate bucket on each route (&key-rates), and its budget here.
+    #
+    # Token budgets. Each key has one budget, `tokens`, charged after each LLM reply with the reply's
+    # total tokens, input and output (http/budget/mod.rs, settle) [src]. A streamed Chat Completions
+    # reply is charged too, whether or not the client sent `include_usage`: the routes type it as
+    # `completions`, which adds `include_usage` to every stream (&typed, below). The counter is
+    # checked before each request, so the request that crosses the limit is answered and charged,
+    # and the next one is refused. Block refuses it with 429 and a Retry-After of the seconds left in
+    # the window; Audit only logs `API key budget exceeded` and lets it through (http/budget/mod.rs,
+    # check; proxy/mod.rs) [src]. The counters live in memory and are written to config.database's
+    # `budget_usage` table every 5 s and at shutdown, and read back at start, so a count survives a
+    # gateway restart (http/budget/database.rs) [src]. A budget is keyed by its key's hash and its
+    # name, so a reload that changes a limit keeps the count; one that changes the window or the
+    # unit starts it again (BudgetCounter::configure) [src]. Budgets on the gateway's own apiKey
+    # policy take effect as a route's do: the gateway's policies are attached with the budget
+    # policy, and its budget runs right after its key check (types/local.rs; proxy/httpproxy.rs,
+    # the gateway's request policies) [src].
+    #
+    # The window: `rolling: 1h`, agentgateway's name for a fixed window aligned to the Unix epoch,
+    # here each UTC clock hour, not a sliding one (schema/config.md), so a count starts again at
+    # each hour and a Block's Retry-After is the time to the next hour. bulk Blocks at 1,000,000
+    # tokens an hour: above benchmarks B and D together, about 760 bulk vision requests (B's 150 s
+    # and D's two 120 s runs at about 1.9 requests a second at 20 concurrent, 116 a minute in the
+    # agentgateway task's c-vision) of about 580 tokens each (479 prompt, 100 output), some 440,000
+    # tokens, run within one hour. The interactive keys Audit at 5,000,000 an hour (&audit-budget):
+    # benchmark A's C-embed alone, 34 requests a second of 512 tokens for 90 s, is about 1,570,000.
+    # The bulk-budget-low probe overlay lowers bulk's to 1 token, so its next request is refused.
     apiKey:
       mode: strict
       keys:
       - keyHash: sha256:@@architect@@
         metadata:
           name: architect
+        budgets: &audit-budget
+        - name: tokens
+          limit:
+            unit: Tokens
+            amount: 5000000
+          window:
+            rolling: 1h
+          onBudgetExceeded: Audit
       - keyHash: sha256:@@bench@@
         metadata:
           name: bench
+        budgets: *audit-budget
       - keyHash: sha256:@@go-ai@@
         metadata:
           name: go-ai
+        budgets: *audit-budget
+      - keyHash: sha256:@@bulk@@
+        metadata:
+          name: bulk
+        budgets:
+        - name: tokens
+          limit:
+            unit: Tokens
+            amount: 1000000
+          window:
+            rolling: 1h
+          onBudgetExceeded: Block
   # The UI, read-only (config.storage), on its own port, published on gb10-2's loopback only and
   # reached through an SSH tunnel. The admin API's debug and shutdown endpoints stay on adminAddr.
   ui:
@@ -117,6 +188,20 @@ ui:
 #   row, and with 20 ms it went to Azure on its third attempt; benchmark C is to show it live. A
 #   body is buffered for a retry only up to 64 KiB (MAX_BUFFERED_BYTES); a larger one, such as a
 #   1440p image, is sent once, unretried [src].
+# - A request-rate bucket per key (&key-rates on agent, vision, and audio; embedding has its own,
+#   below): `localRateLimit` with `key: apiKey.name`, so each key's requests draw on a bucket of
+#   their own, and one key's refusals leave another's untouched (schema/config.md; the docs'
+#   rate-limits.md, "Routing-based") (http/localratelimit.rs, bucket) [src]. A bucket counts
+#   requests, once per client request, before the retry (proxy/httpproxy.rs) [src], and past it the
+#   gateway answers 429 with Retry-After and `x-ratelimit-*` itself; the row never sees the request,
+#   so a 429 evicts nothing and sends nothing to Azure. The first entry whose condition holds is
+#   the request's (`conditional`): bulk's, 600 requests a minute, then every other key's, 1,200 a
+#   minute, each a full minute's worth at once and refilled each minute. Neither binds in normal
+#   use or the benchmarks: bulk's heaviest is benchmark B's C-vision, 20 concurrent at about 1.9
+#   requests a second (the agentgateway task's c-vision at 20), 116 a minute; an interactive
+#   key's is O-audio, 64 requests in about 20 s. The bulk-rate-low probe overlay lowers bulk's to 2
+#   a minute, so bulk's third request in a minute is refused while another key answers. Buckets
+#   are local to the gateway process, and a reload that changes a rule starts it full.
 #
 # The row's provider (&row-*): a custom provider at the row's host and port over plain HTTP on the
 # tailnet, listing the four typed formats, so each passes through unchanged; it keeps the client's
@@ -125,6 +210,28 @@ ui:
 # (--max-num-queued-reqs, spike-model-engines host/), or on a failed connection, where there is no
 # reply; two in a row evict the row for 5 s, and each later eviction is longer, 5 s times the
 # times it has been evicted, with no cap (http/health.rs) [src].
+#
+# Priority by key (&row-priority, on the agent and vision rows' providers only): each request's
+# body is given vLLM's `priority` field from the key's name, 0 for an interactive key and 10 for
+# bulk. Both rows schedule by priority (--scheduling-policy priority, spike-model-engines host/),
+# where a lower value is served first, so interactive work is taken ahead of bulk's waiting
+# requests. `ai.transformations` sets a body field from a CEL expression after the request is
+# parsed (schema/config.md, `policies.ai.transformations`), and the expression reads the key: a
+# provider's policies are registered once the provider is chosen, before the request's snapshot,
+# which keeps the key's claims, so `apiKey.name` is in the expression's context
+# (proxy/httpproxy.rs, "Provider policies are only known once a provider is selected";
+# cel/types.rs, new_llm) [src]. The provider's `ai` policy is merged field by field with the
+# route's (&typed), so the route's `routes` still apply (store/binds.rs) [src]. An expression that
+# fails, such as one with no key, leaves the field out (llm/policy/mod.rs,
+# apply_request_body_mutations) [src]. It sits on the row's provider, not the route, so a request
+# the Azure provider answers never carries it: each attempt of a retry starts again from the
+# client's body (proxy/httpproxy.rs, the retry loop) [src], and the Azure provider has no
+# transformation. On the laptop, against a capturing mock row, bulk's chat reached the row with
+# `"priority":10`, go-ai's with `0`, the audio row's with none, and bulk's chat sent while the row
+# was unreachable reached the Azure provider with none. vLLM reads `priority` on Chat Completions,
+# Completions, and Responses; the field is set on every typed request to these two rows, Messages
+# too, which the benchmarks and probes don't send. The priority-flat probe overlay sets every key
+# to bulk's 10, benchmark D's control.
 #
 # The Azure provider (&azure-*): an OpenAI-compatible custom provider at the spike's Foundry
 # account, https://<account>.services.ai.azure.com/openai/v1/<path>, the endpoint each deployment
@@ -193,6 +300,19 @@ routes:
       attempts: 2
       backoff: 20ms
       codes: [503]
+    localRateLimit: &key-rates
+      conditional:
+      - condition: 'apiKey.name == "bulk"'
+        key: apiKey.name
+        type: requests
+        maxTokens: 600
+        tokensPerFill: 600
+        fillInterval: 60s
+      - key: apiKey.name
+        type: requests
+        maxTokens: 1200
+        tokensPerFill: 1200
+        fillInterval: 60s
   backends:
   - ai:
       groups:
@@ -214,6 +334,9 @@ routes:
               eviction:
                 consecutiveFailures: 2
                 duration: 5s
+            ai: &row-priority
+              transformations:
+                priority: 'apiKey.name == "bulk" ? 10 : 0'
       - providers:
         - name: agent-azure
           hostOverride: '@@secret:azure-account@@.services.ai.azure.com:443'
@@ -263,6 +386,7 @@ routes:
       - *not-serving
     ai: *typed
     retry: *retry-503
+    localRateLimit: *key-rates
   backends:
   - ai:
       groups:
@@ -274,6 +398,7 @@ routes:
               formats: *row-formats
           policies:
             health: *row-health
+            ai: *row-priority
       - providers:
         - name: vision-azure
           hostOverride: '@@secret:azure-account@@.services.ai.azure.com:443'
@@ -307,6 +432,7 @@ routes:
       - *not-serving
     ai: *typed
     retry: *retry-503
+    localRateLimit: *key-rates
   backends:
   - ai:
       groups:
@@ -350,6 +476,25 @@ routes:
       - *not-serving
     ai: *typed
     retry: *retry-503
+    # Embedding's limits: the global 34 requests a second (the first rule, with no key, so every
+    # caller shares its one bucket), and a bucket per key. The global bucket holds 34 and gets 34
+    # back each second, so it admits a burst of 34 and then 34 a second, and answers 429 with
+    # Retry-After past it (http/localratelimit.rs; proxy/mod.rs) [src]. Its 429 is the gateway's
+    # own, before any backend, so it evicts nothing and sends nothing to Azure. The per-key bucket
+    # is twice the global, so the global binds first for any one key, and a request either rule
+    # refuses counts against neither (RateLimits::apply) [src]. Embedding's clients send many
+    # small requests a second, so its key buckets refill each second, where the chat routes'
+    # refill each minute (&key-rates).
+    localRateLimit:
+    - type: requests
+      maxTokens: 34
+      tokensPerFill: 34
+      fillInterval: 1s
+    - key: apiKey.name
+      type: requests
+      maxTokens: 68
+      tokensPerFill: 68
+      fillInterval: 1s
   backends:
   - ai:
       groups:

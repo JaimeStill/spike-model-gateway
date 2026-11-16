@@ -41,3 +41,10 @@ run = "ssh gb10-2 gateway/compose.sh down"
 [tasks."gateway:reset"]
 description = "Stop the gateway's compose stack on gb10-2 and drop Postgres's volume"
 run = "ssh gb10-2 gateway/compose.sh down --volumes"
+
+# The gateway's UI, published on gb10-2's loopback only (gateway/agentgateway.yml), reached from the
+# laptop through an SSH tunnel: http://localhost:3001/ui while it runs, its Logs and Analytics pages
+# reading the request log in Postgres. The tunnel holds the terminal until Ctrl-C.
+[tasks."gateway:ui"]
+description = "Tunnel the gateway's UI from gb10-2's loopback to the laptop's localhost:3001 until Ctrl-C"
+run = "ssh -N -L 3001:127.0.0.1:3001 gb10-2"
