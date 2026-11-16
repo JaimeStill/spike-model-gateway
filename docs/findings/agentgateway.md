@@ -724,7 +724,7 @@ copy before it is moved into place, and agentgateway reloads it with no restart.
 
 | Overlay | What it sets | Source |
 | --- | --- | --- |
-| [`access-log`](../../gateway/agentgateway/probes/access-log.yaml) | an access log field, `retry_after`, each reply's `Retry-After` | `frontendPolicies.accessLog.add`; docs `observability/access-logs/view.md` |
+| `access-log` (retired by task `routing`, which commits its field in [`config.yaml`](../../gateway/agentgateway/config.yaml)) | an access log field, `retry_after`, each reply's `Retry-After` | `frontendPolicies.accessLog.add`; docs `observability/access-logs/view.md` |
 | [`rate-limit-agent`](../../gateway/agentgateway/probes/rate-limit-agent.yaml) | a request-rate limit on the agent route: 2 requests, 2 more every 10 s, one bucket for every caller | a top-level `policies` entry, `target.route` agent, `localRateLimit`; `http/localratelimit.rs` |
 | [`in-flight-1`](../../gateway/agentgateway/probes/in-flight-1.yaml) | the global in-flight limit at 1 | `frontendPolicies.http.maxConcurrentRequests`; `proxy/gateway.rs` |
 | [`key-header`](../../gateway/agentgateway/probes/key-header.yaml) | the consumer gateway reads its keys from `x-api-key` | `apiKey.location.header.name`, inserted after `    apiKey:` |

@@ -1,41 +1,50 @@
 #!/usr/bin/env bash
-# The agentgateway task's client steps for slice 3 (behaviors 9-11): go-ai's integration tier and
-# infer's, the released infer CLI, and the curl requests of the 429 and 503 probes, each through
-# the gateway with a gateway-issued key. Sourced from the repository root on the laptop, then
+# The client steps through the gateway, each with a gateway-issued key: go-ai's integration tier
+# and infer's, the released infer CLI, and curl, for the routing task's behavior checks and probes
+# (and the agentgateway task's before it). Sourced from the repository root on the laptop, then
 # called one step at a time in the architect's view:
 #
 #   source scripts/clients-lib.sh
 #
+#   gw_base <alias>   the alias's base URL on the gateway, http://gb10-2:<port>/v1, its port read
+#                     from gateway/agentgateway/deploy.env
 #   goai_checkout     a worktree of go-ai at tools/infer/v0.1.0, detached, under
-#                     .state/agentgateway/go-ai; go-ai's own working tree is not touched
+#                     .state/routing/go-ai; go-ai's own working tree is not touched
 #   infer_install     the released infer, `go install ...tools/infer/cmd/infer@v0.1.0`, into
-#                     .state/agentgateway/bin
+#                     .state/routing/bin
 #   goai_tier <name> <alias>...
 #                     go-ai's integration tier, from the worktree, with each alias's role set to
-#                     its base URL on the gateway; output in .state/agentgateway/clients/<name>.log
+#                     its base URL on the gateway; output in .state/routing/clients/<name>.log
 #   infer_tier <name> <alias>...
 #                     infer's integration tier the same way, from the worktree's tools/infer
 #   infer_at <alias> <infer argument>...
 #                     the released infer once, INFER_BASE_URL at the alias's base URL, no model
 #   gw_curl <key> <curl argument>...
 #                     curl with the named key's credential header, read from its key file
+#   logged <command>  any other step, given as one string: run with bash from the root, logged as
+#                     written, and its output, stdout and stderr, appended to the log as printed;
+#                     for a command that prints no key, such as `mise run agentgateway-deploy`, a
+#                     curl without a key, or `mise run watch`
 #
-# The keys. Every helper reads a key from .state/agentgateway/keys/<name> with bash's `$(<file)`
-# inside a subshell, with xtrace off there, into the environment of the one process that sends
-# it: AI_<ROLE>_TOKEN for go-ai's and infer's tiers, INFER_TOKEN for infer, or curl's config read
-# from its stdin (`curl -K -`, written by printf, a builtin). No key is ever in a process's argv,
-# printed, or logged; the log shows only the expression that reads it. go-ai's and infer's tiers
-# send a role's credential from AI_<ROLE>_TOKEN or AI_<ROLE>_HEADER and print neither value on any
-# failure (go-ai's integration/doc.go and tools/infer/integration/doc.go at tools/infer/v0.1.0);
-# infer has no flag for INFER_TOKEN or INFER_HEADER. After each tier run, the helper searches its
-# log for the key (`grep -F -f` the key file) and says whether it was found.
+# The base URL. The gateway's `llm` section serves each alias on its own port, so its base URL is
+# that port's /v1, whose /v1/models lists the alias alone (gateway/agentgateway/config.yaml).
+#
+# The keys. Every helper reads a key from .state/agentgateway/keys/<name>, where the deploy keeps
+# them, with bash's `$(<file)` inside a subshell, with xtrace off there, into the environment of the
+# one process that sends it: AI_<ROLE>_TOKEN for go-ai's and infer's tiers, INFER_TOKEN for infer,
+# or curl's config read from its stdin (`curl -K -`, written by printf, a builtin). No key is ever
+# in a process's argv, printed, or logged; the log shows only the expression that reads it. go-ai's
+# and infer's tiers send a role's credential from AI_<ROLE>_TOKEN or AI_<ROLE>_HEADER and print
+# neither value on any failure (go-ai's integration/doc.go and tools/infer/integration/doc.go at
+# tools/infer/v0.1.0); infer has no flag for INFER_TOKEN or INFER_HEADER. After each tier run, the
+# helper searches its log for the key (`grep -F -f` the key file) and says whether it was found.
 #
 # The credential's place: Bearer by default, as the gateway reads it. With CLIENTS_KEY_IN=header,
 # the key is sent as `x-api-key: <key>` instead, through AI_<ROLE>_HEADER, INFER_HEADER, or the
 # curl header, for the gateway with the `key-header` probes overlay deployed.
 #
 # The command log. Each helper call and each command it runs is appended to
-# .state/agentgateway/commands-<YYYY-MM-DD>.log and printed to stderr as
+# .state/routing/commands-<YYYY-MM-DD>.log and printed to stderr as
 # `+ <ISO time> <host>: <command>`, the form measure-lib.sh and the deploy script print.
 
 if ! (return 0 2>/dev/null); then
@@ -45,14 +54,24 @@ fi
 
 CLIENTS_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # Relative to the root: every command runs from there, so the log names no home directory.
-CLIENTS_STATE=.state/agentgateway
-CLIENTS_GATEWAY=http://gb10-2:3000
+CLIENTS_STATE=.state/routing
+CLIENTS_KEYS=.state/agentgateway/keys
+CLIENTS_HOST=gb10-2
 CLIENTS_GOAI_REPO=$HOME/architecture/go-ai
 # go-ai's release that carries per-role credentials in both tiers: tools/infer/v0.1.0. Its base
 # module's code is v0.1.0's; only the integration tier's files and docs differ from the v0.1.0 tag.
 CLIENTS_GOAI_TAG=tools/infer/v0.1.0
 CLIENTS_WORKTREE=$CLIENTS_STATE/go-ai
 CLIENTS_INFER=$CLIENTS_STATE/bin/infer
+
+# Each alias's port, from deploy.env's AGW_ALIAS_PORTS.
+# shellcheck disable=SC1091 # check.sh runs shellcheck without -x; deploy.env is assignments.
+source "$CLIENTS_ROOT/gateway/agentgateway/deploy.env"
+declare -gA CLIENTS_PORT=()
+for _ap in $AGW_ALIAS_PORTS; do
+  CLIENTS_PORT[${_ap%%:*}]=${_ap#*:}
+done
+unset _ap
 
 # Each alias's role in go-ai's tiers.
 declare -gA CLIENTS_ROLE=(
@@ -61,6 +80,15 @@ declare -gA CLIENTS_ROLE=(
   [audio]=AUDIO
   [embedding]=EMBEDDING
 )
+
+gw_base() {
+  local alias=${1:?usage: gw_base <alias>}
+  [[ -n ${CLIENTS_PORT[$alias]-} ]] || {
+    echo "gw_base: unknown alias $alias (agent, vision, audio, embedding)" >&2
+    return 2
+  }
+  echo "http://$CLIENTS_HOST:${CLIENTS_PORT[$alias]}/v1"
+}
 
 _clients_log() {
   printf '+ %s %s: %s\n' "$(date -Iseconds)" "$1" "$2" |
@@ -83,15 +111,15 @@ _clients_say() {
 # shellcheck disable=SC2016 # The expression is logged as written, never expanded.
 _clients_shown() {
   if [[ ${CLIENTS_KEY_IN:-bearer} == header ]]; then
-    printf "'x-api-key: '\$(<%s)" "$CLIENTS_STATE/keys/$1"
+    printf "'x-api-key: '\$(<%s)" "$CLIENTS_KEYS/$1"
   else
-    printf '$(<%s)' "$CLIENTS_STATE/keys/$1"
+    printf '$(<%s)' "$CLIENTS_KEYS/$1"
   fi
 }
 
 _clients_key_ok() {
-  if [[ ! -s $CLIENTS_ROOT/$CLIENTS_STATE/keys/$1 ]]; then
-    echo "no key at $CLIENTS_STATE/keys/$1; run mise run agentgateway-deploy first" >&2
+  if [[ ! -s $CLIENTS_ROOT/$CLIENTS_KEYS/$1 ]]; then
+    echo "no key at $CLIENTS_KEYS/$1; run mise run agentgateway-deploy first" >&2
     return 2
   fi
 }
@@ -131,6 +159,7 @@ _clients_tier() {
       echo "${kind}_tier: unknown alias $alias (agent, vision, audio, embedding)" >&2
       return 2
     }
+    gw_base "$alias" >/dev/null || return
   done
   _clients_key_ok go-ai || return
   [[ -d $CLIENTS_ROOT/$CLIENTS_WORKTREE ]] || {
@@ -146,7 +175,7 @@ _clients_tier() {
   local shown='' cred=TOKEN
   [[ ${CLIENTS_KEY_IN:-bearer} != header ]] || cred=HEADER
   for alias in "$@"; do
-    shown+="AI_${CLIENTS_ROLE[$alias]}_BASE_URL=$CLIENTS_GATEWAY/$alias/v1 "
+    shown+="AI_${CLIENTS_ROLE[$alias]}_BASE_URL=$(gw_base "$alias") "
     shown+="AI_${CLIENTS_ROLE[$alias]}_$cred=$(_clients_shown go-ai) "
   done
   _clients_log laptop "${kind}_tier $name $*"
@@ -158,9 +187,9 @@ _clients_tier() {
     for v in "${CLIENTS_ROLE[@]}" TRANSCRIPTION; do
       unset "AI_${v}_BASE_URL" "AI_${v}_TOKEN" "AI_${v}_HEADER"
     done
-    key=$(<"$CLIENTS_ROOT/$CLIENTS_STATE/keys/go-ai")
+    key=$(<"$CLIENTS_ROOT/$CLIENTS_KEYS/go-ai")
     for alias in "$@"; do
-      export "AI_${CLIENTS_ROLE[$alias]}_BASE_URL=$CLIENTS_GATEWAY/$alias/v1"
+      export "AI_${CLIENTS_ROLE[$alias]}_BASE_URL=$(gw_base "$alias")"
       if [[ $cred == HEADER ]]; then
         export "AI_${CLIENTS_ROLE[$alias]}_HEADER=x-api-key: $key"
       else
@@ -177,7 +206,7 @@ _clients_tier() {
   {
     echo "$name: exit $rc"
     # grep's 1 is "not found"; any other failure is no answer, and says so.
-    grep -qF -f "$CLIENTS_ROOT/$CLIENTS_STATE/keys/go-ai" "$CLIENTS_ROOT/$out" 2>/dev/null
+    grep -qF -f "$CLIENTS_ROOT/$CLIENTS_KEYS/go-ai" "$CLIENTS_ROOT/$out" 2>/dev/null
     case $? in
       0) echo "$name: THE KEY IS IN $out; delete it before anything is shared" ;;
       1) echo "$name: the key is not in $out" ;;
@@ -202,6 +231,7 @@ infer_at() {
     echo "infer_at: unknown alias $alias" >&2
     return 2
   }
+  gw_base "$alias" >/dev/null || return
   _clients_key_ok go-ai || return
   [[ -x $CLIENTS_ROOT/$CLIENTS_INFER ]] || {
     echo 'infer_at: no infer; run infer_install first' >&2
@@ -209,19 +239,20 @@ infer_at() {
   }
   local cred=INFER_TOKEN
   [[ ${CLIENTS_KEY_IN:-bearer} != header ]] || cred=INFER_HEADER
-  _clients_log laptop "$cred=$(_clients_shown go-ai) INFER_BASE_URL=$CLIENTS_GATEWAY/$alias/v1 $CLIENTS_INFER $*"
+  _clients_log laptop "$cred=$(_clients_shown go-ai) INFER_BASE_URL=$(gw_base "$alias") $CLIENTS_INFER $*"
   (
     { set +x; } 2>/dev/null
     cd "$CLIENTS_ROOT" || exit
     unset INFER_TOKEN INFER_HEADER INFER_MODEL
-    key=$(<"$CLIENTS_STATE/keys/go-ai")
+    key=$(<"$CLIENTS_KEYS/go-ai")
     if [[ $cred == INFER_HEADER ]]; then
       export INFER_HEADER="x-api-key: $key"
     else
       export INFER_TOKEN=$key
     fi
     unset key
-    export INFER_BASE_URL=$CLIENTS_GATEWAY/$alias/v1
+    INFER_BASE_URL=$(gw_base "$alias")
+    export INFER_BASE_URL
     exec "$CLIENTS_INFER" "$@"
   )
 }
@@ -236,13 +267,24 @@ gw_curl() {
   _clients_key_ok "$name" || return
   local header='Authorization: Bearer '
   [[ ${CLIENTS_KEY_IN:-bearer} != header ]] || header='x-api-key: '
-  _clients_log laptop "printf 'header = \"$header%s\"\\n' \"\$(<$CLIENTS_STATE/keys/$name)\" | curl -K - $*"
+  _clients_log laptop "printf 'header = \"$header%s\"\\n' \"\$(<$CLIENTS_KEYS/$name)\" | curl -K - $*"
   (
     { set +x; } 2>/dev/null
     cd "$CLIENTS_ROOT" || exit
     # shellcheck disable=SC2059 # The format is built from a fixed header name.
-    printf "header = \"$header%s\"\n" "$(<"$CLIENTS_STATE/keys/$name")" | curl -K - "$@"
+    printf "header = \"$header%s\"\n" "$(<"$CLIENTS_KEYS/$name")" | curl -K - "$@"
   )
+}
+
+logged() {
+  (($# == 1)) || {
+    echo 'usage: logged <command, as one string>' >&2
+    return 2
+  }
+  _clients_log laptop "$1"
+  (cd "$CLIENTS_ROOT" && bash -c "$1") 2>&1 |
+    tee -a "$CLIENTS_ROOT/$CLIENTS_STATE/commands-$(date +%F).log"
+  return "${PIPESTATUS[0]}"
 }
 
 mkdir -p "$CLIENTS_ROOT/$CLIENTS_STATE"

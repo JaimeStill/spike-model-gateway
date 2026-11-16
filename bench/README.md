@@ -10,10 +10,11 @@ at two levels past the target.
 The scenarios name no model, target, or key. `cell <name> <scenario> <direct|gateway> <alias>`
 gives the alias as the model and its tokenizer on the command line, the base URL in
 `GUIDELLM__SPEC__BACKEND__TARGET` (the row's `http://<host>:<port>/v1`, or the gateway's
-`http://gb10-2:3000/<alias>/v1`), and, for a gateway run only, the bench key in
-`GUIDELLM__SPEC__BACKEND__API_KEY`, read from `.state/agentgateway/keys/bench` into GuideLLM's
-environment. Each file points GuideLLM's backend check at `/v1/models`, since its default,
-`/health` at the target's root, is a path the gateway doesn't route.
+`http://gb10-2:<port>/v1`, the alias's own port: agent 3010, vision 3011, audio 3012, embedding
+3013), and, for a gateway run only, the bench key in `GUIDELLM__SPEC__BACKEND__API_KEY`, read from
+`.state/agentgateway/keys/bench` into GuideLLM's environment. Each file points GuideLLM's backend
+check at `/v1/models`, since its default, `/health` at the target's root, is a path the gateway
+refuses: it serves the serving endpoints alone.
 
 | Cell | Scenario | Alias, row | Tokenizer | Load |
 | --- | --- | --- | --- | --- |

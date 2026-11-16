@@ -21,7 +21,8 @@ Which gateway fronts the self-hosted vLLM layout, and with what access control?
 - It issues per-consumer keys with budgets, rate limits, and priority, so the capstone's chat stays
   responsive during a ~/docs-scale processing run.
 - It names purposes by alias (agent, vision, audio, embedding). Each alias has its own base URL,
-  `/<alias>/v1`, whose `/models` lists only that alias.
+  whose `/models` lists only that alias, so go-ai and the `infer` CLI work unchanged. agentgateway's
+  `llm` section serves each alias on its own port, `http://<gateway>:<port>/v1`.
 - It overflows to Azure AI Foundry under the same alias when a purpose is full or its host is down.
 - A consumer key reaches serving routes only, so no serving API manages models. Making the gateway
   the only network path to the rows is production's concern, for the networking and platform teams;
@@ -34,7 +35,7 @@ The answer is in the top-level [`README.md`](../README.md#the-answer).
 ## The evidence
 
 1. **Pass-through.** Chat, streaming, embeddings, and audio pass through under purpose aliases with
-   no answer crossed, each on its own `/<alias>/v1` whose `/models` lists exactly that alias. The
+   no answer crossed, each on its own port's `/v1` whose `/models` lists exactly that alias. The
    gateway's added TTFT, ITL, and latency, and its CPU and memory, are measured against the same
    GuideLLM cells sent direct, in one session.
 2. **Keys and routes.** Keys are issued by the gateway, and a missing or revoked key is refused.
@@ -84,19 +85,27 @@ The experiment's rules, in `ai-hosting.md`, govern every session. In short:
 - **Gateway bring-up:** `mise run agentgateway-deploy`
   ([`scripts/agentgateway-deploy.sh`](../scripts/agentgateway-deploy.sh)) deploys agentgateway to
   gb10-2 from [`gateway/agentgateway/`](../gateway/agentgateway/config.yaml) and reloads its
-  config in place.
+  config in place. It publishes the four alias ports on gb10-2's tailnet address: agent 3010,
+  vision 3011, audio 3012, and embedding 3013, each served by the `llm` section.
 - **Gateway keys:** the deploy creates each key the config names, kept untracked on the deploying
   machine, and sends gb10-2 a copy with each key's hash. Removing a name and deploying revokes it.
-- **Probe overlays:** `gateway/agentgateway/probes/` holds one-off config changes (an access log
-  field, a rate limit, an in-flight limit, a key header) that the deploy applies to the copy it
-  sends; a deploy without them removes them.
+- **Probe overlays:** `gateway/agentgateway/probes/` holds one-off config changes that the deploy
+  applies to the copy it sends: `rate-limit-agent`, a request-rate limit on the agent port alone;
+  `in-flight-1`, the in-flight limit at 1; and `key-header`, keys read from `x-api-key`. A deploy
+  without them removes them. Each reply's Retry-After is in the access log without an overlay.
 - **Step helpers:** [`scripts/measure-lib.sh`](../scripts/measure-lib.sh) runs and reads the
   GuideLLM cells in [`bench/`](../bench/README.md), and
   [`scripts/clients-lib.sh`](../scripts/clients-lib.sh) runs go-ai's and infer's tiers, the infer
-  CLI, and curl through the gateway, each with a key read from its file.
-- **Planned:** agentgateway's config off the legacy route form, admission on `/metrics`, per-key
-  priority and budgets (streamed usage included), embedding's rate limit, Azure AI Foundry overflow, OpenTelemetry traces through a Collector, and
+  CLI, and curl through the gateway, each with a key read from its file. `gw_base <alias>` prints
+  an alias's base URL, and `logged <command>` runs and logs a step that prints no key.
+- **Watch register:** [`docs/watch.md`](../docs/watch.md) tracks each dependency's anticipated
+  capabilities, deprecations, and other changes. `mise run watch` is its read-only check of the
+  entries' upstream issues and pull requests and release fields. It runs at every task's PLAN as
+  its own block, beside `mise run currency` and separate from it.
+- **Planned:** admission on `/metrics`, per-key priority and budgets (streamed usage included),
+  embedding's rate limit, Azure AI Foundry overflow, OpenTelemetry traces through a Collector, and
   the gateway document, the decision and its configuration as requirements for v1.ai.hosting.
+  priority may key its rate limits on `llm.requestModel`, which gives each model its own bucket.
 
 ## Path
 
@@ -105,11 +114,11 @@ The tasks, in the order they run, each with the evidence it proves:
 1. `agentgateway`: agentgateway v1.7.0 on gb10-2, with each row serving under its alias through a
    spike-model-engines `host/` pull request (evidence 1–4, 8). Its finding is
    [`docs/findings/agentgateway.md`](../docs/findings/agentgateway.md).
-2. `routing`: agentgateway's config off the inline `ai` route backends its UI labels "legacy",
-   to the `llm` section or another non-legacy form, with the per-alias base URLs kept or replaced
-   by one shared `/v1`, and other config optimizations; the tiers pass through the chosen form
-   (evidence 1, 8).
-3. `priority`: on agentgateway alone, in routing's form: Azure AI Foundry overflow, per-key
+2. `routing`: agentgateway's config moved off the inline `ai` route backends its UI labels
+   "legacy", to the `llm` section, which serves each alias on its own port; the tiers pass through
+   it unchanged (evidence 1, 8). Its finding is
+   [`docs/findings/routing.md`](../docs/findings/routing.md).
+3. `priority`: on agentgateway alone, in the `llm` form: Azure AI Foundry overflow, per-key
    priority and budgets counting streamed usage, embedding's limit, the Framework down until
    `/health` (evidence 5–7).
 4. `answer`: traces through an OpenTelemetry Collector, the paper sections with the gateway

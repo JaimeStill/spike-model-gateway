@@ -7,7 +7,7 @@
 ## Tasks
 
 1. [x] agentgateway
-2. [ ] routing
+2. [x] routing
 3. [ ] priority
 4. [ ] answer
 
@@ -113,9 +113,73 @@
   org#154's change to that sentence).
 - plan: priority's brief is planned in its own `start` session, not here.
 
+- routing: a serving-endpoint allow-list (models, chat/completions, completions, messages,
+  responses, embeddings, audio/transcriptions, audio/translations) applies to whichever form
+  wins. Every other path is refused: 404 on route `ai`. On the `llm` form only an authorization
+  rule can refuse a path, so 403 is accepted there. A missing key stays 401.
+- routing: the access log's `retry_after` is committed in the base config. The access-log
+  overlay is retired, and the in-flight overlay inserts with an `after` directive.
+- routing: the `llm` section is trialled live for the four aliases. If it can't be set up
+  cleanly and route as wanted, the config falls back to route `ai` until `llm` can do what
+  route `ai` does. The deprecation risk stays in view:
+  - route `ai` is UI-labelled "legacy";
+  - the docs moved to `llm` (website#1091);
+  - `binds` was deprecated without parity (#3204);
+  - agentgateway has no deprecation policy (#2767).
+- routing: if the trial falls short, the session supplies the evidence and the architect files
+  the upstream issue in their own words, per agentgateway's code of conduct.
+- routing: in the `llm` form, each alias gets its own gateway and port. The `llm` section is
+  attached to all four, and each model's `authorization` requires `proxy.gateway.name ==
+  "<alias>"`. Route `ai` keeps serving on 3000 during the trial, and falling back is a deletion.
+  - Rejected: one shared `/v1` with a key per purpose, which splits every consumer four ways.
+  - Rejected: per-alias routes into the internal `llm:router` backend, an undocumented name.
+- routing: the alias ports are 3010 agent, 3011 vision, 3012 audio, and 3013 embedding. They are
+  set in deploy.env, and the helpers map each alias to its port.
+- routing: the trial passes only if all of (a)–(f) hold:
+  - (a) each base URL lists exactly its alias;
+  - (b) the full pass-through matrix works, and a model named at another alias's port is refused;
+  - (c) the tiers pass with only base URLs and keys changed;
+  - (d) non-serving paths are refused, and a missing key gets 401;
+  - (e) a rate limit holds on one alias alone;
+  - (f) the config validates using documented fields only.
+- routing: if `llm` passes, O-embed (60 s, 34 requests a second) and O-vision (90 s, 4
+  concurrent, 1440p) each run direct, route `ai`, `llm`, then direct, in one session. An `llm`
+  figure beyond route `ai` by more than the direct runs' spread is reported for the architect's
+  call, not an automatic fail.
+- routing: a coordinator pending edit for v1.ai.hosting records the deprecation risk and points
+  at the watch register.
+- routing: a watch register, separate from currency, tracks any dependency's anticipated
+  capabilities, deprecations, and other changes. The architect wants it to become a general
+  feature for the infrastructure we maintain.
+  - Its read-only check, `mise run watch`, runs at every task's PLAN as its own block.
+  - It is a script like currency.sh, using `gh` and `jq`, so it is not a new tool.
+  - Rejected: a schema check inside currency, which would mix version gaps with upstream risk.
+- routing: behavior 2's transcription line is met by the gateway's handling only (architect, 2026-11-16, "but we should at least verify it"): the audio row (Gemma 4 E4B, vLLM v0.33.0) registers no `/v1/audio/*` route, since `Gemma4ForConditionalGeneration` doesn't implement `SupportsTranscription`; both forms forward the full multipart body (the row's `/metrics` counts its Content-Length) and `llm` refuses a wrong-alias model with 403. A row that serves transcription needs a different model, such as Gemma 3n.
+- routing: the overhead cells ran on Tailscale's DERP relay (architect, 2026-11-16: "we have to be okay with the idea that we're not always going to be on the direct network path"); the laptop's network had no direct path (netcheck MappingVariesByDestIP true). `llm` against route `ai` is the comparable figure, since both share the path. Rejected: waiting for a direct path, and running GuideLLM from gb10-1.
+- routing: the verdict is `llm`: behaviors 1–6 hold. The one flagged figure, vision's median request latency `llm` +2.45 ms over route `ai` against a 1.78 ms direct spread, is accepted by the architect (2026-11-16) as noise-sized on a 4.7 s request.
+- routing: each model's authorization reads `proxy.listener.name`, not `proxy.gateway.name`: standalone agentgateway makes each `gateways` entry a listener of one gateway, `default`. Every model lists all four formats, audio included, since agentgateway classifies `/v1/chat/completions` before `passthrough`. The route form keeps its prefix match and refuses off-list paths with a conditional `directResponse` 404, since a prefix rewrite needs a prefix match.
+- routing: before any upstream issue, the session searched every agentgateway issue and pull request (2026-11-16). Only one gap has nothing upstream: several model routers per listener in standalone `llm`, which Kubernetes has (agentgateway#2973). The finding's "For an upstream feature request" holds the facts for the architect to file it in their own words. Per-model limits are agentgateway#4307's (comment there if priority needs them), typed parsing is #4185's, and `/models` scoping is closed (#2719).
+- routing: the watch register keeps the always-passthrough entry (#4185) although the trial
+  passed, where the brief named it only on a fallback: `llm` parses chat, Messages, Responses, and
+  embeddings as typed requests and adds `include_usage` to streams, so the release carrying #4185
+  is re-checked before any upgrade.
+
 ## Pending edits
 
 - coordinator · experiment.hosting intake: spike-model-engines' `docs/engines/vllm/api.md` and
   `models.md` are stale since its pull request #17: requests to the four standing rows now name the
   alias, while the guide's examples send the Hugging Face repository. This spike changes only
   `host/` there, so the fix is left to the experiment's intake.
+- coordinator · v1.ai.hosting: agentgateway's route `ai` backends are UI-labelled "legacy", the
+  docs moved to the `llm` section (website#1091), `binds` was deprecated without parity (#3204),
+  and there is no deprecation policy (#2767, closed as premature); since 1.7 the Kubernetes model
+  form is called the recommended one (#4307). The gateway's config form may change under it;
+  spike-model-gateway's watch register (`docs/watch.md`) tracks it.
+- coordinator · experiment.hosting intake: propose the watch register as a shared feature for the
+  infrastructure repositories (architect, 2026-11-16): one entry per dependency for anticipated
+  capabilities, deprecations, and other changes that would affect the infrastructure we maintain,
+  with a read-only `gh` check run at each PLAN beside currency.
+- coordinator · roadmap: the spike's summary and its tasks' wording change from `/<alias>/v1` to
+  each alias's own port, `http://<gateway>:<port>/v1`, whose `/models` lists only that alias
+  (routing's `llm` form); priority's summary "in the form routing settles" can name the `llm`
+  section.

@@ -13,7 +13,7 @@ trailing=$(MISE_ENV=bench MISE_LOG_LEVEL=error mise outdated --bump --local --js
   jq -r 'to_entries[] | (.value.bump // .value.latest) as $to | select($to != .value.requested) |
     "\(.value.source.path | split("/") | last): \(.key) \(.value.requested) -> \($to)"' | sort -u)
 
-# shellcheck disable=SC1091 # check.sh runs shellcheck without -x; deploy.env holds three assignments.
+# shellcheck disable=SC1091 # check.sh runs shellcheck without -x; deploy.env is assignments.
 source gateway/agentgateway/deploy.env
 pin=${AGW_IMAGE##*:}
 latest=$(gh release view -R agentgateway/agentgateway --json tagName --jq .tagName)

@@ -27,13 +27,13 @@
 #
 # Each command is printed to stderr before it runs, as `+ <time> <host>: <command>`, the form of
 # .state/<task>/commands-*.log, so a finding can quote it exactly. Commands run on gb10-2 are sent
-# as written: `$(tailscale ip -4)`, `$(id -u)`, and `$HOME` expand there, so the consumer port is
+# as written: `$(tailscale ip -4)`, `$(id -u)`, and `$HOME` expand there, so the alias ports are
 # published on gb10-2's tailnet address with no address written down or printed. Needs no root.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 host=gb10-2
-# shellcheck disable=SC1091 # check.sh runs shellcheck without -x; deploy.env holds three assignments.
+# shellcheck disable=SC1091 # check.sh runs shellcheck without -x; deploy.env is assignments.
 source gateway/agentgateway/deploy.env
 
 # Prints the command given, then runs it on gb10-2, where it expands.
@@ -48,13 +48,14 @@ state=.state/agentgateway
 keys=$state/keys
 
 # Keys. config.yaml commits each key's name only, as the marker `keyHash: sha256:@@<name>@@`; the
-# names are read from the markers, so adding an entry is all it takes to issue a key. A missing key
-# is created on this machine, 0600 in a 0700 directory, and an existing one is reused, so a re-run
-# changes nothing. Only names are printed: no key or hash reaches the terminal or the command log.
+# names are read from the markers, so adding an entry is all it takes to issue a key; a name listed
+# twice is one key. A missing key is created on this machine, 0600 in a 0700 directory, and an
+# existing one is reused, so a re-run changes nothing. Only names are printed: no key or hash
+# reaches the terminal or the command log.
 umask 077
 mkdir -p "$keys"
 chmod 700 "$keys"
-mapfile -t names < <(grep -oP '^\s*- keyHash: sha256:@@\K[a-z0-9-]+(?=@@\s*$)' "$config")
+mapfile -t names < <(grep -oP '^\s*- keyHash: sha256:@@\K[a-z0-9-]+(?=@@\s*$)' "$config" | sort -u)
 if ((${#names[@]} == 0)); then
   echo "agentgateway: no key markers in $config" >&2
   exit 1
@@ -171,7 +172,10 @@ on_host 'mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml'
 # label runs the same image with the same flags. The tailnet address isn't in the hash; a node keeps
 # its address.
 flags="--restart unless-stopped $user"
-flags+=" --publish \"\$(tailscale ip -4):$AGW_PORT:$AGW_PORT\""
+# The alias ports, each on gb10-2's tailnet address.
+for ap in $AGW_ALIAS_PORTS; do
+  flags+=" --publish \"\$(tailscale ip -4):${ap#*:}:${ap#*:}\""
+done
 flags+=" --publish 127.0.0.1:$AGW_UI_PORT:$AGW_UI_PORT $mount"
 # gb10-2 resolves names through systemd-resolved's stub (127.0.0.53), which a container can't
 # reach, so docker gives it an outside resolver that doesn't know the tailnet's short names. Each
