@@ -674,6 +674,40 @@ Its `differs` path was tried on a scratch edit of the register, then restored: a
 changed, a text field's value flipped, and a path that doesn't exist each printed `differs` (the
 missing file as `unreadable`), and the check exited 1.
 
+### For an upstream feature request
+
+The trial passed, but every gap it found against route `ai` was closed by a workaround, not by
+`llm` reaching parity. Before the architect files anything, the session searched every
+agentgateway issue and pull request, open and closed (1,247 issues and 3,108 pull requests,
+2026-11-16), so an issue repeats nothing already raised.
+
+| Gap on `llm` at v1.7.0 | Upstream | What to do |
+|---|---|---|
+| One path prefix for the whole section, so the aliases can't share one port as `/<alias>/v1` | Kubernetes has the feature: agentgateway#2973 (merged 2026-08-11) lets an HTTPRoute with a path-prefix rule and a backendRef of kind `AgentgatewayModel`, name `*`, instantiate a further model router on the same listener. Nothing asks for it in standalone `llm` | **File one issue** (below) |
+| A distinct rate limit per model | agentgateway#4307 (open, Kubernetes). A maintainer's reply (2026-11-16) points standalone users to `localRateLimit` with `key: llm.requestModel` (example `llm-keyed-rate-limit` at v1.7.0), which gives each model its own bucket at one rule's limits | Comment on #4307 if `priority` needs different limits per model; `priority` weighs the keyed limit against the probe's internal `internal/llm:request` target |
+| Chat, Messages, Responses, and embeddings parsed as typed requests whatever `passthrough` says | agentgateway#4185, merged 2026-10-27, unreleased, breaking | Watched ([`docs/watch.md`](../watch.md)) |
+| `/v1/models` scoped to the caller | agentgateway#2719 closed once per-key `allowedModels` covered it; #2966 (hide virtual models) closed | Nothing: model `authorization` on the listener does it |
+| Off-list paths refused with 403, not 404 | none | Too minor to file |
+| Standalone `gateways` entries are listeners of one gateway, `default`, so `proxy.gateway.name` can't tell them apart | none | A documentation gap at most |
+| No transcription route type | agentgateway#3799 (open, a question) | Nothing here: no row serves transcription |
+
+The one issue worth filing, for the architect to write in their own words (agentgateway's code
+of conduct requires a human-written description):
+
+- **Ask:** standalone `llm` parity with #2973: several model routers on one listener, each with
+  its own path prefix and its own set of models, its `/v1/models` listing only those.
+- **Use case:** per-purpose base URLs (`/agent/v1`, `/vision/v1`, ...) over self-hosted vLLM rows,
+  for OpenAI-compatible clients that take the single model a base URL lists (go-ai's integration
+  tier, the `infer` CLI), so no client names a model.
+- **Today's workaround, with its cost:** one gateway entry and published port per alias, each
+  model's `authorization` requiring `proxy.listener.name == "<alias>"` ("The trial"); four ports
+  to publish and four base URLs to hand out, and the rule leans on standalone naming every gateway
+  entry a listener of `default`.
+- **Evidence:** v1.7.0's `LocalLLMConfig.pathPrefix` is one string (`schema/config.json`;
+  `crates/agentgateway/src/types/local.rs`); route `ai` gave the same per-alias URLs on one port
+  in the agentgateway task, and its UI label is "legacy"; #4307 calls the model form the
+  recommended one since 1.7.
+
 ### The smoke test
 
 The deploy at 09:37:15 validated the config, recreated the container for the removed port (label

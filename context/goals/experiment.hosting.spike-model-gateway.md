@@ -82,7 +82,7 @@ Door          two-way: one config file, the losing form is a deletion,
 
 ## Progress
 
-slices 2/4 committed (00d340d trial, 2deeca6 transcription verified, fbb5796 tiers, verdict, cells) · standards — · spec — · editor —
+slices 3/4 committed (00d340d trial, 2deeca6 transcription, fbb5796 tiers and cells, 6c4bbe9 d9063fe c138802 settled form and watch register, upstream survey) · standards running · spec — · editor — · walkthrough (slice 4) after the reviews
 
 ## Decisions
 
@@ -231,6 +231,7 @@ slices 2/4 committed (00d340d trial, 2deeca6 transcription verified, fbb5796 tie
 - routing: the overhead cells ran on Tailscale's DERP relay (architect, 2026-11-16: "we have to be okay with the idea that we're not always going to be on the direct network path"); the laptop's network had no direct path (netcheck MappingVariesByDestIP true). `llm` against route `ai` is the comparable figure, since both share the path. Rejected: waiting for a direct path, and running GuideLLM from gb10-1.
 - routing: the verdict is `llm`: behaviors 1–6 hold. The one flagged figure, vision's median request latency `llm` +2.45 ms over route `ai` against a 1.78 ms direct spread, is accepted by the architect (2026-11-16) as noise-sized on a 4.7 s request.
 - routing: each model's authorization reads `proxy.listener.name`, not `proxy.gateway.name`: standalone agentgateway makes each `gateways` entry a listener of one gateway, `default`. Every model lists all four formats, audio included, since agentgateway classifies `/v1/chat/completions` before `passthrough`. The route form keeps its prefix match and refuses off-list paths with a conditional `directResponse` 404, since a prefix rewrite needs a prefix match.
+- routing: before any upstream issue, the session searched every agentgateway issue and pull request (2026-11-16). Only one gap has nothing upstream: several model routers per listener in standalone `llm`, which Kubernetes has (agentgateway#2973). The finding's "For an upstream feature request" holds the facts for the architect to file it in their own words. Per-model limits are agentgateway#4307's (comment there if priority needs them), typed parsing is #4185's, and `/models` scoping is closed (#2719).
 
 ## Pending edits
 

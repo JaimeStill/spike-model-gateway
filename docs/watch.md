@@ -79,7 +79,12 @@ and the project has acted on it; the finding or decision that acted keeps the re
     closed as premature.
   - The schema doesn't mark route `ai` yet: the route backend's `ai` variant carries no
     description (`schema/config.json`, `$defs.LocalRouteBackend`).
+  - On Kubernetes the model form is already the recommended one: agentgateway#4307 opens "Since
+    1.7, `AgentgatewayModel` is the recommended way to expose LLMs", `AgentgatewayModel` being the
+    Kubernetes counterpart of the `llm` section's models.
 - **Upstream:**
+  - `upstream agentgateway/agentgateway#4307 = open` per-model rate limits on `AgentgatewayModel`,
+    whose opening names it the recommended form since 1.7.
   - `upstream agentgateway/agentgateway#3204 = open` `binds` deprecated without parity.
   - `upstream agentgateway/agentgateway#2767 = closed` the deprecation policy, closed as premature.
   - `upstream agentgateway/agentgateway#3655 = closed` the docs' legacy backend configuration.
@@ -98,7 +103,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
   inventory"), and
   record what `llm` must gain for parity.
 - **State:** watching.
-- **Last checked:** 2026-11-16T14:40Z, `mise run watch`: every line as recorded, at v1.7.0, the
+- **Last checked:** 2026-11-16T14:44Z, `mise run watch`: every line as recorded, at v1.7.0, the
   latest release.
 
 ## agentgateway `llm` serving several base URLs on one port
@@ -112,7 +117,13 @@ and the project has acted on it; the finding or decision that acted keeps the re
   trial"): at v1.7.0, `llm.pathPrefix` is one string, the one prefix for every gateway the section
   is attached to, so the four aliases are told apart by port, each model authorized on its own
   listener.
-- **Upstream:** none filed.
+- **Upstream:** Kubernetes has it: agentgateway#2973 lets an HTTPRoute with a path-prefix rule
+  instantiate a further model router on the same listener, which `AgentgatewayModel`s bind to. No
+  issue asks for it in the standalone `llm` section (survey of every issue and pull request,
+  2026-11-16); the facts for one are in [`docs/findings/routing.md`](findings/routing.md), "For an
+  upstream feature request", for the architect to file.
+  - `upstream agentgateway/agentgateway#2973 = merged` model routers scoped to an HTTPRoute,
+    Kubernetes only.
 - **Watched:**
   - `json agentgateway/agentgateway schema/config.json .["$defs"].LocalLLMConfig.properties.pathPrefix.type = "string"`
     one prefix; an array, or an object, would be the change.
@@ -121,7 +132,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Action:** weigh moving the aliases back to one port, against the four ports' cost to
   consumers (four base URLs either way) and to the deploy (four published ports).
 - **State:** watching.
-- **Last checked:** 2026-11-16T14:40Z, `mise run watch`: as recorded, at v1.7.0.
+- **Last checked:** 2026-11-16T14:44Z, `mise run watch`: as recorded, at v1.7.0.
 
 ## agentgateway always-passthrough for `llm` models
 
@@ -145,5 +156,5 @@ and the project has acted on it; the finding or decision that acted keeps the re
   formats each model lists, whether streams still gain `include_usage`, and whether usage is still
   read for the access log and for `priority`'s budgets; then decide `passthrough` per model.
 - **State:** watching.
-- **Last checked:** 2026-11-16T14:40Z, `mise run watch`: as recorded; v1.7.0, the latest
+- **Last checked:** 2026-11-16T14:44Z, `mise run watch`: as recorded; v1.7.0, the latest
   release, doesn't carry the merge.
