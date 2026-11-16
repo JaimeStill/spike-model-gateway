@@ -83,12 +83,17 @@ The experiment's rules, in `ai-hosting.md`, govern every session. In short:
 ## Capabilities
 
 - **Gateway bring-up:** `mise run agentgateway-deploy`
-  ([`scripts/agentgateway-deploy.sh`](../scripts/agentgateway-deploy.sh)) deploys agentgateway to
-  gb10-2 from [`gateway/agentgateway/`](../gateway/agentgateway/config.yaml) and reloads its
-  config in place. It publishes the consumer port, 3000, on gb10-2's tailnet address, where one
-  route per alias, each with an inline `ai` backend, serves `/<alias>/v1`.
+  ([`scripts/agentgateway-deploy.sh`](../scripts/agentgateway-deploy.sh)) deploys the gateway's
+  compose project ([`gateway/compose.yml`](../gateway/compose.yml)), agentgateway and its Postgres,
+  to gb10-2, with the config from [`gateway/agentgateway/`](../gateway/agentgateway/config.yaml)
+  bind-mounted read-only, and reloads that config in place. It publishes the consumer port, 3000,
+  on gb10-2's tailnet address, where one route per alias, each with an inline `ai` backend, serves
+  `/<alias>/v1`. `mise run gateway:up`, `gateway:down`, and `gateway:reset` start the stack, stop
+  it, and stop it and drop Postgres's volume, on gb10-2 over SSH.
 - **Gateway keys:** the deploy creates each key the config names, kept untracked on the deploying
   machine, and sends gb10-2 a copy with each key's hash. Removing a name and deploying revokes it.
+  Secrets (Postgres's password, the Azure account's key and names) are markers in the config, filled
+  in the same copy from untracked files.
 - **Probe overlays:** `gateway/agentgateway/probes/` holds one-off config changes that the deploy
   applies to the copy it sends: `rate-limit-agent`, a request-rate limit on the agent route alone;
   `in-flight-1`, the in-flight limit at 1; and `key-header`, keys read from `x-api-key`. A deploy
@@ -98,6 +103,8 @@ The experiment's rules, in `ai-hosting.md`, govern every session. In short:
   [`scripts/clients-lib.sh`](../scripts/clients-lib.sh) runs go-ai's and infer's tiers, the infer
   CLI, and curl through the gateway, each with a key read from its file. `gw_base <alias>` prints
   an alias's base URL, and `logged <command>` runs and logs a step that prints no key.
+  `az_curl` sends one request straight to an Azure AI Foundry deployment, and `row_burst` sends a
+  burst straight to a row. Their state and command log are under `.state/priority/`.
 - **Watch register:** [`docs/watch.md`](../docs/watch.md) tracks each dependency's anticipated
   capabilities, deprecations, and other changes. Its agentgateway entries track whether route
   `ai`, which the gateway relies on, is deprecated, and whether the `llm` section can serve several

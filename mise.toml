@@ -5,6 +5,8 @@ task.run_auto_install = false
 [tools]
 jq = "1.8.2"
 shellcheck = "0.11.0"
+# Lists an image's tags for `mise run currency`, which compares each compose Dockerfile's FROM pin.
+crane = "0.22.1"
 
 [tasks.check]
 description = "Shellcheck every tracked shell script and resolve every relative Markdown link; reads no network, writes nothing"
@@ -21,5 +23,21 @@ run = "scripts/watch.sh"
 quiet = true
 
 [tasks.agentgateway-deploy]
-description = "Deploy agentgateway to gb10-2 over Tailscale SSH, idempotently, printing each command run"
+description = "Deploy the gateway's compose project (agentgateway and Postgres) to gb10-2 over Tailscale SSH, idempotently, printing each command run"
 run = "scripts/agentgateway-deploy.sh"
+
+# The gateway's compose project on gb10-2 (gateway/compose.yml), as the deploy left it in
+# ~/gateway: each task runs gateway/compose.sh there over Tailscale SSH. Postgres's data lives in a
+# named volume, which down keeps and reset drops. A config or project change goes out with
+# `mise run agentgateway-deploy`, which brings the stack up itself.
+[tasks."gateway:up"]
+description = "Build and start the gateway's compose stack on gb10-2 (agentgateway and Postgres) and wait until it is up"
+run = "ssh gb10-2 gateway/compose.sh up --detach --wait --build"
+
+[tasks."gateway:down"]
+description = "Stop the gateway's compose stack on gb10-2, keeping Postgres's volume"
+run = "ssh gb10-2 gateway/compose.sh down"
+
+[tasks."gateway:reset"]
+description = "Stop the gateway's compose stack on gb10-2 and drop Postgres's volume"
+run = "ssh gb10-2 gateway/compose.sh down --volumes"

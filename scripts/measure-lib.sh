@@ -11,7 +11,7 @@
 #                     one GuideLLM run of bench/<scenario>.yaml against the alias's row (direct)
 #                     or its base URL on the gateway (gateway, cap), http://gb10-2:3000/<alias>/v1
 #                     with the port from gateway/agentgateway/deploy.env, into
-#                     .state/routing/cells/<name>/; on a gateway or cap run, the gateway
+#                     .state/priority/cells/<name>/; on a gateway or cap run, the gateway
 #                     container's CPU and memory sampled on gb10-2. A cap run is a gateway run
 #                     that also samples the row's running and waiting requests from its /metrics,
 #                     read direct from the row, and afterwards reads each of the run's requests
@@ -28,7 +28,7 @@
 # No helper runs a benchmark on its own or chains runs: `cell` runs exactly one.
 #
 # The command log. Each helper call and each command it runs is appended to
-# .state/routing/commands-<YYYY-MM-DD>.log, and printed to stderr, as
+# .state/priority/commands-<YYYY-MM-DD>.log, and printed to stderr, as
 # `+ <ISO time> <host>: <command>`, the form the deploy script prints; what a helper reports
 # follows as `= <ISO time> <helper>: <line>`. The finding's "Commands as run" quotes that log.
 #
@@ -63,7 +63,7 @@ fi
 
 MEASURE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # Relative to the root: every command runs from there, so the log names no home directory.
-MEASURE_STATE=.state/routing
+MEASURE_STATE=.state/priority
 MEASURE_KEY=.state/agentgateway/keys/bench
 MEASURE_GATEWAY_HOST=gb10-2
 

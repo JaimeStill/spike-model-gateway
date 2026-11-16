@@ -1,7 +1,8 @@
 # yaml-language-server: $schema=https://agentgateway.dev/schema/config
 #
-# agentgateway v1.7.0 in front of the four vLLM rows, run on gb10-2 by
-# scripts/agentgateway-deploy.sh, which mounts this file's directory read-only at /config.
+# agentgateway v1.7.0 in front of the four vLLM rows, run on gb10-2 in the gateway's compose
+# project (gateway/compose.yml), which mounts the deployed copy's directory read-only at /config;
+# scripts/agentgateway-deploy.sh renders the copy and deploys the project.
 # agentgateway watches the file and reloads it in place, so a deploy that changes only this file
 # needs no restart. Fields under `config` are read once, at start.
 #
@@ -27,6 +28,13 @@ config:
   # answers 403, so no key or route is ever created outside git.
   storage:
     mode: readOnly
+  # The compose project's Postgres (gateway/postgres.yml), reached by its service name on the
+  # project's network, where the request log and token budgets will be kept. agentgateway connects
+  # at start, and compose starts it only once Postgres is healthy. The password is committed only
+  # as the marker `@@secret:postgres-password@@`, which scripts/agentgateway-deploy.sh replaces in
+  # the copy it sends with the password it keeps untracked under .state/agentgateway/.
+  database:
+    url: postgres://agentgateway:@@secret:postgres-password@@@postgres:5432/agentgateway
 
 # Every request's access log line carries the reply's Retry-After as `retry_after` (empty or absent
 # when the reply has none), the only place a client's 429 or 503 shows it to a reader: GuideLLM

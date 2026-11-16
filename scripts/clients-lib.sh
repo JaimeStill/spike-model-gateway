@@ -9,18 +9,27 @@
 #   gw_base <alias>   the alias's base URL on the gateway, http://gb10-2:3000/<alias>/v1, the port
 #                     read from gateway/agentgateway/deploy.env
 #   goai_checkout     a worktree of go-ai at tools/infer/v0.1.0, detached, under
-#                     .state/routing/go-ai; go-ai's own working tree is not touched
+#                     .state/priority/go-ai; go-ai's own working tree is not touched
 #   infer_install     the released infer, `go install ...tools/infer/cmd/infer@v0.1.0`, into
-#                     .state/routing/bin
+#                     .state/priority/bin
 #   goai_tier <name> <alias>...
 #                     go-ai's integration tier, from the worktree, with each alias's role set to
-#                     its base URL on the gateway; output in .state/routing/clients/<name>.log
+#                     its base URL on the gateway; output in .state/priority/clients/<name>.log
 #   infer_tier <name> <alias>...
 #                     infer's integration tier the same way, from the worktree's tools/infer
 #   infer_at <alias> <infer argument>...
 #                     the released infer once, INFER_BASE_URL at the alias's base URL, no model
 #   gw_curl <key> <curl argument>...
 #                     curl with the named key's credential header, read from its key file
+#   az_curl <path> <curl argument>...
+#                     curl straight to the spike's Azure AI Foundry account, past the gateway, at
+#                     https://$AZURE_ACCOUNT.services.ai.azure.com/openai/v1/<path>, with the
+#                     account's key (below); the request names its deployment in "model"
+#   row_burst <alias> <count> [<max tokens>]
+#                     <count> chat requests at once straight to the alias's row, past the gateway
+#                     and with no key, each generating <max tokens> (512 by default) with
+#                     ignore_eos so all are in flight together; prints how many replies had each
+#                     status, so a count one past the row's --max-num-queued-reqs shows its 503
 #   logged <command>  any other step, given as one string: run with bash from the root, logged as
 #                     written, and its output, stdout and stderr, appended to the log as printed;
 #                     for a command that prints no key, such as `mise run agentgateway-deploy`, a
@@ -44,8 +53,15 @@
 # the key is sent as `x-api-key: <key>` instead, through AI_<ROLE>_HEADER, INFER_HEADER, or the
 # curl header, for the gateway with the `key-header` probes overlay deployed.
 #
+# Azure. az_curl reads the Azure AI Foundry account's key from .state/azure/key and its resource
+# name from AZURE_ACCOUNT in .state/azure/account.env, both untracked, written when the account is
+# set up. Both reach curl only in the config it reads from its stdin, the header and the URL
+# together, so neither is in a process's argv, printed, or logged: the log shows the expressions
+# that read them. A curl error that names its host would print the account's name, so pass -s
+# without -S, and no --write-out naming the URL.
+#
 # The command log. Each helper call and each command it runs is appended to
-# .state/routing/commands-<YYYY-MM-DD>.log and printed to stderr as
+# .state/priority/commands-<YYYY-MM-DD>.log and printed to stderr as
 # `+ <ISO time> <host>: <command>`, the form measure-lib.sh and the deploy script print.
 
 if ! (return 0 2>/dev/null); then
@@ -55,8 +71,9 @@ fi
 
 CLIENTS_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # Relative to the root: every command runs from there, so the log names no home directory.
-CLIENTS_STATE=.state/routing
+CLIENTS_STATE=.state/priority
 CLIENTS_KEYS=.state/agentgateway/keys
+CLIENTS_AZURE=.state/azure
 CLIENTS_HOST=gb10-2
 CLIENTS_GOAI_REPO=$HOME/architecture/go-ai
 # go-ai's release that carries per-role credentials in both tiers: tools/infer/v0.1.0. Its base
@@ -75,6 +92,14 @@ declare -gA CLIENTS_ROLE=(
   [vision]=VISION
   [audio]=AUDIO
   [embedding]=EMBEDDING
+)
+
+# Each alias's row, as host:port, as measure-lib.sh's MEASURE_ROW.
+declare -gA CLIENTS_ROW=(
+  [agent]=gb10-1:8000
+  [vision]=gb10-2:8000
+  [audio]=framework:8001
+  [embedding]=framework:8002
 )
 
 gw_base() {
@@ -268,6 +293,51 @@ gw_curl() {
     # shellcheck disable=SC2059 # The format is built from a fixed header name.
     printf "header = \"$header%s\"\n" "$(<"$CLIENTS_KEYS/$name")" | curl -K - "$@"
   )
+}
+
+az_curl() {
+  (($# >= 1)) || {
+    echo 'usage: az_curl <path under /openai/v1> <curl argument>...' >&2
+    return 2
+  }
+  local path=$1
+  shift
+  if [[ ! -s $CLIENTS_ROOT/$CLIENTS_AZURE/key || ! -s $CLIENTS_ROOT/$CLIENTS_AZURE/account.env ]]; then
+    echo "no key or account at $CLIENTS_AZURE/key and $CLIENTS_AZURE/account.env; set up the account first" >&2
+    return 2
+  fi
+  # The account's name is read from account.env as an assignment, not sourced, in the subshell
+  # below; the log shows the expression.
+  local name_expr="\$(sed -n 's/^AZURE_ACCOUNT=//p' $CLIENTS_AZURE/account.env | tr -d \\\"\\')"
+  _clients_log laptop "printf 'header = \"api-key: %s\"\\nurl = \"https://%s.services.ai.azure.com/openai/v1/$path\"\\n' \"\$(<$CLIENTS_AZURE/key)\" \"$name_expr\" | curl -K - $*"
+  (
+    { set +x; } 2>/dev/null
+    cd "$CLIENTS_ROOT" || exit
+    printf 'header = "api-key: %s"\nurl = "https://%s.services.ai.azure.com/openai/v1/%s"\n' \
+      "$(<"$CLIENTS_AZURE/key")" \
+      "$(sed -n 's/^AZURE_ACCOUNT=//p' "$CLIENTS_AZURE/account.env" | tr -d \"\')" "$path" |
+      curl -K - "$@"
+  )
+}
+
+row_burst() {
+  (($# == 2 || $# == 3)) || {
+    echo 'usage: row_burst <alias> <count> [<max tokens>]' >&2
+    return 2
+  }
+  local alias=$1 count=$2 tokens=${3:-512}
+  [[ $alias != embedding && -n ${CLIENTS_ROW[$alias]-} ]] || {
+    echo "row_burst: no chat row for $alias (agent, vision, audio)" >&2
+    return 2
+  }
+  [[ $count =~ ^[1-9][0-9]*$ && $tokens =~ ^[1-9][0-9]*$ ]] || {
+    echo 'row_burst: <count> and <max tokens> are positive integers' >&2
+    return 2
+  }
+  # Each request names the row's one served name, its alias, and asks for exactly <max tokens>.
+  local body
+  body=$(printf '{"model":"%s","messages":[{"role":"user","content":"Count upward from 1, one number a line."}],"max_tokens":%d,"ignore_eos":true}' "$alias" "$tokens")
+  logged "for i in \$(seq $count); do curl -s -o /dev/null -w '%{http_code}\\n' -H 'content-type: application/json' -d '$body' http://${CLIENTS_ROW[$alias]}/v1/chat/completions & done | sort | uniq -c"
 }
 
 logged() {

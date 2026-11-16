@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Deploys agentgateway to gb10-2 from the laptop over Tailscale SSH, from gateway/agentgateway/:
-# config.yaml and the image and ports of deploy.env. Idempotent. It creates any consumer key
-# config.yaml names that this machine lacks, renders the config with each key's hash, copies that
-# beside the live one, pulls the pinned image if gb10-2 lacks it, validates the copy with that
-# image, and moves it into place, where agentgateway reloads it with no restart. It then creates
-# the container again only when its image or flags changed, or starts it if it is stopped;
-# otherwise the config refresh is all a re-run does.
+# Deploys the gateway's compose project, agentgateway and its Postgres (gateway/compose.yml), to
+# gb10-2 from the laptop over Tailscale SSH. Idempotent. It creates any consumer key config.yaml
+# names that this machine lacks, and Postgres's password if this machine lacks it, renders the
+# config with each key's hash and each secret substituted, copies the compose project to ~/gateway
+# on gb10-2 and the rendered config beside the live one, pulls the pinned image if gb10-2 lacks it,
+# validates the copy with that image, and moves it into place, where agentgateway reloads it with
+# no restart. It then runs `docker compose up --detach --wait --build` there, through
+# gateway/compose.sh, which creates a container again only when its image, build, or settings
+# changed, or a field under the config's top-level `config` section did, which agentgateway reads
+# only at start; otherwise the config refresh is all a re-run does. The first compose deploy
+# removes the container `docker run` created before the compose project, of the same name.
 #
 # Overlays. `scripts/agentgateway-deploy.sh [<overlay>...]` takes the names of probe overlays,
 # each gateway/agentgateway/probes/<overlay>.yaml, and applies them, in the order given, to the
@@ -22,13 +26,28 @@
 #                        such line, or more than one, is refused
 #
 # Lines before the first directive must be comments or blank. The copy's first line names the
-# overlays it carries (`# overlays: none` without), so `head -1 ~/agentgateway/config.yaml` on
-# gb10-2 reads what is live.
+# overlays it carries (`# overlays: none` without), so `head -1 ~/gateway/agentgateway/config.yaml`
+# on gb10-2 reads what is live.
+#
+# Secrets. The config commits no secret: each is the marker `@@secret:<name>@@`, replaced in the
+# copy sent to gb10-2, as a key's marker is by its hash. The names, each read from an untracked
+# file on this machine:
+#
+#   postgres-password    .state/agentgateway/postgres-password, created by the deploy if missing;
+#                        it also reaches gb10-2 in ~/gateway/postgres.env, 0600, for Postgres
+#   azure-key            .state/azure/key, the Azure AI Foundry account's key
+#   azure-account        AZURE_ACCOUNT in .state/azure/account.env, the account's resource name
+#   azure-rg             AZURE_RG there, its resource group
+#
+# The Azure files are written when the account is set up, outside the deploy, and read only if
+# present: a marker whose file is missing stops the deploy before anything is sent, naming the
+# marker. No secret is printed or logged, or in a process's argv.
 #
 # Each command is printed to stderr before it runs, as `+ <time> <host>: <command>`, the form of
 # .state/<task>/commands-*.log, so a finding can quote it exactly. Commands run on gb10-2 are sent
-# as written: `$(tailscale ip -4)`, `$(id -u)`, and `$HOME` expand there, so the consumer port is
-# published on gb10-2's tailnet address with no address written down or printed. Needs no root.
+# as written, and what gateway/compose.sh looks up there (each tailnet address, the user) expands
+# there, so the consumer port is published on gb10-2's tailnet address with no address written
+# down or printed. Needs no root.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -43,6 +62,11 @@ on_host() {
   ssh "$host" "$1"
 }
 
+# Prints the command given, as run on the laptop.
+on_laptop() {
+  printf '+ %s laptop: %s\n' "$(date -Iseconds)" "$1" >&2
+}
+
 config=gateway/agentgateway/config.yaml
 state=.state/agentgateway
 keys=$state/keys
@@ -54,7 +78,7 @@ keys=$state/keys
 # reaches the terminal or the command log.
 umask 077
 mkdir -p "$keys"
-chmod 700 "$keys"
+chmod 700 "$state" "$keys"
 mapfile -t names < <(grep -oP '^\s*- keyHash: sha256:@@\K[a-z0-9-]+(?=@@\s*$)' "$config" | sort -u)
 if ((${#names[@]} == 0)); then
   echo "agentgateway: no key markers in $config" >&2
@@ -73,6 +97,41 @@ for name in "${names[@]}"; do
   # hex (APIKeyHash::from_raw_key). printf is a builtin, so the key is never in a process's argv.
   hash=$(printf %s "$key" | sha256sum)
   hashes[$name]=${hash%% *}
+done
+
+# Secrets, as the header lists them. Postgres's password is created like a key, once, and reused;
+# Postgres reads it only when it first initializes its volume, so it must not change after.
+declare -A secrets
+if [[ -e $state/postgres-password ]]; then
+  echo "secret postgres-password: existing"
+else
+  openssl rand -hex 32 >"$state/postgres-password"
+  echo "secret postgres-password: created"
+fi
+secrets[postgres-password]=$(<"$state/postgres-password")
+if [[ -s .state/azure/key ]]; then
+  secrets[azure-key]=$(<.state/azure/key)
+  echo "secret azure-key: read"
+fi
+if [[ -s .state/azure/account.env ]]; then
+  # Read as assignments, not sourced: each value is the line's text after `=`, quotes stripped.
+  while IFS='=' read -r var value; do
+    value=${value%\"} value=${value#\"} value=${value%\'} value=${value#\'}
+    case $var in
+      AZURE_ACCOUNT) secrets[azure-account]=$value ;;
+      AZURE_RG) secrets[azure-rg]=$value ;;
+    esac
+  done <.state/azure/account.env
+  for name in azure-account azure-rg; do
+    [[ -z ${secrets[$name]+set} ]] || echo "secret $name: read"
+  done
+fi
+# A value is substituted into YAML and a URL as it is, so it may hold only these characters.
+for name in "${!secrets[@]}"; do
+  if [[ ! ${secrets[$name]} =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "agentgateway: secret $name holds a character other than A-Z, a-z, 0-9, ., _ or -; nothing was sent" >&2
+    exit 1
+  fi
 done
 
 # The overlays, applied to config.yaml's lines in memory, as the header describes; any refusal
@@ -129,76 +188,75 @@ for overlay in "$@"; do
   echo "overlay $overlay: applied"
 done
 
-# The copy sent to gb10-2: config.yaml, its overlays applied, with each marker replaced by its
-# key's hash. It is written only under .state/, which is untracked, and removed on exit. Replaced
-# in bash, not by sed, so no hash is in a command's argv either.
+# The copy sent to gb10-2: config.yaml, its overlays applied, with each key marker replaced by its
+# key's hash and each secret marker by its value. It is written only under .state/, which is
+# untracked, and removed on exit, as is Postgres's env file. Replaced in bash, not by sed, so no
+# hash or secret is in a command's argv either.
 rendered=$(mktemp "$state/config.rendered.XXXXXX.yaml")
-trap 'rm -f "$rendered"' EXIT
+pg_env=$(mktemp "$state/postgres.XXXXXX.env")
+trap 'rm -f "$rendered" "$pg_env"' EXIT
 marker='^(.*)sha256:@@([a-z0-9-]+)@@(.*)$'
+secret='^(.*)@@secret:([a-z0-9-]+)@@(.*)$'
 {
   printf '# overlays: %s\n' "${*:-none}"
   for line in "${lines[@]}"; do
     if [[ $line =~ $marker && -n ${hashes[${BASH_REMATCH[2]}]+set} ]]; then
       line="${BASH_REMATCH[1]}sha256:${hashes[${BASH_REMATCH[2]}]}${BASH_REMATCH[3]}"
     fi
+    # A line may name more than one secret; the last is replaced first. One with no value stays,
+    # and the check below refuses it.
+    while [[ $line =~ $secret && -n ${secrets[${BASH_REMATCH[2]}]+set} ]]; do
+      line="${BASH_REMATCH[1]}${secrets[${BASH_REMATCH[2]}]}${BASH_REMATCH[3]}"
+    done
     printf '%s\n' "$line"
   done
 } >"$rendered"
+printf 'POSTGRES_PASSWORD=%s\n' "${secrets[postgres-password]}" >"$pg_env"
 # A marker left over, or a keyHash that isn't a full hash, would deploy a key list that admits no
-# one under that name; stop before anything is sent.
-if grep -qP '@@[a-z0-9-]+@@' "$rendered" ||
-  grep -P '^\s*- keyHash:' "$rendered" | grep -vqP '^\s*- keyHash: sha256:[0-9a-f]{64}\s*$'; then
-  echo "agentgateway: a key marker, or a keyHash that isn't a full hash, is in the rendered config; nothing was sent" >&2
+# one under that name, or a secret that isn't one; stop before anything is sent. Only the
+# markers' names are printed.
+if left=$(grep -oP '@@\K[a-z0-9:-]+(?=@@)' "$rendered" | sort -u | paste -sd' ') && [[ -n $left ]]; then
+  echo "agentgateway: markers with no value in the rendered config: $left; nothing was sent" >&2
+  exit 1
+fi
+if grep -P '^\s*- keyHash:' "$rendered" | grep -vqP '^\s*- keyHash: sha256:[0-9a-f]{64}\s*$'; then
+  echo "agentgateway: a keyHash that isn't a full hash is in the rendered config; nothing was sent" >&2
   exit 1
 fi
 
-on_host 'mkdir -p ~/agentgateway'
+on_host 'mkdir -p ~/gateway/agentgateway'
 
-printf '+ %s laptop: %s\n' "$(date -Iseconds)" \
-  "ssh $host 'cat > ~/agentgateway/config.yaml.next' < $rendered" >&2
-ssh "$host" 'cat > ~/agentgateway/config.yaml.next' <"$rendered"
+# The compose project, as gateway/ holds it, with deploy.env as the project's .env, the values its
+# compose files read; the rendered config and Postgres's env file follow, each its own copy.
+project=(compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env)
+on_laptop "tar -C gateway --transform 's,^agentgateway/deploy.env\$,.env,' -cf - ${project[*]} | ssh $host 'tar -C ~/gateway -xf -'"
+tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - "${project[@]}" |
+  ssh "$host" 'tar -C ~/gateway -xf -'
+
+on_laptop "ssh $host 'umask 077 && cat > ~/gateway/postgres.env' < $state/postgres.<tmp>.env"
+ssh "$host" 'umask 077 && cat > ~/gateway/postgres.env' <"$pg_env"
+
+on_laptop "ssh $host 'cat > ~/gateway/agentgateway/config.yaml.next' < $state/config.rendered.<tmp>.yaml"
+ssh "$host" 'cat > ~/gateway/agentgateway/config.yaml.next' <"$rendered"
 
 on_host "docker image inspect $AGW_IMAGE >/dev/null 2>&1 || docker pull $AGW_IMAGE"
 
-# The container runs as the deploying user and reads the config directory read-only. agentgateway
-# follows config.yaml across the rename that moves a new copy into place.
-# shellcheck disable=SC2016 # Both expand on gb10-2.
-user='--user "$(id -u):$(id -g)"' mount='--volume "$HOME/agentgateway:/config:ro"'
+# The copy is validated as the container reads it: as the deploying user, its directory mounted
+# read-only. Validation parses the config and connects to nothing, Postgres included.
+on_host "docker run --rm --user \"\$(id -u):\$(id -g)\" --volume \"\$HOME/gateway/agentgateway:/config:ro\" \
+$AGW_IMAGE -f /config/config.yaml.next --validate-only"
+# agentgateway follows config.yaml across the rename that moves a new copy into place.
+on_host 'mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml'
 
-on_host "docker run --rm $user $mount $AGW_IMAGE -f /config/config.yaml.next --validate-only"
-on_host 'mv ~/agentgateway/config.yaml.next ~/agentgateway/config.yaml'
-
-# The container's image and flags, hashed into its spike.spec label: a container with the same
-# label runs the same image with the same flags. The tailnet address isn't in the hash; a node keeps
-# its address.
-flags="--restart unless-stopped $user"
-flags+=" --publish \"\$(tailscale ip -4):$AGW_PORT:$AGW_PORT\""
-flags+=" --publish 127.0.0.1:$AGW_UI_PORT:$AGW_UI_PORT $mount"
-# gb10-2 resolves names through systemd-resolved's stub (127.0.0.53), which a container can't
-# reach, so docker gives it an outside resolver that doesn't know the tailnet's short names. Each
-# row's host is added by its tailnet address, looked up on gb10-2 when the container is created.
-for h in gb10-1 gb10-2 framework; do
-  flags+=" --add-host \"$h:\$(tailscale ip -4 $h)\""
-done
-spec=$(printf '%s %s' "$flags" "$AGW_IMAGE" | sha256sum | cut -c1-12)
-
-current=$(on_host "docker container inspect agentgateway \
---format '{{index .Config.Labels \"spike.spec\"}} {{.State.Running}}' 2>/dev/null || true")
-
-case $current in
-"$spec true")
-  echo "agentgateway: image and flags unchanged; config.yaml reloads in place"
-  ;;
-"$spec false")
-  on_host 'docker start agentgateway'
-  ;;
-*)
-  if [[ -n $current ]]; then
-    on_host 'docker rm --force agentgateway'
-  fi
-  on_host "docker run --detach --name agentgateway $flags --label spike.spec=$spec \
-$AGW_IMAGE -f /config/config.yaml"
-  ;;
+# The container `docker run` created before the compose project holds the name and the ports
+# compose's agentgateway takes; it carries no compose project label. Removed once, on the first
+# compose deploy.
+owner=$(on_host "docker container inspect agentgateway \
+--format '{{index .Config.Labels \"com.docker.compose.project\"}}' 2>/dev/null || echo absent")
+case $owner in
+  gateway | absent) ;;
+  *) on_host 'docker rm --force agentgateway' ;;
 esac
 
-on_host "docker ps --filter name=agentgateway --format '{{.Names}} {{.Image}} {{.Status}}'"
+on_host 'gateway/compose.sh up --detach --wait --build'
+on_host 'gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"'
