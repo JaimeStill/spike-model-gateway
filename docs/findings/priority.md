@@ -7,8 +7,29 @@ priority, request-rate buckets and token budgets, and embedding held to 34 reque
 slice 1, the setup; slice 2, the overflow and benchmark C; slice 3, the keys and limits and
 benchmarks A, B, and D; and the walkthrough the architect runs as slice 4.
 
+In short, after slices 1–3:
+
+- **Evidence 5:** the embedding route held a global 34 requests a second, and refused the rest
+  with 429 and `Retry-After: 1`. Beside it, audio held its real-time factor: RTFx median 5.38,
+  against the floor of 5.
+- **Evidence 6:** each key has its own request-rate bucket and token budget, kept in Postgres. A
+  stream sent without `include_usage` was charged to its key, and a budget count survived a
+  gateway restart. Every request writes a metadata row and no content.
+  - Chat held its floor beside bulk vision: agent ITL median 47.05 ms.
+  - Priority by key cut interactive vision's median latency from 11.87 s to 10.47 s on a
+    saturated row. That misses the 10 s mark by 0.47 s, because vLLM's priority orders only the
+    waiting queue.
+- **Evidence 7:** with its row down, each alias was answered by its Azure deployment under the
+  alias, marked as overflow, and returned to its row after. Under saturation, a row's 503 with
+  eviction sends nearly the whole load to Azure (benchmark C). The Framework reboot, behavior 11,
+  waits for the walkthrough.
+
+Azure has answered 180 of the task's 300 requests, none of them in slice 3.
+
 - **Measured:** 2026-11-16, from the laptop. Slice 1 ran 13:05–13:56 local time, slice 2
-  14:17–14:41. Every command is under "Commands as run".
+  14:17–14:41, slice 3 16:15–16:40. Every command is under "Commands as run".
+- **Path:** slices 1 and 2 ran over Tailscale's DERP relay, 51–52 ms; slice 3 ran on a direct
+  path, 1–2 ms. Only cells run in the same session compare.
 - **Gateway:** agentgateway v1.7.0, `cr.agentgateway.dev/agentgateway:v1.7.0`, on gb10-2, with its
   Postgres (`postgres:18.7-alpine`) in one compose project
   ([`gateway/compose.yml`](../../gateway/compose.yml)), configured from
@@ -42,6 +63,14 @@ The brief's behaviors, each with the evidence it proves and the slice that shows
 | 13–16 | per-key priority, request-rate buckets, token budgets in Postgres, and the request log | 6 | 3 |
 | 17 | embedding held to 34 requests a second | 5 | 3 |
 | 18–20 | at most 300 Azure-answered requests, the records, currency and the check | — | all |
+
+What each piece of evidence has shown so far:
+
+| Evidence | Result after slices 1–3 | Still open |
+| --- | --- | --- |
+| 5, embedding held beside audio | The global 34/1s bucket admitted 34 of a 40-request burst and 34.0 a second under 160 in flight, refusing the rest with 429 and `Retry-After: 1`. Audio inside it: RTFx median 5.38, 43 of 64 at 5 or more, so the floor meets and no paced bucket is needed (benchmark A). | — |
+| 6, keys ranked, limited, and charged | bulk refused by its own bucket (429, `retry-after: 59`) and by its Block budget (429 `budget_exceeded`, `retry-after: 2609`), while go-ai kept answering. A stream without `include_usage` was charged 128 tokens. bulk's count of 44 survived a gateway restart. Request log: metadata only, 0 payload rows. Benchmark B: agent ITL median 47.05 ms beside bulk vision. Benchmark D: interactive vision median latency 10.47 s with priority, 11.87 s without. | the UI's Logs and Analytics pages (walkthrough) |
+| 7, overflow when a row is down or full | Every alias answered by Azure under its alias with the rows down, and by its row once the overlay was removed. Under saturation, a row's 503 with eviction sent nearly the whole load to Azure (C-agent). Parity gaps per alias are recorded. | the Framework reboot and its unlock-to-`/health` time (behavior 11, walkthrough) |
 
 ## Method
 
@@ -412,11 +441,398 @@ Benchmark C-agent breached the stop rule, and the architect decided:
 
 ## Slice 3 · keys and limits
 
-Pending.
+Slice 3 ran 16:15–16:40, from the laptop through the step helpers, with every command under
+"Commands as run". It deployed the config at `a69766b`:
+
+- a fourth key, bulk, beside architect, bench, and go-ai;
+- vLLM's `priority` set from the key's name on the agent and vision rows' providers alone, 0 for
+  an interactive key and 10 for bulk (`&row-priority`), so no request to Azure carries it;
+- a request-rate bucket per key on each route (`&key-rates`): bulk 600 a minute, the others
+  1,200;
+- a token budget per key, kept in Postgres over each clock hour: bulk Blocks at 1,000,000, the
+  others Audit at 5,000,000;
+- embedding's global 34 requests a second.
+
+The config's comments give each field and its source.
+
+### The path and the deploy
+
+The laptop's path to every host changed. At 16:15:59 `tailscale ping` answered on a direct path,
+1–2 ms, where slices 1 and 2 had only the DERP relay, 51–52 ms: the architect was back on the
+LAN. Slice 3's cells compare only with each other, never with the earlier slices' or tasks'.
+
+The deploy ran at 16:15:59. It created bulk's key (`key bulk: created`), kept the other three,
+validated the config, and reloaded it in place. As in slice 2, it also recreated the Postgres
+container, and the request log kept its rows. `azure_count` read 0 from 16:15:59.
+
+### The request log (behavior 16)
+
+`request_log` at 16:16:14 read the newest rows of `request_logs` in Postgres. The newest was
+slice 3's stream on agent:
+
+| Completed (UTC) | Status | Key | UI user | Provider | Model | Input | Output | Total | Duration ms | Payload |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 21:16:10 | 200 | go-ai | go-ai | custom | agent | 75 | 53 | 128 | 1528 | f |
+
+The four rows under it were C-agent's, from 19:38:23 UTC. Three of them have no token counts:
+requests probably cut off when the benchmark ended. `payload_rows` was 0: with `llm: metadata`
+no prompt or completion is kept. The UI's Logs and Analytics pages, which read this table, are
+the walkthrough's step 5.
+
+### A stream charged to its key (behavior 15)
+
+`budget_status go-ai` read `used 0 of 5000000 Tokens, exceeded false, Audit; window ends
+17:00:00` at 16:16:08. Then go-ai sent a streamed chat to agent with no `include_usage`. Its
+stream carried one usage chunk, which the typed `completions` route adds. At 16:16:11 the
+budget read `used 128`, the stream's total tokens, charged to go-ai.
+
+### bulk's bucket (behavior 14)
+
+The `bulk-rate-low` overlay
+([`probes/bulk-rate-low.yaml`](../../gateway/agentgateway/probes/bulk-rate-low.yaml)) lowers
+bulk's bucket to 2 requests a minute. It was deployed at 16:16:22. At 16:16:26, on vision:
+
+| Request | Key | Status | Retry-After |
+| --- | --- | --- | --- |
+| 1 | bulk | 200 | — |
+| 2 | bulk | 200 | — |
+| 3 | bulk | 429 | 59 |
+| 4 | go-ai | 200 | — |
+
+So bulk was refused by its own bucket while go-ai kept answering on the same alias. The 429 is
+the gateway's own: the row never saw the request, and nothing went to Azure.
+
+### bulk's budget Block (behavior 15)
+
+The `bulk-budget-low` overlay
+([`probes/bulk-budget-low.yaml`](../../gateway/agentgateway/probes/bulk-budget-low.yaml)) lowers
+bulk's budget to 1 token, keeping its count. It was deployed at 16:16:27, with bulk already
+charged 44 tokens in the hour by the bucket probe's two answered requests. At 16:16:30, on
+vision:
+
+- bulk, twice: 429, `retry-after: 2609`, the seconds left in the clock hour, with the body
+  `{"error":{"message":"budget exceeded","type":"rate_limit_error","code":"budget_exceeded"}}`;
+- go-ai: 200.
+
+`budget_status bulk` read `used 44 of 1 Tokens, exceeded true, Block; window ends 17:00:00` at
+16:16:31. The session then ran `docker restart agentgateway` on gb10-2, and at 16:16:36 the
+budget read the same, `used 44`: the count was written to `budget_usage` and read back at start.
+A plain deploy at 16:16:36 removed the overlay.
+
+### Embedding's limit (behavior 17)
+
+At 16:16:47, 40 embedding requests at once with the bench key: 34 answered 200, and 6 got 429
+with `retry-after: 1`. The bucket admits a burst of 34, then 34 a second.
+
+### Benchmark A: embedding limited, audio beside it (evidence 5)
+
+The anchors ran first, O-audio alone, direct and then through the gateway with the bench key.
+Then `a-embed`, C-embed at 160 in flight for 90 s through the gateway with the bench key, from
+16:17:59. Inside it, from 16:18:19, `a-audio-in` was O-audio through the gateway with the go-ai
+key, in a second terminal.
+
+| Cell | Path, key | Requests | TTFT ms median | ITL ms median | RTFx median (min; at 5 or more) | Gateway CPU median |
+| --- | --- | --- | --- | --- | --- | --- |
+| `a-audio-d` | direct | 64 of 64 | 225.9 | 51.94 | 5.28 (3.05; 39 of 64) | — |
+| `a-audio-g` | gateway, bench | 64 of 64 | 153.23 | 45.69 | 6.46 (3.48; 54 of 64) | 1.29% |
+| `a-audio-in` | gateway, go-ai, inside `a-embed` | 64 of 64 | 168.49 | 54.14 | 5.38 (2.99; 43 of 64) | 8.43% |
+
+`a-embed`:
+
+- GuideLLM: 2xx ×3094, 429 ×33813; request latency median 98.06 ms.
+- The gateway's log: 36,723 requests, 200 ×3060 (34.0 a second over 90 s) and 429 ×33663, every
+  429 with `Retry-After: 1`.
+- The embedding row: running and waiting 0 in all 18 samples.
+- The gateway: CPU median 7.78%, max 9.50% of one core; memory median 50.9 MiB.
+
+Audio's RTFx median held at 5.38 beside the limited embedding load, so the floor (median ≥5)
+meets, and a 34/1s bucket's burst needs no paced bucket in its place. The gateway anchor ran
+faster than the direct one, so these single runs bound audio's figures; they don't measure the
+gateway's overhead, which the agentgateway and routing tasks did.
+
+**The wait-loop slip.** After starting the two runs, the session waited for both to end with a
+`pgrep` loop. `pgrep -f` matched the loop's own command line, so the wait never saw the runs
+end: both had ended by 16:19:59, and the session's next step, `rtfx`, ran at 16:28:07. The wait
+wasn't logged, since it ran outside the helpers. The runs weren't affected: each was read from
+its own files.
+
+### Benchmark B: chat beside bulk vision (evidence 6)
+
+The anchors ran first, O-agent alone, direct and through the gateway with the bench key. Then
+`b-bulk`, C-vision at 20 concurrent for 150 s with the bulk key, from 16:32:22. Inside it, from
+16:32:42, `b-agent-in` was O-agent with the go-ai key.
+
+| Cell | Path, key | Requests | TTFT ms median (p95) | ITL ms median (p95) | Latency ms median | Gateway CPU median |
+| --- | --- | --- | --- | --- | --- | --- |
+| `b-agent-d` | agent, direct | 15 ok, 4 incomplete of 19 | 562.69 (8091.91) | 47.63 (52.52) | 25089.2 | — |
+| `b-agent-g` | agent, gateway, bench | 15 ok, 4 incomplete of 19 | 558.17 (8080.75) | 48.54 (51.98) | 25817.76 | 0.68% |
+| `b-agent-in` | agent, gateway, go-ai, inside `b-bulk` | 16 ok, 4 incomplete of 20 | 595.84 (8103.13) | 47.05 (54.81) | 24654.71 | 3.46% |
+| `b-bulk` | vision, gateway, bulk | 249 ok, 16 incomplete of 265 | 3248.69 (8198.94) | 72.61 (83.05) | 10413.24 | 2.60% |
+
+Chat holds its floor: agent's ITL median beside bulk vision was 47.05 ms, against ≤100 ms, and
+within 1.5 ms of both anchors (47.63 direct, 48.54 through the gateway). Its TTFT median was 33 ms above the direct anchor's. The
+gateway's CPU rose from 0.68% for agent alone to 3.46% with both runs through it. With one direct
+run there is no direct spread, so each change is read against the two anchors. Each O-agent
+run's 4 incomplete requests are the sessions still running at its 110 s end.
+
+**What B tests.** Vision and agent are rows on different hosts, so B shows that the gateway adds
+no interference across purposes under bulk load. It doesn't test priority on a shared row;
+benchmark D does.
+
+### Benchmark D: priority on vision (evidence 6)
+
+`d-bulk` ran C-vision at 20 concurrent for 120 s with the bulk key, from 16:35:14. Inside it,
+from 16:35:29, `d-int` ran O-vision at 1 concurrent with the go-ai key. Then the `priority-flat`
+overlay ([`probes/priority-flat.yaml`](../../gateway/agentgateway/probes/priority-flat.yaml)),
+which sends every key at bulk's priority, was deployed at 16:37:35, and the same pair ran again
+as the control: `d-bulk-flat` from 16:37:39, `d-int-flat` from 16:37:54. A plain deploy at
+16:39:53 removed the overlay.
+
+| Cell | Key, priority | Requests | TTFT ms median (p95) | ITL ms median | Latency ms median (p95) |
+| --- | --- | --- | --- | --- | --- |
+| `d-bulk` | bulk, 10 | 185 ok, 20 incomplete of 205 | 3542.71 (9305.12) | 70.28 | 10647.92 (16252.79) |
+| `d-int` | go-ai, 0 | 7 ok, 1 incomplete of 8 | 2613.53 (6752.29) | 75.34 | 10466.56 (14782.4) |
+| `d-bulk-flat` | bulk, 10 | 185 ok, 20 incomplete of 205 | 3547.73 (9307.47) | 70.32 | 10671.54 (16247.24) |
+| `d-int-flat` | go-ai, 10 (flat) | 7 ok, 1 incomplete of 8 | 3545.27 (9321.47) | 70.02 | 11871.36 (16254.58) |
+
+The gateway's CPU median was 2.3–2.8% in each run.
+
+Priority cut interactive vision's median latency by 1.40 s, from 11.87 s to 10.47 s, and its
+TTFT median by 0.93 s, from 3.55 s to 2.61 s. Bulk's own figures didn't move. With priority, the
+interactive median missed the ≤10 s mark by 0.47 s, on 7 requests.
+
+**Why priority stops there.** vLLM's priority orders only the waiting queue. It takes the
+interactive request ahead of bulk's waiting requests, which is the TTFT cut. Once running, the
+request shares the batch with bulk's 20 streams, and decodes at their pace: about 75 ms a token
+for 100 tokens, about 7.5 s. TTFT plus that decoding is the ~10.5 s median.
+
+This is a finding about what priority buys on a saturated row: a place at the head of the queue,
+not a share of the batch. The brief makes 10 s what D informs, not a stop rule. Holding
+interactive latency under bulk load needs something beyond priority, such as a cap on bulk's
+concurrency. That is for `answer`'s gateway document.
+
+### The Azure count
+
+Azure answered no request in slice 3. `azure_count` read 0 after the deploy and after each
+benchmark, and the gateway's log over all of 16:15:59–16:40:00 holds no line marked
+`overflow="azure"` and none sent to the Azure provider. The count stays 180 of 300.
 
 ## Slice 4 · walkthrough
 
-Pending.
+The architect runs the walkthrough from the repository root on the laptop, one step at a time.
+Every command goes through the helpers, so each lands in
+`.state/priority/commands-<date>.log`. Each step's expected result comes from slices 1–3. Steps 3
+and 6 send requests to Azure: about 2 in step 3, and at most about 55 in step 6. That keeps the
+count, 180 now, under 300. An Azure 429, or a row still overflowing after step 6's loop, stops
+the walk for the session to escalate.
+
+1. **Source the helpers.** This starts the day's command log and marks the walk's start, for
+   `azure_count`.
+
+   ```sh
+   source scripts/clients-lib.sh
+   W0=$(date -Iseconds)
+   ```
+
+   Expected: one line, `+ <time> laptop: source scripts/clients-lib.sh`.
+
+2. **An alias's `/models`, answered by the gateway.** The gateway answers each alias's
+   `/v1/models` itself, whether the row is up or not, so a client that takes the one listed
+   model gets the alias during an overflow too.
+
+   ```sh
+   gw_curl architect -sS "$(gw_base audio)/models"
+   ```
+
+   Expected: `{"object":"list","data":[{"id":"audio","object":"model","owned_by":"gateway"}]}`.
+   `owned_by` is `gateway`: a row's answer would read `vllm`.
+
+3. **A row-down overflow.** The `rows-down` overlay points every row's provider at a closed port
+   on its own host. agent is answered by its Azure deployment under the alias, and a deploy
+   without the overlay returns it to its row. This costs about 2 Azure requests.
+
+   ```sh
+   logged "mise run agentgateway-deploy rows-down"
+   gw_curl architect -sS -D - -o .state/priority/walk-down-agent.json -H 'Content-Type: application/json' -d '{"model":"agent","messages":[{"role":"user","content":"Reply with the word ready."}],"max_tokens":64}' "$(gw_base agent)/chat/completions" | grep -iE '^(HTTP|x-gateway-overflow)'
+   logged "jq -c '{model, content: .choices[0].message.content}' .state/priority/walk-down-agent.json"
+   logged "mise run agentgateway-deploy"
+   gw_curl architect -sS -D - -o .state/priority/walk-up-agent.json -H 'Content-Type: application/json' -d '{"model":"agent","messages":[{"role":"user","content":"Reply with the word ready."}],"max_tokens":256}' "$(gw_base agent)/chat/completions" | grep -iE '^(HTTP|x-gateway-overflow)'
+   logged "jq -c '{model, content: .choices[0].message.content}' .state/priority/walk-up-agent.json"
+   azure_count "$W0"
+   ```
+
+   Expected:
+   - the first deploy prints `overlay rows-down: applied` and `Configuration is valid!`;
+   - `HTTP/1.1 200 OK` and `x-gateway-overflow: azure`, then `{"model":"gpt-oss-120b","content":"ready"}`;
+   - the second deploy applies no overlay;
+   - `HTTP/1.1 200 OK` with no overflow header, then `{"model":"agent",...}`: the agent row
+     again. A reload clears the eviction, so the row answers at once;
+   - `azure_count`: agent 1 or 2, every one 200, and no 429.
+
+4. **A budget Block.** The `bulk-budget-low` overlay lowers bulk's budget to 1 token and keeps
+   its count. The request that crosses a budget is answered, and the next one is refused, so
+   bulk's first request this hour may still get 200.
+
+   ```sh
+   logged "mise run agentgateway-deploy bulk-budget-low"
+   gw_curl bulk -sS -D - -H 'Content-Type: application/json' -d '{"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8}' "$(gw_base vision)/chat/completions" | grep -iE '^(HTTP|retry-after)|^\{"error'
+   gw_curl bulk -sS -D - -H 'Content-Type: application/json' -d '{"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8}' "$(gw_base vision)/chat/completions" | grep -iE '^(HTTP|retry-after)|^\{"error'
+   gw_curl go-ai -sS -D - -o /dev/null -H 'Content-Type: application/json' -d '{"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8}' "$(gw_base vision)/chat/completions" | grep -iE '^HTTP'
+   budget_status bulk
+   logged "mise run agentgateway-deploy"
+   budget_status bulk
+   ```
+
+   Expected:
+   - the deploy prints `overlay bulk-budget-low: applied`;
+   - bulk's first request: `HTTP/1.1 200 OK` if bulk has no tokens yet this hour, otherwise as
+     the second;
+   - bulk's second: `HTTP/1.1 429 Too Many Requests`, a `retry-after` of the seconds to the next
+     hour, and `{"error":{"message":"budget exceeded","type":"rate_limit_error","code":"budget_exceeded"}}`;
+   - go-ai: `HTTP/1.1 200 OK`;
+   - `budget_status bulk`: `used <n> of 1 Tokens, exceeded true, Block; window ends <the next
+     hour>`;
+   - after the plain deploy: `used <n> of 1000000 Tokens, exceeded false, Block`, the same count.
+
+   Nothing goes to Azure: the 429 is the gateway's own.
+
+5. **The request log in the UI.** The UI is published on gb10-2's loopback only and reached
+   through an SSH tunnel. Its Logs and Analytics pages read the request log in Postgres. In a
+   second terminal, from the repository root:
+
+   ```sh
+   source scripts/clients-lib.sh
+   logged "mise run gateway:ui"
+   ```
+
+   Then open http://localhost:3001/ui in a browser, and the Logs and Analytics pages. In the first
+   terminal, the same rows as text:
+
+   ```sh
+   request_log 8
+   ```
+
+   Expected:
+   - the tunnel holds its terminal and prints nothing;
+   - Logs lists the walk's requests, newest first. Each row has its key's name as the user, the
+     provider (`azure` for step 3's overflow, `custom` for a row), the model, tokens, and
+     duration, and no prompt or completion;
+   - Analytics totals requests and tokens per key and model;
+   - `request_log 8` shows the same rows, every `has_payload` `f`, and `payload_rows` 0.
+
+   Record no address or Azure host the pages show. Then Ctrl-C in the second terminal to close
+   the tunnel.
+
+6. **LAST: the Framework reboot (root).** Behavior 11: while the Framework is rebooted and
+   LUKS-locked, audio and embedding are answered by Azure. After the unlock, the session times
+   each row's `/health` and the first request each row answers again.
+
+   1. The session checks that no overlay is live, and marks the step's start:
+
+      ```sh
+      logged "ssh gb10-2 head -1 '~/gateway/agentgateway/config.yaml'"
+      W6=$(date -Iseconds)
+      ```
+
+      Expected: `# overlays: none`.
+
+   2. **The architect, at the Framework:** apply its one pending update, then reboot:
+
+      ```sh
+      omarchy update
+      sudo reboot
+      ```
+
+      The session logs it when the architect says it was issued, as slice 1 logged gb10-2's
+      reboot:
+
+      ```sh
+      _clients_log "framework (architect)" "omarchy update, then sudo reboot (issued <HH:MM:SS>)"
+      ```
+
+   3. **While it is down and locked,** the session sends one request to each alias. Audio sends
+      go-ai's `phrase.wav` fixture with `max_completion_tokens`, the model renamed to the alias.
+      Embedding sends one small input.
+
+      ```sh
+      gw_curl architect -sS -D - -o .state/priority/walk-fw-audio.json -H 'Content-Type: application/json' -d @<(jq -c '.model = "audio"' .state/priority/assets/audio-probe.json) "$(gw_base audio)/chat/completions" | grep -iE '^(HTTP|x-gateway-overflow)'
+      gw_curl architect -sS -D - -o .state/priority/walk-fw-embed.json -H 'Content-Type: application/json' -d '{"model":"embedding","input":"ready"}' "$(gw_base embedding)/embeddings" | grep -iE '^(HTTP|x-gateway-overflow)'
+      logged "jq -c '{model, content: .choices[0].message.content}' .state/priority/walk-fw-audio.json; jq -c '{model, dims: (.data[0].embedding | length)}' .state/priority/walk-fw-embed.json"
+      azure_count "$W6"
+      ```
+
+      Expected:
+      - Embedding: `HTTP/1.1 200 OK`, `x-gateway-overflow: azure`, and
+        `{"model":"text-embedding-3-small","dims":768}`.
+      - Audio: `HTTP/1.1 200 OK`, `x-gateway-overflow: azure`, and "The access code is 7429."
+      - The first large audio request may get 503 before the row is evicted. Its body is past the
+        64 KiB the gateway retries, and the row is evicted only after 2 failed connections in a
+        row. Send it again, up to twice, until the header shows. A connection to a host that is
+        down may take seconds to fail.
+      - The log shows the audio body as `-d @/dev/fd/63`, as in slice 2.
+      - `azure_count`: audio and embedding, 1 each, all 200, and no 429.
+
+   4. **The poll.** The session starts it before the unlock and leaves it running. It prints
+      each row's first `/health` 200 with its time:
+
+      ```sh
+      logged 'for p in 8001 8002; do ( until [[ $(curl -s -o /dev/null -w "%{http_code}" --max-time 2 http://framework:$p/health) == 200 ]]; do sleep 1; done; echo "framework:$p /health 200 at $(date -Is)" ) & done; wait'
+      ```
+
+   5. **The architect unlocks LUKS at the Framework's console.** The session logs it the moment
+      the architect says so:
+
+      ```sh
+      _clients_log "framework (architect)" "LUKS unlocked at the console (<HH:MM:SS>)"
+      ```
+
+      Expected, from the poll: `framework:8001 /health 200 at <time>` and `framework:8002 /health
+      200 at <time>`, each some time after the unlock, once Docker and the row's vLLM have
+      started.
+
+   6. **The first request each row answers again.** Once both `/health` lines are in, a
+      `gw_curl` per alias every 5 s, at most 24 times. Each alias stops at its first 200 with no
+      overflow header:
+
+      ```sh
+      left="embedding audio"
+      for i in $(seq 24); do
+        for a in $left; do
+          if [[ $a == audio ]]; then
+            h=$(gw_curl architect -sS -D - -o /dev/null -H 'Content-Type: application/json' -d @<(jq -c '.model = "audio"' .state/priority/assets/audio-probe.json) "$(gw_base audio)/chat/completions" | tr -d '\r' | grep -iE '^(HTTP|x-gateway-overflow)' | paste -sd' ')
+          else
+            h=$(gw_curl architect -sS -D - -o /dev/null -H 'Content-Type: application/json' -d '{"model":"embedding","input":"ready"}' "$(gw_base embedding)/embeddings" | tr -d '\r' | grep -iE '^(HTTP|x-gateway-overflow)' | paste -sd' ')
+          fi
+          echo "$(date +%T) $a: $h"
+          [[ $h == 'HTTP/1.1 200 OK' ]] && left=${left/$a/}
+        done
+        [[ -z ${left// /} ]] && break
+        sleep 5
+      done
+      logged 'ssh -n gb10-2 "docker logs --timestamps --since '"$W6"' agentgateway 2>&1" | awk "/ route=default\/(audio|embedding) / { o = \$1; for (i = 2; i <= NF; i++) if (\$i ~ /^(route|http\.status|gen_ai\.provider\.name|overflow)=/) o = o \" \" \$i; print o }" | tail -n 20'
+      azure_count "$W6"
+      ```
+
+      Expected:
+      - Each alias's lines read `HTTP/1.1 200 OK x-gateway-overflow: azure` while the row is
+        still evicted, then `HTTP/1.1 200 OK` alone. The time of that line, which is also its
+        `gw_curl` line in the command log, is the first request the row answered again.
+      - The log read prints each request's time, route, status, provider, and overflow marker,
+        and nothing else: no address or endpoint. The rows' answers read
+        `gen_ai.provider.name=custom` with no `overflow`. Azure's read
+        `gen_ai.provider.name=azure overflow="azure"`.
+      - `azure_count`: the step's Azure answers, each 200, at most about 55, and no 429.
+      - If either alias still overflows after the 24th try, the row is still evicted outside an
+        overflow step. The task's stop rule applies: the session stops and escalates.
+
+### Results
+
+Pending: the session fills this in after the architect's walk. It records:
+
+- each step's outputs;
+- behavior 11's two times: from the unlock to each row's `/health`, and to the first request
+  each row answers again;
+- the walk's Azure count, toward the cap of 300.
 
 ## Commands as run
 
@@ -682,4 +1098,178 @@ appended to the log by `tee -a`. The architect's reboot is logged as theirs.
 + 2026-11-16T14:40:49-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
 + 2026-11-16T14:40:49-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
 + 2026-11-16T14:40:53-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
+```
+
+### 2026-11-16 · slice 3: the path and the deploy
+
+```text
++ 2026-11-16T16:15:59-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T16:15:59-05:00 laptop: for h in gb10-1 gb10-2 framework; do tailscale ping -c 1 $h | sed -E "s/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?/<addr>/g"; done
++ 2026-11-16T16:15:59-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-16T16:15:59-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-16T16:15:59-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-16T16:15:59-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-16T16:15:59-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-16T16:15:59-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T16:15:59-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T16:16:00-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-16T16:16:00-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-16T16:16:00-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-16T16:16:03-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-16T16:16:03-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-16T16:15:59-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
+```
+
+### 2026-11-16 · the request log and a stream charged to its key
+
+```text
++ 2026-11-16T16:16:07-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T16:16:07-05:00 laptop: ssh gb10-2 'docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -P pager=off' <<< "select to_char(completed_at at time zone 'UTC', 'HH24:MI:SS') as completed_utc,   http_status as status, attributes_json->>'agw.api_key.name' as key, agentgateway_user as ui_user,   gen_ai_provider_name as provider, gen_ai_request_model as model, input_tokens as input,   output_tokens as output, total_tokens as total, duration_ms, has_payload   from request_logs order by completed_at desc limit 5; select count(*) as payload_rows from request_log_payloads;"
++ 2026-11-16T16:16:08-05:00 laptop: ssh -n gb10-2 "curl -sS --max-time 5 'http://127.0.0.1:3001/api/budgets/status?apiKeyName=go-ai'" | jq -r '.budgets[] | one line each'
++ 2026-11-16T16:16:08-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/go-ai)" | curl -K - -sS -N -H Content-Type: application/json -d {"model":"agent","stream":true,"messages":[{"role":"user","content":"Count from 1 to 5."}],"max_tokens":200} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-16T16:16:11-05:00 laptop: ssh -n gb10-2 "curl -sS --max-time 5 'http://127.0.0.1:3001/api/budgets/status?apiKeyName=go-ai'" | jq -r '.budgets[] | one line each'
++ 2026-11-16T16:16:14-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T16:16:14-05:00 laptop: ssh gb10-2 'docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -P pager=off' <<< "select to_char(completed_at at time zone 'UTC', 'HH24:MI:SS') as completed_utc,   http_status as status, attributes_json->>'agw.api_key.name' as key, agentgateway_user as ui_user,   gen_ai_provider_name as provider, gen_ai_request_model as model, input_tokens as input,   output_tokens as output, total_tokens as total, duration_ms, has_payload   from request_logs order by completed_at desc limit 5; select count(*) as payload_rows from request_log_payloads;"
+```
+
+### 2026-11-16 · bulk's bucket and budget, and the restart
+
+```text
++ 2026-11-16T16:16:22-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T16:16:22-05:00 laptop: mise run agentgateway-deploy bulk-rate-low
++ 2026-11-16T16:16:22-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-16T16:16:22-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-16T16:16:22-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-16T16:16:22-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-16T16:16:22-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T16:16:23-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T16:16:23-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-16T16:16:23-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-16T16:16:23-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-16T16:16:26-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-16T16:16:26-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/bulk)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-16T16:16:26-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/bulk)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-16T16:16:26-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/bulk)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-16T16:16:26-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/go-ai)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-16T16:16:27-05:00 laptop: mise run agentgateway-deploy bulk-budget-low
++ 2026-11-16T16:16:27-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-16T16:16:27-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-16T16:16:27-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-16T16:16:27-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-16T16:16:27-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T16:16:27-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T16:16:27-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-16T16:16:27-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-16T16:16:27-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-16T16:16:30-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-16T16:16:30-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/bulk)" | curl -K - -sS -D - -o .state/priority/p3-budget.json -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-16T16:16:30-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/bulk)" | curl -K - -sS -D - -o .state/priority/p3-budget.json -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-16T16:16:30-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/go-ai)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-16T16:16:31-05:00 laptop: ssh -n gb10-2 "curl -sS --max-time 5 'http://127.0.0.1:3001/api/budgets/status?apiKeyName=bulk'" | jq -r '.budgets[] | one line each'
++ 2026-11-16T16:16:31-05:00 laptop: ssh -o BatchMode=yes gb10-2 'docker restart agentgateway >/dev/null && echo restarted'
++ 2026-11-16T16:16:36-05:00 laptop: ssh -n gb10-2 "curl -sS --max-time 5 'http://127.0.0.1:3001/api/budgets/status?apiKeyName=bulk'" | jq -r '.budgets[] | one line each'
++ 2026-11-16T16:16:36-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-16T16:16:36-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-16T16:16:36-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-16T16:16:36-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-16T16:16:36-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-16T16:16:36-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T16:16:36-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T16:16:37-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-16T16:16:37-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-16T16:16:37-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-16T16:16:40-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
+```
+
+### 2026-11-16 · embedding's burst
+
+```text
++ 2026-11-16T16:16:47-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T16:16:47-05:00 laptop: for i in $(seq 40); do printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/bench)" | curl -K - -s -o /dev/null -D - -H 'Content-Type: application/json' -d '{"model":"embedding","input":"ready"}' http://gb10-2:3000/embedding/v1/embeddings | grep -iE '^HTTP/|^retry-after' | tr -d '\r' | paste -sd' ' & done | sort | uniq -c
+```
+
+### 2026-11-16 · benchmark A
+
+```text
++ 2026-11-16T16:16:51-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T16:16:51-05:00 laptop: cell a-audio-d overhead-audio direct audio
++ 2026-11-16T16:16:51-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://framework:8001/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-audio.yaml --backend kind=openai_http,model=audio --tokenizer kind=huggingface_auto,model=google/gemma-4-E4B-it --seed kind=static,value=1343236474 --output kind=json,path=.state/priority/cells/a-audio-d/result.json --disable-console-interactive > .state/priority/cells/a-audio-d/guidellm.log 2>&1
++ 2026-11-16T16:17:23-05:00 laptop: cell a-audio-g overhead-audio gateway audio
++ 2026-11-16T16:17:23-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/audio/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-audio.yaml --backend kind=openai_http,model=audio --tokenizer kind=huggingface_auto,model=google/gemma-4-E4B-it --seed kind=static,value=586905257 --output kind=json,path=.state/priority/cells/a-audio-g/result.json --disable-console-interactive > .state/priority/cells/a-audio-g/guidellm.log 2>&1
++ 2026-11-16T16:17:23-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/priority/cells/a-audio-g/gateway-stats.tsv
++ 2026-11-16T16:17:59-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T16:17:59-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T16:17:59-05:00 laptop: cell a-embed limited-embed cap embedding
++ 2026-11-16T16:17:59-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/embedding/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/limited-embed.yaml --backend kind=openai_http,model=embedding --tokenizer kind=huggingface_auto,model=ibm-granite/granite-embedding-english-r2 --seed kind=static,value=2617946231 --output kind=json,path=.state/priority/cells/a-embed/result.json --disable-console-interactive > .state/priority/cells/a-embed/guidellm.log 2>&1
++ 2026-11-16T16:17:59-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/priority/cells/a-embed/gateway-stats.tsv
++ 2026-11-16T16:17:59-05:00 laptop: every 5 s while it runs: curl -sS --max-time 3 http://framework:8002/metrics, the sums of vllm:num_requests_running and vllm:num_requests_waiting >> .state/priority/cells/a-embed/row-metrics.tsv
++ 2026-11-16T16:18:19-05:00 laptop: cell a-audio-in overhead-audio gateway audio go-ai
++ 2026-11-16T16:18:19-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/go-ai) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/audio/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-audio.yaml --backend kind=openai_http,model=audio --tokenizer kind=huggingface_auto,model=google/gemma-4-E4B-it --seed kind=static,value=2828409129 --output kind=json,path=.state/priority/cells/a-audio-in/result.json --disable-console-interactive > .state/priority/cells/a-audio-in/guidellm.log 2>&1
++ 2026-11-16T16:18:19-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/priority/cells/a-audio-in/gateway-stats.tsv
++ 2026-11-16T16:19:49-05:00 laptop: ssh -n gb10-2 'docker logs --timestamps --since 1794863879 --until 1794863990 agentgateway 2>&1' | the lines of route=default/embedding and key_name="bench" as time, status, path, retry_after, overflow, retry_attempt, key_name > .state/priority/cells/a-embed/gateway-requests.tsv
++ 2026-11-16T16:28:07-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T16:28:07-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T16:28:07-05:00 laptop: rtfx a-audio-d a-audio-g a-audio-in
++ 2026-11-16T16:28:07-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-16T16:17:59-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
+```
+
+### 2026-11-16 · benchmark B
+
+```text
++ 2026-11-16T16:28:13-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T16:28:13-05:00 laptop: cell b-agent-d overhead-agent direct agent
++ 2026-11-16T16:28:13-05:00 laptop: GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-1:8000/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-agent.yaml --backend kind=openai_http,model=agent --tokenizer kind=huggingface_auto,model=openai/gpt-oss-120b --seed kind=static,value=603902497 --output kind=json,path=.state/priority/cells/b-agent-d/result.json --disable-console-interactive > .state/priority/cells/b-agent-d/guidellm.log 2>&1
++ 2026-11-16T16:30:15-05:00 laptop: cell b-agent-g overhead-agent gateway agent
++ 2026-11-16T16:30:15-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bench) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/agent/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-agent.yaml --backend kind=openai_http,model=agent --tokenizer kind=huggingface_auto,model=openai/gpt-oss-120b --seed kind=static,value=1360367090 --output kind=json,path=.state/priority/cells/b-agent-g/result.json --disable-console-interactive > .state/priority/cells/b-agent-g/guidellm.log 2>&1
++ 2026-11-16T16:30:15-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/priority/cells/b-agent-g/gateway-stats.tsv
++ 2026-11-16T16:32:22-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T16:32:22-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T16:32:22-05:00 laptop: cell b-bulk bulk-vision-150 gateway vision bulk
++ 2026-11-16T16:32:22-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bulk) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/vision/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/bulk-vision-150.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=3354227353 --output kind=json,path=.state/priority/cells/b-bulk/result.json --disable-console-interactive > .state/priority/cells/b-bulk/guidellm.log 2>&1
++ 2026-11-16T16:32:22-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/priority/cells/b-bulk/gateway-stats.tsv
++ 2026-11-16T16:32:42-05:00 laptop: cell b-agent-in overhead-agent gateway agent go-ai
++ 2026-11-16T16:32:42-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/go-ai) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/agent/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/overhead-agent.yaml --backend kind=openai_http,model=agent --tokenizer kind=huggingface_auto,model=openai/gpt-oss-120b --seed kind=static,value=2879027479 --output kind=json,path=.state/priority/cells/b-agent-in/result.json --disable-console-interactive > .state/priority/cells/b-agent-in/guidellm.log 2>&1
++ 2026-11-16T16:32:42-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/priority/cells/b-agent-in/gateway-stats.tsv
++ 2026-11-16T16:35:07-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-16T16:32:22-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
+```
+
+### 2026-11-16 · benchmark D
+
+```text
++ 2026-11-16T16:35:14-05:00 laptop: source scripts/measure-lib.sh
++ 2026-11-16T16:35:14-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-16T16:35:14-05:00 laptop: cell d-bulk bulk-vision-120 gateway vision bulk
++ 2026-11-16T16:35:14-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bulk) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/vision/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/bulk-vision-120.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=1625235272 --output kind=json,path=.state/priority/cells/d-bulk/result.json --disable-console-interactive > .state/priority/cells/d-bulk/guidellm.log 2>&1
++ 2026-11-16T16:35:14-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/priority/cells/d-bulk/gateway-stats.tsv
++ 2026-11-16T16:35:29-05:00 laptop: cell d-int interactive-vision gateway vision go-ai
++ 2026-11-16T16:35:29-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/go-ai) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/vision/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/interactive-vision.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=2062406523 --output kind=json,path=.state/priority/cells/d-int/result.json --disable-console-interactive > .state/priority/cells/d-int/guidellm.log 2>&1
++ 2026-11-16T16:35:29-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/priority/cells/d-int/gateway-stats.tsv
++ 2026-11-16T16:37:35-05:00 laptop: mise run agentgateway-deploy priority-flat
++ 2026-11-16T16:37:35-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-16T16:37:35-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-16T16:37:35-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-16T16:37:35-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-16T16:37:35-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T16:37:35-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T16:37:36-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-16T16:37:36-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-16T16:37:36-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-16T16:37:39-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-16T16:37:39-05:00 laptop: cell d-bulk-flat bulk-vision-120 gateway vision bulk
++ 2026-11-16T16:37:39-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/bulk) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/vision/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/bulk-vision-120.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=3277908895 --output kind=json,path=.state/priority/cells/d-bulk-flat/result.json --disable-console-interactive > .state/priority/cells/d-bulk-flat/guidellm.log 2>&1
++ 2026-11-16T16:37:39-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/priority/cells/d-bulk-flat/gateway-stats.tsv
++ 2026-11-16T16:37:54-05:00 laptop: cell d-int-flat interactive-vision gateway vision go-ai
++ 2026-11-16T16:37:54-05:00 laptop: GUIDELLM__SPEC__BACKEND__API_KEY=$(<.state/agentgateway/keys/go-ai) GUIDELLM__SPEC__BACKEND__TARGET=http://gb10-2:3000/vision/v1 MISE_ENV=bench timeout 10m mise exec -- guidellm run -c bench/interactive-vision.yaml --backend kind=openai_http,model=vision --tokenizer kind=huggingface_auto,model=google/gemma-4-26B-A4B-it --seed kind=static,value=3403424441 --output kind=json,path=.state/priority/cells/d-int-flat/result.json --disable-console-interactive > .state/priority/cells/d-int-flat/guidellm.log 2>&1
++ 2026-11-16T16:37:54-05:00 laptop: every 5 s while it runs: ssh -n gb10-2 "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" >> .state/priority/cells/d-int-flat/gateway-stats.tsv
++ 2026-11-16T16:39:53-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-16T16:39:54-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-16T16:39:54-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-16T16:39:54-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-16T16:39:54-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-16T16:39:54-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-16T16:39:54-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-16T16:39:54-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-16T16:39:54-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-16T16:39:54-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-16T16:39:57-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-16T16:39:57-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-16T16:35:14-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 ```
