@@ -1,6 +1,6 @@
 # goal · experiment.hosting.spike-model-gateway
 
-- **State:** building
+- **State:** brief ready
 - **Task:** routing (realign)
 - **Branch:** routing-realign
 
