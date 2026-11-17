@@ -401,14 +401,20 @@ azure_count() {
       return 2
     }
   done
-  local remote="docker logs --since $1${2:+ --until $2} agentgateway 2>&1" a deployments=''
+  local remote="docker logs --since $1${2:+ --until $2} agentgateway 2>&1" a deployments='' log rc
   for a in agent vision audio embedding; do
     deployments+="$a=${CLIENTS_DEPLOYMENT[$a]} "
   done
   _clients_log laptop "ssh -n $CLIENTS_HOST '$remote' | the request lines with overflow=\"azure\" or gen_ai.provider.name=azure, counted per route and status"
+  # The log is read whole before it is counted, so a log that wasn't read gives no count, rather
+  # than counts of nothing that read as nothing sent to Azure. It is held, never printed.
   # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
-  ssh -n "$CLIENTS_HOST" "$remote" |
-    awk -v since="$1" -v until="${2:-now}" -v deployments="$deployments" '
+  log=$(ssh -n "$CLIENTS_HOST" "$remote") || {
+    rc=$?
+    echo "reading the gateway log failed (ssh exit $rc); no count" | _clients_say azure_count
+    return "$rc"
+  }
+  awk -v since="$1" -v until="${2:-now}" -v deployments="$deployments" '
       BEGIN { n = split(deployments, d, " "); for (i = 1; i <= n; i++) { split(d[i], kv, "="); ord[i] = kv[1]; dep[kv[1]] = kv[2] } }
       /[ \t]request / {
         answered = index($0, " overflow=\"azure\"") > 0
@@ -428,7 +434,7 @@ azure_count() {
         }
         printf "  toward the cap of 300: %d (2xx, and 4xx other than 429); 429, reported apart: %d\n", counted, limited
         if (limited) printf "  STOP: Azure answered 429 %d times; the task stops and escalates\n", limited
-      }' | _clients_say azure_count
+      }' <<<"$log" | _clients_say azure_count
   return "${PIPESTATUS[0]}"
 }
 
@@ -441,14 +447,16 @@ budget_status() {
     echo "budget_status: $1 isn't a key name" >&2
     return 2
   }
-  local remote="curl -sS --max-time 5 'http://127.0.0.1:$AGW_UI_PORT/api/budgets/status${1:+?apiKeyName=$1}'"
+  # -f: an error reply fails the call rather than reaching jq as a body with no budgets in it.
+  local remote="curl -fsS --max-time 5 'http://127.0.0.1:$AGW_UI_PORT/api/budgets/status${1:+?apiKeyName=$1}'"
   _clients_log laptop "ssh -n $CLIENTS_HOST \"$remote\" | jq -r '.budgets[] | one line each'"
   # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
   ssh -n "$CLIENTS_HOST" "$remote" |
     jq -r '.budgets | sort_by(.apiKeyName)[]
       | "\(.apiKeyName) \(.name): used \(.usage.used) of \(.limit.amount) \(.limit.unit), exceeded \(.usage.exceeded), \(.onBudgetExceeded); window ends \(if .window.end then (.window.end / 1000 | localtime | strftime("%H:%M:%S")) else "never" end)"' |
     _clients_say budget_status
-  return "${PIPESTATUS[0]}"
+  local st=("${PIPESTATUS[@]}")
+  return $((st[0] ? st[0] : st[1]))
 }
 
 request_log() {
@@ -468,8 +476,9 @@ request_log() {
   output_tokens as output, total_tokens as total, duration_ms, has_payload
   from request_logs order by completed_at desc limit $count;
 select count(*) as payload_rows from request_log_payloads;"
-  _clients_log laptop "ssh $CLIENTS_HOST 'docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -P pager=off' <<< \"${query//$'\n'/ }\""
-  ssh "$CLIENTS_HOST" 'docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -P pager=off' \
+  # ON_ERROR_STOP: psql reading a script on stdin exits 0 after a failed statement without it.
+  _clients_log laptop "ssh $CLIENTS_HOST 'docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -v ON_ERROR_STOP=1 -P pager=off' <<< \"${query//$'\n'/ }\""
+  ssh "$CLIENTS_HOST" 'docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -v ON_ERROR_STOP=1 -P pager=off' \
     <<<"$query" | _clients_say request_log
   return "${PIPESTATUS[0]}"
 }

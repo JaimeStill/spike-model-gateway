@@ -351,7 +351,7 @@ summarize() {
 # key_name, logged before config.yaml added it or refused 401, is kept.
 _measure_requests() {
   local name=$1 alias=$2 key_name=$3 since=$4 until=$5
-  local out=$MEASURE_STATE/cells/$name/gateway-requests.tsv
+  local out=$MEASURE_STATE/cells/$name/gateway-requests.tsv st
   local remote="docker logs --timestamps --since $since --until $until agentgateway 2>&1"
   _measure_log laptop "ssh -n $MEASURE_GATEWAY_HOST '$remote' | the lines of route=default/$alias and key_name=\"$key_name\" as time, status, path, retry_after, overflow, retry_attempt, key_name > $out"
   {
@@ -368,7 +368,14 @@ _measure_requests() {
         if (match($0, / overflow="[a-z]+"/)) of = substr($0, RSTART + 11, RLENGTH - 12)
         if (match($0, / retry\.attempt=[0-9]+/)) rt = substr($0, RSTART + 15, RLENGTH - 15)
         printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", $1, st, p, ra, of, rt, kn }'
+    st=${PIPESTATUS[0]}
   } >"$MEASURE_ROOT/$out"
+  # A log that wasn't read would otherwise pass as a run the gateway logged no request of.
+  if ((st != 0)); then
+    echo "$name: reading the gateway log failed (ssh exit $st); $out is not a reading" |
+      _measure_say cell
+    return "$st"
+  fi
   printf '%s: %d request lines from the gateway log\n' "$name" \
     "$(($(wc -l <"$MEASURE_ROOT/$out") - 1))" | _measure_say cell
 }
@@ -472,6 +479,10 @@ overflow_read() {
   _measure_log laptop "overflow_read $name"
   start=$(jq '[.benchmarks[].start_time] | min' "$dir/result.json")
   end=$(jq '[.benchmarks[].end_time] | max' "$dir/result.json")
+  [[ $start =~ ^[0-9]+(\.[0-9]+)?$ && $end =~ ^[0-9]+(\.[0-9]+)?$ ]] || {
+    echo "overflow_read: no benchmark start and end times in $MEASURE_STATE/cells/$name/result.json" >&2
+    return 1
+  }
   iso_s=$(date -u -d "@${start%.*}" +%Y-%m-%dT%H:%M:%S)
   iso_e=$(date -u -d "@$((${end%.*} + 1))" +%Y-%m-%dT%H:%M:%S)
   # The lines inside the benchmark, the gateway's /models lines (GuideLLM's backend check) left out,
@@ -546,10 +557,16 @@ rtfx() {
     }
   done
   _measure_log laptop "rtfx $*"
-  for n in "$@"; do
-    echo "$n:"
-    jq -r "$_MEASURE_RTFX_JQ" "$cells/$n/result.json"
-  done | _measure_say rtfx
+  # A run jq can't read fails the call, rather than leaving a name with no figure under it.
+  {
+    local rc=0
+    for n in "$@"; do
+      echo "$n:"
+      jq -r "$_MEASURE_RTFX_JQ" "$cells/$n/result.json" || rc=1
+    done
+    ((rc == 0))
+  } | _measure_say rtfx
+  return "${PIPESTATUS[0]}"
 }
 
 mkdir -p "$MEASURE_ROOT/$MEASURE_STATE/cells"

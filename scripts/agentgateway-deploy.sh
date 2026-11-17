@@ -226,7 +226,9 @@ if left=$(grep -oP '@@\K[a-z0-9:-]+(?=@@)' "$rendered" | sort -u | paste -sd' ')
   echo "agentgateway: markers with no value in the rendered config: $left; nothing was sent" >&2
   exit 1
 fi
-if grep -P '^\s*- keyHash:' "$rendered" | grep -vqP '^\s*- keyHash: sha256:[0-9a-f]{64}\s*$'; then
+# One grep, not two piped: under pipefail, the first one's SIGPIPE when -q stops reading early
+# would fail the pipeline and pass a bad keyHash.
+if grep -qP '^\s*- keyHash:(?! sha256:[0-9a-f]{64}\s*$)' "$rendered"; then
   echo "agentgateway: a keyHash that isn't a full hash is in the rendered config; nothing was sent" >&2
   exit 1
 fi
