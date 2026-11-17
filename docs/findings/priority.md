@@ -24,12 +24,14 @@ In short, after slices 1–4:
 - **Evidence 7:** with its row down, each alias was answered by its Azure deployment under the
   alias, marked as overflow, and returned to its row after. Under saturation, a row's 503 with
   eviction sends nearly the whole load to Azure (benchmark C). Through the Framework's reboot
-  (behavior 11), audio and embedding were answered by Azure while it was locked, and each row
-  answered again the first request sent after its `/health`: about 4 s (embedding) and 49 s
-  (audio) after the reported unlock. A powered-down host costs each attempt a connect timeout of
+  (behavior 11), audio and embedding were answered by Azure while it was locked. After the
+  reported unlock, `/health` came in about 4 s (embedding) and 49 s (audio), and each row answered
+  again the first request sent to it, about 57 s and 58 s after the unlock, when the recovery loop
+  started; each time is a lower bound. A powered-down host costs each attempt a connect timeout of
   about 11 s, so audio's large body got two 503s before its row was evicted.
 
-Azure has answered 183 of the task's 300 requests: none in slice 3, and 3 in the walkthrough.
+Azure has answered 183 of the task's 300 requests: none in slice 3, and 3 in the walkthrough; the
+audio rerun, after the review, adds its own ("The Azure count").
 "Answer for this task", below, gives what the gateway does and doesn't do.
 
 - **Measured:** from the laptop. Slice 1 ran 2026-11-16 13:05–13:56 local time, slice 2
@@ -63,11 +65,11 @@ The brief's behaviors, each with the evidence it proves and the slice that shows
 | 4 | the gateway and Postgres as one compose project on gb10-2, restarting with the host | 6 | 1 |
 | 5, 6 | two priority groups per alias, typed request formats, streamed usage, and `/v1/models` answered by the gateway | 7 | 2 |
 | 7, 8 | a row down: each alias answered by Azure under the alias, marked as overflow, and back to its row after; nothing fails over between hosts | 7 | 2 |
-| 9 | a row full: two 503s evict it for 5 s, and benchmark C reads what reaches Azure | 7 | 2 |
+| 9 | a row full: two 503s evict it, for 5 s the first time and longer each time after, a retry sends a request at most 3 times, and benchmark C reads what reaches Azure | 7 | 2 |
 | 10 | go-ai's and infer's tiers through the rows-down overlay, and the infer CLI | 7 | 2 |
 | 11 | the Framework down until `/health` after its LUKS unlock | 7 | 4 |
 | 12 | per alias, the cloud model, its processing scope, and its parity gaps | 7 | 2 |
-| 13–16 | per-key priority, request-rate buckets, token budgets in Postgres, and the request log | 6 | 3 |
+| 13–16 | per-key priority, request-rate buckets, token budgets in Postgres over a fixed clock hour, and the request log | 6 | 3 |
 | 17 | embedding held to 34 requests a second | 5 | 3 |
 | 18–20 | at most 300 Azure-answered requests, the records, currency and the check | — | all |
 
@@ -75,8 +77,9 @@ The brief's behaviors, each with the evidence it proves and the slice that shows
 
 **What agentgateway does natively on route `ai`.** Overflow: each alias's backend holds its row
 and then its Azure deployment as priority groups, and a row evicted after 2 failures goes to Azure
-for 5 s, under the alias, marked by a header and in the access log; 503s are retried for bodies up
-to 64 KiB. Priority: it sets vLLM's `priority` per key on the rows' providers, and vLLM orders its
+while it is out, under the alias, marked by a header and in the access log: 5 s the first time,
+and 5 s times the evictions so far each time after, with no cap, until a reload clears the count.
+503s are retried for bodies up to 64 KiB, a request sent at most 3 times. Priority: it sets vLLM's `priority` per key on the rows' providers, and vLLM orders its
 waiting queue by it. Limits: a request-rate bucket per key and route, and a global one, such as
 embedding's 34 a second, each refusing with 429 and `Retry-After`. Budgets: a token budget per key
 per clock hour in Postgres, Block or Audit, charging streams and surviving restarts. Every request
@@ -85,10 +88,12 @@ writes a metadata row, which the UI's Logs and Analytics pages show.
 **What it can't do.** It can't overflow a single request when a row is full: Azure answers only
 once the row is evicted, so the requests that evict it get 503 unless retried, a large body never
 is, and a powered-down host costs each attempt about 11 s first. Nothing caps what an eviction
-sends: every request in its 5 s window goes to Azure, nearly the whole load under saturation
-(benchmark C). Priority goes no further than queue order: a running request shares the batch, so
-interactive vision missed 10 s by 0.47 s beside bulk. The UI doesn't link Logs or Analytics on
-route `ai`, and agentgateway logs no eviction. Its `azure` provider builds neither the verified
+sends: every request in an eviction's window goes to Azure, nearly the whole load under
+saturation (benchmark C), and nothing caps how long the windows grow. Priority goes no further than queue order: a running request shares the batch, so
+interactive vision missed 10 s by 0.47 s beside bulk. A budget's `rolling: 1h` is a fixed UTC
+clock hour, not a sliding window. The UI doesn't link Logs or Analytics on route `ai`, and
+agentgateway logs no eviction. The uncapped eviction growth, the fixed window, and the missing
+links are entries in the watch register, [`docs/watch.md`](../watch.md). Its `azure` provider builds neither the verified
 Foundry host nor its path, so each deployment is a `custom` provider.
 
 **The parity gaps that decide which workloads may leave the self-hosted machines** ("Per alias:
@@ -105,7 +110,7 @@ What each piece of evidence has shown:
 | --- | --- | --- |
 | 5, embedding held beside audio | The global 34/1s bucket admitted 34 of a 40-request burst and 34.0 a second under 160 in flight, refusing the rest with 429 and `Retry-After: 1`. Audio inside it: RTFx median 5.38, 43 of 64 at 5 or more, so the floor meets and no paced bucket is needed (benchmark A). | — |
 | 6, keys ranked, limited, and charged | bulk refused by its own bucket (429, `retry-after: 59`) and by its Block budget (429 `budget_exceeded`, `retry-after: 2609`), while go-ai kept answering. A stream without `include_usage` was charged 128 tokens. bulk's count of 44 survived a gateway restart. Request log: metadata only, 0 payload rows. Benchmark B: agent ITL median 47.05 ms beside bulk vision. Benchmark D: interactive vision median latency 10.47 s with priority, 11.87 s without. The UI's Logs page listed each request with its key as the user and its provider, with prompt logging off; Analytics totalled tokens and calls. The sidebar doesn't link either on route `ai`; both load by URL (walkthrough step 5). | — |
-| 7, overflow when a row is down or full | Every alias answered by Azure under its alias with the rows down, and by its row once the overlay was removed. Under saturation, a row's 503 with eviction sent nearly the whole load to Azure (C-agent). With the Framework rebooted and locked, audio and embedding were answered by Azure; after the unlock, `/health` came in about 4 s (embedding) and 49 s (audio), and each row answered the first request sent after it (behavior 11). Parity gaps per alias are recorded. | — |
+| 7, overflow when a row is down or full | Every alias answered by Azure under its alias with the rows down, and by its row once the overlay was removed. Under saturation, a row's 503 with eviction sent nearly the whole load to Azure (C-agent). With the Framework rebooted and locked, audio and embedding were answered by Azure; after the unlock, `/health` came in about 4 s (embedding) and 49 s (audio), and each row answered the first request sent to it, about 57 s and 58 s after the unlock, when the recovery loop started; each time is a lower bound (behavior 11). Parity gaps per alias are recorded. | — |
 
 ## Method
 
@@ -119,9 +124,13 @@ updates, the gb10-2 and Framework reboots, the LUKS unlock) and the Azure walk, 
 **Overflow.** Each alias route's `ai` backend has two priority groups: the alias's row, then its
 Azure deployment. A request goes to the first group with a provider not evicted, so Azure answers
 only while the row is out, and only for its own alias: nothing fails over between hosts. The row's
-health policy evicts it after two consecutive unhealthy replies, a 503 or a failed connection, for
-5 s; a route retry makes up to 2 more attempts on 503, each after a 20 ms backoff (the slice 2
-escalation, below). Chat Completions,
+health policy evicts it after two consecutive unhealthy replies, a 503 or a failed connection.
+The first eviction lasts 5 s, and each later one 5 s times the number of evictions so far, 10 s,
+15 s, and on, with no cap, until a config reload builds the backends again and clears the count
+(`http/health.rs`) [src]. A route retry, `attempts: 2`, makes up to 2 more attempts on 503, each
+after a 20 ms backoff (the slice 2 escalation, below), so a request is sent at most 3 times: the
+architect's decision at review (2026-11-17), amending behavior 9's "a route retry of 2
+attempts", is that `attempts` counts the retries, not the sends. Chat Completions,
 embeddings, Messages, and Responses are typed request formats, so the gateway names each
 deployment as the model and builds its path; the rest stay `detect`. Each alias's `/v1/models` is
 answered by the gateway itself. Every reply Azure answers carries `x-gateway-overflow: azure`, and
@@ -162,11 +171,12 @@ overflow, the session reads `azure_count <since>`, which counts the access log l
 `overflow="azure"` per alias, so per deployment, and per status, and flags any 429 from Azure, a
 stop condition. Only synthetic and test-fixture content is sent to Azure.
 
-**Benchmark C.** Two GuideLLM cells through the gateway, run with `cell <name> <scenario> cap
-<alias>` and read with `overflow_read <name>`: C-agent,
-[`bench/overflow-agent.yaml`](../../bench/overflow-agent.yaml), 28 concurrent for 60 s; then
-C-vision, [`bench/overflow-vision.yaml`](../../bench/overflow-vision.yaml), 36 concurrent for 60 s,
-each sized to Azure's capacity (the slice 2 escalation, below).
+**Benchmark C.** Resized to Azure's capacity (escalation 1, below), and run as C-agent only: one
+GuideLLM cell through the gateway, run with `cell <name> <scenario> cap <alias>` and read with
+`overflow_read <name>`, [`bench/overflow-agent.yaml`](../../bench/overflow-agent.yaml), 28
+concurrent single-turn chats for 60 s. C-agent breached the task's Azure stop rule, and the
+architect dropped C-vision (escalation 2, below): its scenario,
+[`bench/overflow-vision.yaml`](../../bench/overflow-vision.yaml), is kept and was never run.
 
 ## Slice 1 · setup
 
@@ -187,6 +197,34 @@ so no install was needed. Read at 13:05:30 (before) and 13:20:44 (after), untrac
 The laptop's path to every host was Tailscale's DERP relay (nyc), 51–52 ms, with no direct
 connection (13:05:30). The 13:20:44 read's `git -C ~/spike-model-engines` found no checkout there:
 the hosts keep it at `~/repos/spike-model-engines`, where the pull below ran.
+
+The Framework's Docker version wasn't read at setup, and its stack wasn't read after its update in
+the walkthrough's reboot; nor was the laptop's path to each host on 2026-11-17, the walkthrough's
+day. The session reads them after the review:
+
+- **The Framework's Docker version and stack after its update:** _to fill: kernel, Docker, and
+  `docker ps`, as the 13:20:44 read took them on the GB10s, with the time._
+- **The laptop's path to each host on 2026-11-17:** _to fill: `tailscale ping -c 1` to gb10-1,
+  gb10-2, and the Framework, direct or DERP and its latency, addresses replaced, with the time._
+
+### spike-model-engines current (behavior 1)
+
+Behavior 1 asks for spike-model-engines current at setup, its currency reporting only held items
+and its check passing. That reading was not logged: the engines' `mise run currency` and `mise run
+check` at setup, and the commands of the engines upgrade that brought its uv to 0.13.8, ran
+outside the helpers, so no command or output is in the command log, and this finding can't quote
+them. Only the pull and the row updates below are logged.
+
+The review (2026-11-17) bumped the engines again: uv 0.13.9, vLLM v0.33.0 → v0.34.0, and
+llama.cpp b12098 → b12464, ending the hold, through a second `host/` pull request, with the rows
+restarted and a smoke check after (the goal record's decision). The task's benchmarks ran on
+v0.33.0 and are not rerun. The session's readings, logged through the helpers:
+
+- **The engines' currency after the upgrade:** _to fill: `mise run currency` and `mise run check`
+  in spike-model-engines, with the time, and the pull request and its merge commit._
+- **The post-upgrade smoke check:** _to fill: the queue-limit bursts (`row_burst` one past each
+  limit, agent 25, vision 33, audio 9), the pass-through matrix, and go-ai's and infer's tiers,
+  each with its time and result._
 
 ### The rows' limits
 
@@ -217,6 +255,14 @@ was 0 in every SKU in eastus2, so the session escalated, and vision overflows to
 instead (the goal record's decision). Three soft-deleted accounts from other projects held
 `gpt-5-mini`'s quota until the architect purged them.
 
+The architect's az commands were not logged: they ran in the architect's own terminal, outside
+the helpers, so none is quoted under "Commands as run". The deployments' SKUs and capacities are
+read back from Azure after the review, to confirm the table below:
+
+- **The deployments' SKUs and capacities, as Azure reports them:** _to fill: per deployment, its
+  model, version, SKU, and capacity, from `az cognitiveservices account deployment list`, with the
+  time, the account and resource group names left out._
+
 | Alias | Deployment | Version | SKU | Capacity |
 | --- | --- | --- | --- | --- |
 | agent | `gpt-oss-120b` | — | DataZoneStandard | 50 |
@@ -245,6 +291,26 @@ healthy first, then agentgateway. agentgateway ran its migrations into Postgres,
 `budget_usage`, `request_logs`, `request_log_payloads`, and
 `_agentgateway_request_log_migrations`.
 
+The stack follows `~/architecture`'s compose convention (go-web-service's `compose/README.md`):
+one file per service group, Postgres from its own Dockerfile whose FROM line is the pin, a health
+check, a named volume, and mise up, down, and reset tasks. Two exceptions, both in
+[`gateway/agentgateway.yml`](../../gateway/agentgateway.yml)'s header:
+
+- **agentgateway's image is pulled, not built.** Its pin stays in
+  [`gateway/agentgateway/deploy.env`](../../gateway/agentgateway/deploy.env), where the deploy
+  validates each config copy with that image before moving it into place, and where `mise run
+  currency` compares it with agentgateway's latest release.
+- **The config is bind-mounted read-only, not baked into an image.** The deploy renders it on the
+  laptop with each key's hash and each secret substituted, so it can't be committed into a build
+  context, and agentgateway reloads it in place when a new copy is moved in, so a config-only
+  deploy, such as an overlay or a key's revocation, needs no restart. The directory is mounted,
+  not the file, so the rename that moves a copy into place reaches the container. Fields under the
+  config's top-level `config` section are read only at start, so `gateway/compose.sh` hashes that
+  section into a label, and a change there recreates the container.
+
+The read-only mount is a pending edit for the experiment's intake to weigh for the capstone's
+stack.
+
 Every earlier check passed on the stack (13:49:36–13:51:34):
 
 | Check | Result |
@@ -271,8 +337,19 @@ Slice 2 ran 14:17–14:41, from the laptop through the step helpers, with every 
 "Commands as run". It deployed three configs: `4ed570c`, the overflow, at 14:17; `01e6c4d`,
 escalation 1's answers, at 14:32; and `2ba52b8`, escalation 2's, at 14:40. Each deploy left the
 agentgateway container running and reloaded its config in place. Each also recreated the Postgres
-container, though its definition hadn't changed. `request_logs` kept its rows: 183 at 14:17. Why
-compose recreates Postgres on each deploy is still open, and slice 3's deploys will do the same.
+container, though its definition hadn't changed. `request_logs` kept its rows: 183 at 14:17.
+Slice 3's deploys and the walkthrough's did the same.
+
+**Why Postgres was recreated.** The deploy runs `compose up --build`, and BuildKit attached a new
+provenance attestation manifest to each build (the deploy's output read `exporting attestation
+manifest` with a new digest each time). The attestation records the build's own times, so the
+image's id changed on every build of an unchanged Dockerfile, and compose recreates a container
+whose image id changed. It is fixed in the commit that records this: Postgres's `build:` in
+[`gateway/postgres.yml`](../../gateway/postgres.yml) sets `provenance: false` and `sbom: false`,
+the compose file's documented fields, so a cached build of an unchanged Dockerfile is the same
+image and `up` leaves the container alone. On the laptop, two BuildKit builds of the Dockerfile
+gave two different image digests with provenance on, and the same digest twice with it off. The
+first deploy after the fix recreates Postgres once more, since its image loses the attestation.
 
 ### Rows up (behaviors 5, 6, 8)
 
@@ -379,14 +456,15 @@ from 14:37:10 to 14:38:31. Read with `summarize` and `overflow_read`:
 | answered by Azure | 2,944: 429 ×2845, 400 ×99, no 2xx |
 | 503 from the row to the client | 0 |
 | refused requests retried | 18, with 20 retries; all 18 reached Azure |
-| eviction windows | about 28 a minute, estimated from the log's order |
+| eviction windows | about 28 a minute: an estimate from the log's order, assuming each window lasted 5 s, where each eviction in fact lasts longer than the one before (Method) |
 | first refusal | 0.7 s after the benchmark's start |
 | the row | running median 12, max 12; waiting median 0, max 12 |
 | gateway CPU, median / max | 4.54% / 5.91% of one core; memory 80.5 / 83.1 MiB |
 
 So a refused request does reach Azure: the 20 ms backoff lets the eviction land before the retry.
 But under saturation the row's 503 with eviction sends nearly the whole load to Azure. Each
-eviction opens a 5 s window in which every new request goes to the Azure group. Azure's
+eviction opens a window in which every new request goes to the Azure group: 5 s the first time,
+and 5 s times the evictions so far each time after, with no cap, until a reload clears the count. Azure's
 `gpt-oss-120b` throttled within seconds, and its 429s didn't evict it under the health policy
 then deployed. So it stayed in rotation and answered the alias's load with 429s. Every 429 carried
 `Retry-After: 1`.
@@ -419,14 +497,18 @@ complete for the task.
 
 ### The Azure count
 
-Counted from the access log after each step that can overflow:
+Counted from the access log after each step that can overflow, through the whole task:
 
 | Step | Azure-answered | Toward the cap |
 | --- | --- | --- |
 | slice 1, direct | 5 | 5 |
 | rows-down probes and the tiers, 14:32:54–14:36:38 | 76 (agent 50, vision 20, audio 2, embedding 4) | 76 |
 | benchmark C-agent | 2,944 (429 ×2845, 400 ×99) | 99 |
-| total | 3,025 | 180 of 300 |
+| slice 3 | 0 | 0 |
+| the walkthrough, 2026-11-17, steps 3 and 6 | 3 (agent 1, audio 1, embedding 1; all 200) | 3 |
+| total before the audio rerun | 3,028 | 183 of 300 |
+| the audio rerun, after the review | _to fill: `azure_count` since the rerun's first warm-up, per status_ | _to fill_ |
+| total | _to fill_ | _to fill_ of 300 |
 
 The cap counts Azure's 2xx and its 4xx other than 429, since Azure refuses a 429 without
 processing it (escalation 2). Azure's 2,845 429s are reported apart.
@@ -442,8 +524,9 @@ were answered:
   row got its third 503 from the row. With 20 ms the same request went to Azure on its third
   attempt. The route retry (`&retry-503`) now sets `backoff: 20ms`; benchmark C is to show it live.
 - **Azure provider health: the rows' policy.** Each `<alias>-azure` provider now carries
-  `&row-health`: two 503s or failed connections in a row evict it for 5 s. It had none, so
-  agentgateway's default for several groups held: one 5xx or failed connection evicted it for 3 s.
+  `&row-health`: two 503s or failed connections in a row evict it, for 5 s the first time. It had
+  none, so agentgateway's default for several groups held: one 5xx or failed connection evicted it
+  for 3 s.
   A 429 doesn't evict it; escalation 2, below, adds it.
 - **Benchmark C sized to Azure's capacity.** gpt-5-mini has 10 units, about 10,000 tokens a minute,
   and gpt-oss-120b 50 units, about 50,000 tokens a minute. The briefed loads, C-agent's sessions of
@@ -469,8 +552,8 @@ Benchmark C-agent breached the stop rule, and the architect decided:
   eviction sends nearly the whole load to Azure. C-vision would show the same at gpt-5-mini's 10
   units.
 - **Azure groups also evict on 429.** Each `<alias>-azure` provider now carries `&azure-health`: a
-  503, a 429, or a failed connection, 2 in a row, evicts it for 5 s, so a throttling Azure leaves
-  rotation. It was deployed as `2ba52b8` at 14:40:43 and passes `--validate-only`. It is not shown
+  503, a 429, or a failed connection, 2 in a row, evicts it, for 5 s the first time, so a
+  throttling Azure leaves rotation. It was deployed as `2ba52b8` at 14:40:43 and passes `--validate-only`. It is not shown
   live: a live 429 needs Azure to throttle (about 60 counted requests on one deployment), and
   agentgateway logs no eviction.
 - **The cap counts 2xx and non-429 4xx.** The count is 180 of 300 after C, with Azure's 429s
@@ -487,7 +570,7 @@ Slice 3 ran 16:15–16:40, from the laptop through the step helpers, with every 
 - a request-rate bucket per key on each route (`&key-rates`): bulk 600 a minute, the others
   1,200;
 - a token budget per key, kept in Postgres over each clock hour: bulk Blocks at 1,000,000, the
-  others Audit at 5,000,000;
+  others Audit at 5,000,000 (the window: "bulk's budget Block (behavior 15)", below);
 - embedding's global 34 requests a second.
 
 The config's comments give each field and its source.
@@ -555,6 +638,14 @@ vision:
 16:16:31. The session then ran `docker restart agentgateway` on gb10-2, and at 16:16:36 the
 budget read the same, `used 44`: the count was written to `budget_usage` and read back at start.
 A plain deploy at 16:16:36 removed the overlay.
+
+**The window is a fixed clock hour.** Behavior 15 asked for budgets over a rolling window.
+agentgateway v1.7.0's `rolling: 1h` is a fixed window aligned to the Unix epoch, so each UTC clock
+hour: the count starts again at each hour, a key can spend up to twice its budget across an hour's
+boundary, and a Block's `Retry-After` is the time to the next hour, as the 2609 above was. v1.7.0
+has no sliding window. The architect's decision at review (2026-11-17) amends behavior 15 to the
+fixed clock hour, records it here, and makes a sliding window a want for `answer`'s gateway
+document, tracked in [`docs/watch.md`](../watch.md).
 
 ### Embedding's limit (behavior 17)
 
@@ -869,7 +960,7 @@ the walk for the session to escalate.
 The architect ran the walk on 2026-11-17, 05:37:50–05:52:44, from the laptop, with every command
 under "Commands as run". Each of its four deploys validated the config and reloaded it in place,
 the agentgateway container staying up; each also recreated the Postgres container, as in slices 2
-and 3.
+and 3 (the cause, and its fix after the review: slice 2, "Why Postgres was recreated").
 
 **Step 1.** One line, `+ 2026-11-17T05:37:50-05:00 laptop: source scripts/clients-lib.sh`.
 
@@ -911,8 +1002,8 @@ links them only when the config has an `llm` section (`hasLlm`, `ui/src/componen
 - `request_log 8` wasn't run; slice 3's read of the same table ("The request log") showed
   `payload_rows` 0.
 
-A watch-register candidate, not yet in [`docs/watch.md`](../watch.md): **the UI links Logs and
-Analytics only when an `llm` section exists.** A capability wanted from agentgateway: the links
+The watch register, [`docs/watch.md`](../watch.md), now has an entry for it: **the UI links Logs
+and Analytics only when an `llm` section exists.** A capability wanted from agentgateway: the links
 shown for a config whose request log comes from route `ai` backends.
 
 **Step 6, the Framework reboot (behavior 11).** No overlay was live (`# overlays: none`), and
@@ -940,15 +1031,18 @@ rows' answers as `gen_ai.provider.name=custom` with no `overflow`, and Azure's t
 
 Behavior 11's two times, from the reported unlock at 05:51:45:
 
-| Row | Unlock to `/health` 200 | First request answered again |
+| Row | Unlock to `/health` 200 | Unlock to the first request answered again |
 | --- | --- | --- |
-| embedding, 8002 | ≈ 4 s (05:51:49) | 05:52:42, the loop's first try |
-| audio, 8001 | ≈ 49 s (05:52:34) | 05:52:43, the loop's first try |
+| embedding, 8002 | ≥ 4 s (05:51:49) | ≥ 57 s (05:52:42), the recovery loop's first try |
+| audio, 8001 | ≥ 49 s (05:52:34) | ≥ 58 s (05:52:43), the recovery loop's first try |
 
-Since the real unlock came a little before 05:51:45, each time is a little longer than shown.
-spike-model-layout recorded audio's start at 68.7 s after the passphrase. Each row answered the
-first request sent after its `/health`, so neither waited out an eviction: by then the rows'
-eviction windows from 05:50 had long passed.
+Each time is a lower bound. The real unlock came a little before 05:51:45, when the architect
+reported it, so each time is a little longer than shown. And the first answers came when the
+recovery loop started, its first try on each alias, which the session started once both
+`/health` lines were in: they show that each row answered by then, not when it first could, and
+embedding's row may have answered well before 57 s. spike-model-layout recorded audio's start at
+68.7 s after the passphrase. Each row answered the first request sent to it, so neither waited
+out an eviction: by then the rows' eviction windows from 05:50 had long passed.
 
 **A powered-down host costs a connect timeout per attempt.** In slice 2 the rows-down overlay
 pointed at a closed port, and each attempt was refused at once. A host that is powered down
@@ -962,6 +1056,27 @@ power-down the first callers of each alias wait about 11 s per attempt, and larg
 **The walk's Azure count** was 3, all 200 and no 429: agent 1 in step 3, and audio 1 and
 embedding 1 in step 6. The task's count is 183 of 300, with Azure's 2,845 429s, all from
 benchmark C-agent, reported apart.
+
+## After the review
+
+The spec review (2026-11-17) left readings that need the hosts, which the session takes after
+this commit, each through the helpers so it lands in the command log. Beside those under slice 1
+(the hosts, the Azure deployments, and the engines' upgrade), these:
+
+- **The audio rerun (behavior 10):** go-ai's two audio tests, rerun with the rows down after
+  warming the audio row's eviction, so they record Azure's answer rather than the row's 503 (the
+  goal record's decision). Run with `rows-down` deployed, as `audio_rerun <name>`
+  ([`scripts/clients-lib.sh`](../../scripts/clients-lib.sh)), then a plain deploy. _To fill: each
+  test's result and cause, the warm-up replies, and `azure_count` (the Azure count table, slice
+  2)._
+- **The watch run:** _to fill: `mise run watch` at the end of the task, its `checked` time, and
+  each line that differs, with the three entries added at review read for the first time._
+- **The Postgres password's rotation:** a reviewer's diff printed the password into a local
+  transcript, through a comment the deploy filled; the deploy now refuses a secret marker in a
+  comment, and the comment holds none. Rotated with `pg_password_rotate`, then a plain deploy,
+  which recreates agentgateway once (its `config` section's hash changes) and Postgres once (its
+  environment changes, and its image loses the provenance attestation). _To fill: the rotation's
+  and the deploy's times, and a check that the gateway still writes `request_logs` after it._
 
 ## Commands as run
 

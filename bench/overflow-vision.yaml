@@ -1,3 +1,8 @@
+# DROPPED, NEVER RUN. The architect dropped C-vision on 2026-11-16, after C-agent breached the
+# task's Azure stop rule: under saturation a row's 503 with eviction sends nearly the whole load to
+# Azure, and C-vision would show the same at gpt-5-mini's 10 units (docs/findings/priority.md,
+# "Escalation 2"). The file is kept as the sizing it would have run with; nothing runs it.
+#
 # C-vision, benchmark C's vision cell (the priority task's behavior 9; evidence 7): the vision row,
 # NVFP4 26B-A4B (vision on gb10-2's 8000), through the gateway only, at 36 concurrent for 60 s:
 # past the 32 the row holds before it refuses (twice its cap of 16 in flight,

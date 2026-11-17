@@ -43,7 +43,9 @@
 #
 # The Azure files are written when the account is set up, outside the deploy, and read only if
 # present: a marker whose file is missing stops the deploy before anything is sent, naming the
-# marker. No secret is printed or logged, or in a process's argv.
+# marker. A marker in a comment, a whole-line one or one after a value, stops it too, naming the
+# line: a comment would carry the secret into the deployed copy in clear text, where nothing reads
+# it. No secret is printed or logged, or in a process's argv.
 #
 # Each command is printed to stderr before it runs, as `+ <time> <host>: <command>`, the form of
 # .state/<task>/commands-*.log, so a finding can quote it exactly. Commands run on gb10-2 are sent
@@ -102,7 +104,9 @@ for name in "${names[@]}"; do
 done
 
 # Secrets, as the header lists them. Postgres's password is created like a key, once, and reused;
-# Postgres reads it only when it first initializes its volume, so it must not change after.
+# Postgres reads it only when it first initializes its volume, so it must not change after, except
+# through pg_password_rotate (scripts/clients-lib.sh), which changes it in Postgres first; the next
+# deploy then sends the new one.
 declare -A secrets
 if [[ -e $state/postgres-password ]]; then
   echo "secret postgres-password: existing"
@@ -188,6 +192,24 @@ for overlay in "$@"; do
   done
   echo "overlay $overlay: applied"
 done
+
+# A secret marker in a comment, checked on the copy's lines before any is rendered: a whole-line
+# comment, or a ` #` comment after a value. The line is named by its number in the copy before
+# its overlays header, which is config.yaml's own number when no overlay applies, and printed as
+# committed, so it holds the marker's name and no secret.
+comment_secret='^[[:space:]]*#.*@@secret:[a-z0-9-]+@@|[[:space:]]#.*@@secret:[a-z0-9-]+@@'
+refused=0
+for i in "${!lines[@]}"; do
+  if [[ ${lines[i]} =~ $comment_secret ]]; then
+    printf 'agentgateway: line %d of the copy (%s, overlays: %s) holds a secret marker in a comment: %s\n' \
+      $((i + 1)) "$config" "${*:-none}" "${lines[i]}" >&2
+    refused=1
+  fi
+done
+if ((refused)); then
+  echo "agentgateway: a comment would carry its secret to gb10-2 in clear text; nothing was sent" >&2
+  exit 1
+fi
 
 # The copy sent to gb10-2: config.yaml, its overlays applied, with each key marker replaced by its
 # key's hash and each secret marker by its value. It is written only under .state/, which is

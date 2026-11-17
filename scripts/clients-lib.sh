@@ -12,10 +12,11 @@
 #                     .state/priority/go-ai; go-ai's own working tree is not touched
 #   infer_install     the released infer, `go install ...tools/infer/cmd/infer@v0.1.0`, into
 #                     .state/priority/bin
-#   goai_tier <name> <alias>...
+#   goai_tier [-run <regexp>] <name> <alias>...
 #                     go-ai's integration tier, from the worktree, with each alias's role set to
-#                     its base URL on the gateway; output in .state/priority/clients/<name>.log
-#   infer_tier <name> <alias>...
+#                     its base URL on the gateway; output in .state/priority/clients/<name>.log;
+#                     with -run, only the tests `go test -run <regexp>` selects
+#   infer_tier [-run <regexp>] <name> <alias>...
 #                     infer's integration tier the same way, from the worktree's tools/infer
 #   infer_at <alias> <infer argument>...
 #                     the released infer once, INFER_BASE_URL at the alias's base URL, no model
@@ -47,6 +48,17 @@
 #                     name as agentgateway logged it and as the UI's user, provider, model,
 #                     tokens, duration, and whether a payload row was kept; then the count of
 #                     payload rows, which `llm: metadata` keeps at none (below)
+#   audio_rerun <name>
+#                     go-ai's two audio tests on Azure, with the rows-down overlay deployed: for
+#                     each of TestAudioInResponsesRefused and TestTranscribeChat, two small
+#                     text-only audio requests to warm the audio row's eviction, then the test
+#                     alone, as goai_tier -run '^<test>$' <name>-<test> audio; then azure_count
+#                     since the first warm-up (below)
+#   pg_password_rotate
+#                     a new Postgres password: created on the laptop as
+#                     .state/agentgateway/postgres-password.next, set on gb10-2 with ALTER USER
+#                     through psql in the Postgres container, then moved over
+#                     .state/agentgateway/postgres-password; a deploy then sends it (below)
 #   logged <command>  any other step, given as one string: run with bash from the root, logged as
 #                     written, and its output, stdout and stderr, appended to the log as printed;
 #                     for a command that prints no key, such as `mise run agentgateway-deploy`, a
@@ -100,6 +112,28 @@
 # sent on psql's stdin; it selects named columns only, never attributes_json whole, which holds the
 # caller's address and an overflow's endpoint, the Azure account's host. The UI itself is reached
 # through an SSH tunnel, `mise run gateway:ui`, at http://localhost:3001/ui.
+#
+# The audio rerun (the priority task's behavior 10, rerun after the review, 2026-11-17). go-ai's
+# two audio tests send a body past the 64 KiB the gateway buffers for a retry, so each is sent
+# once: while the audio row isn't evicted, it gets the row's 503 (a failed connection under
+# rows-down), not Azure's answer. A small text-only request is retried, so its failed attempts
+# evict the row and its last attempt reaches Azure, which answers 400 (gpt-audio-mini requires
+# audio); two are sent, so the row is evicted whatever its state. An eviction lasts 5 s times the
+# evictions so far (config.yaml, &row-health), and `go test` takes seconds to start, so each test
+# runs alone, right after its own warm-up. About 6 Azure requests in all: 4 warm-up 400s and the
+# 2 tests'. The helper refuses to run unless the deployed copy's first line names rows-down.
+#
+# The Postgres password's rotation. The value is created like the deploy creates it (openssl rand
+# -hex 32, 0600), and reaches psql only on its stdin, in `ALTER USER ... WITH PASSWORD` written by
+# printf, a builtin, through ssh and `docker exec -i`: never in a process's argv, printed, or
+# logged; psql's own output is printed with the value replaced, and with VERBOSITY terse, so an
+# error doesn't echo the statement. psql connects over the container's local socket, which the
+# image trusts, so the change needs no old password. A .next file left by a rotation that stopped
+# is used again rather than replaced, since Postgres may already hold it. Live connections keep
+# working; agentgateway's new ones need the new password, so deploy at once after:
+# `mise run agentgateway-deploy` sends it in the config and postgres.env, which recreates the
+# agentgateway container once (its `config` section's hash changes) and the Postgres container
+# once (its environment changes; Postgres reads the variable only when it initializes the volume).
 #
 # The command log. Each helper call and each command it runs is appended to
 # .state/priority/commands-<YYYY-MM-DD>.log and printed to stderr as
@@ -217,10 +251,26 @@ infer_install() {
 # Runs one tier: go-ai's (dir .) or infer's (dir tools/infer), in the worktree, verbose, with the
 # go-ai key as each named alias's credential and every other role unset, so it skips.
 _clients_tier() {
-  local kind=$1 sub=$2 name=$3 alias rc
-  shift 3
-  local usage="usage: ${kind}_tier <name> <alias>..."
-  (($# > 0)) || {
+  local kind=$1 sub=$2 run='' alias rc
+  shift 2
+  local usage="usage: ${kind}_tier [-run <regexp>] <name> <alias>..."
+  if [[ ${1-} == -run ]]; then
+    [[ -n ${2-} ]] || {
+      echo "$usage" >&2
+      return 2
+    }
+    run=$2
+    shift 2
+  fi
+  local name=${1-}
+  shift
+  # go test's -run, passed as one argument, and shown in the log single-quoted.
+  local run_arg=() run_shown=''
+  if [[ -n $run ]]; then
+    run_arg=(-run "$run")
+    run_shown="-run '$run' "
+  fi
+  [[ -n $name && $# -gt 0 ]] || {
     echo "$usage" >&2
     return 2
   }
@@ -247,8 +297,8 @@ _clients_tier() {
     shown+="AI_${CLIENTS_ROLE[$alias]}_BASE_URL=$(gw_base "$alias") "
     shown+="AI_${CLIENTS_ROLE[$alias]}_$cred=$(_clients_shown go-ai) "
   done
-  _clients_log laptop "${kind}_tier $name $*"
-  _clients_log laptop "cd $CLIENTS_WORKTREE/$sub && ${shown}GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee $out"
+  _clients_log laptop "${kind}_tier ${run_shown}$name $*"
+  _clients_log laptop "cd $CLIENTS_WORKTREE/$sub && ${shown}GOWORK=off go test -race -tags integration -count=1 -v ${run_shown}./integration/... 2>&1 | tee $out"
   (
     { set +x; } 2>/dev/null
     cd "$CLIENTS_ROOT/$CLIENTS_WORKTREE/$sub" || exit
@@ -267,7 +317,7 @@ _clients_tier() {
     done
     unset key
     export GOWORK=off
-    go test -race -tags integration -count=1 -v ./integration/... 2>&1 |
+    go test -race -tags integration -count=1 -v "${run_arg[@]}" ./integration/... 2>&1 |
       tee "$CLIENTS_ROOT/$out"
     exit "${PIPESTATUS[0]}"
   )
@@ -481,6 +531,85 @@ select count(*) as payload_rows from request_log_payloads;"
   ssh "$CLIENTS_HOST" 'docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -v ON_ERROR_STOP=1 -P pager=off' \
     <<<"$query" | _clients_say request_log
   return "${PIPESTATUS[0]}"
+}
+
+audio_rerun() {
+  (($# == 1)) || {
+    echo 'usage: audio_rerun <name>' >&2
+    return 2
+  }
+  local name=$1 live since t rc=0
+  # The deployed copy's first line names its overlays; anything but rows-down would send the warm-up
+  # to the audio row, and the tests' audio with it.
+  _clients_log laptop "ssh -n $CLIENTS_HOST head -1 '~/gateway/agentgateway/config.yaml'"
+  # shellcheck disable=SC2088 # The tilde expands on gb10-2.
+  live=$(ssh -n "$CLIENTS_HOST" head -1 '~/gateway/agentgateway/config.yaml') || return
+  echo "$live" | _clients_say audio_rerun
+  [[ $live =~ ^'# overlays: '(.*\ )?rows-down(\ .*)?$ ]] || {
+    echo "audio_rerun: rows-down isn't deployed; run logged \"mise run agentgateway-deploy rows-down\" first" |
+      _clients_say audio_rerun
+    return 2
+  }
+  since=$(date -Iseconds)
+  for t in TestAudioInResponsesRefused TestTranscribeChat; do
+    # Two small text-only requests, each retried, so the row is evicted when the test starts;
+    # Azure answers each 400, which evicts nothing.
+    for _ in 1 2; do
+      gw_curl architect -sS -D - -o /dev/null -H 'Content-Type: application/json' \
+        -d '{"model":"audio","messages":[{"role":"user","content":"Reply with the word ready."}],"max_completion_tokens":16}' \
+        "$(gw_base audio)/chat/completions" | tr -d '\r' | grep -iE '^(HTTP|x-gateway-overflow)' |
+        paste -sd' ' | _clients_say audio_rerun
+    done
+    goai_tier -run "^$t\$" "$name-$t" audio || rc=$?
+  done
+  azure_count "$since"
+  return "$rc"
+}
+
+pg_password_rotate() {
+  (($# == 0)) || {
+    echo 'usage: pg_password_rotate' >&2
+    return 2
+  }
+  local cur=.state/agentgateway/postgres-password
+  local next=$cur.next
+  local remote='docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -q -v ON_ERROR_STOP=1 -v VERBOSITY=terse'
+  [[ -s $CLIENTS_ROOT/$cur ]] || {
+    echo "pg_password_rotate: no password at $cur; nothing to rotate" >&2
+    return 2
+  }
+  _clients_log laptop "pg_password_rotate"
+  if [[ -s $CLIENTS_ROOT/$next ]]; then
+    echo "$next exists, from a rotation that stopped; it is used again" | _clients_say pg_password_rotate
+  else
+    _clients_log laptop "(umask 077 && openssl rand -hex 32 > $next)"
+    (umask 077 && openssl rand -hex 32 >"$CLIENTS_ROOT/$next") || return
+  fi
+  _clients_log laptop "printf \"ALTER USER agentgateway WITH PASSWORD '%s';\\n\" \"\$(<$next)\" | ssh $CLIENTS_HOST '$remote'"
+  (
+    { set +x; } 2>/dev/null
+    cd "$CLIENTS_ROOT" || exit
+    pw=$(<"$next")
+    [[ $pw =~ ^[0-9a-f]{64}$ ]] || {
+      echo "$next isn't 64 hex characters; nothing was changed"
+      exit 2
+    }
+    # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
+    out=$(printf "ALTER USER agentgateway WITH PASSWORD '%s';\n" "$pw" | ssh "$CLIENTS_HOST" "$remote" 2>&1)
+    rc=$?
+    [[ -z $out ]] || printf '%s\n' "${out//$pw/<new password>}"
+    exit "$rc"
+  ) | _clients_say pg_password_rotate
+  local rc=${PIPESTATUS[0]}
+  if ((rc != 0)); then
+    echo "pg_password_rotate: ALTER USER failed (exit $rc); $next is kept, and Postgres may hold it" |
+      _clients_say pg_password_rotate
+    return "$rc"
+  fi
+  _clients_log laptop "mv $next $cur"
+  mv "$CLIENTS_ROOT/$next" "$CLIENTS_ROOT/$cur" || return
+  echo "postgres-password: rotated in Postgres on $CLIENTS_HOST and in $cur; deploy now: logged \"mise run agentgateway-deploy\"" |
+    _clients_say pg_password_rotate
 }
 
 logged() {

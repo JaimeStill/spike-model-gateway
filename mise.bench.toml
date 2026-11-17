@@ -7,5 +7,5 @@
 python = "3.14.10"
 # mise's pipx backend installs GuideLLM through uv, with its vision and audio extras, which the
 # vision and audio cells need.
-uv = "0.13.8"
+uv = "0.13.9"
 "pipx:guidellm" = { version = "0.8.1", extras = ["vision", "audio"] }

@@ -5,8 +5,15 @@
 # files, 0600; the image reads it on the first start, when it initializes the volume.
 services:
   postgres:
+    # The deploy runs `up --build`, and compose creates the container again whenever the built
+    # image's id changes. BuildKit attaches a provenance attestation by default, which records the
+    # build's own times, so every build made a new image id from an unchanged Dockerfile, and every
+    # deploy recreated Postgres. With no attestation, a cached build of an unchanged Dockerfile is
+    # the same image, and `up` leaves the container alone; a changed Dockerfile still rebuilds it.
     build:
       context: postgres
+      provenance: false
+      sbom: false
     env_file: postgres.env
     restart: unless-stopped
     volumes:

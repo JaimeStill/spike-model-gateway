@@ -33,8 +33,9 @@ config:
   # The compose project's Postgres (gateway/postgres.yml), reached by its service name on the
   # project's network, where the request log and token budgets will be kept. agentgateway connects
   # at start, and compose starts it only once Postgres is healthy. The password is committed only
-  # as the marker `@@secret:postgres-password@@`, which scripts/agentgateway-deploy.sh replaces in
-  # the copy it sends with the password it keeps untracked under .state/agentgateway/.
+  # as a secret marker naming postgres-password, in the URL below, which
+  # scripts/agentgateway-deploy.sh replaces in the copy it sends with the password it keeps
+  # untracked under .state/agentgateway/. A comment never holds a marker: the deploy refuses one.
   database:
     url: postgres://agentgateway:@@secret:postgres-password@@@postgres:5432/agentgateway
 

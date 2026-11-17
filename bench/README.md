@@ -27,7 +27,7 @@ endpoints alone.
 | C-audio | `cap-audio.yaml` | audio, through the gateway | `google/gemma-4-E4B-it` | O-audio's requests at 4, then 8 concurrent; 30 s or 64 requests a level |
 | C-embed | `cap-embed.yaml` | embedding, through the gateway | `ibm-granite/granite-embedding-english-r2` | O-embed's requests at 128, then 160 in flight; 60 s a level |
 | C-agent, benchmark C | `overflow-agent.yaml` | agent, through the gateway | `openai/gpt-oss-120b` | single-turn synthetic prompts, 512 tokens, 128 out; 28 concurrent; 60 s |
-| C-vision, benchmark C | `overflow-vision.yaml` | vision, through the gateway | `google/gemma-4-26B-A4B-it` | a synthetic 720p JPEG and 200 text tokens, 100 out; 36 concurrent; 60 s |
+| C-vision, benchmark C (dropped, never run) | `overflow-vision.yaml` | vision, through the gateway | `google/gemma-4-26B-A4B-it` | a synthetic 720p JPEG and 200 text tokens, 100 out; 36 concurrent; 60 s |
 | C-embed, benchmark A | `limited-embed.yaml` | embedding, through the gateway, bench key | `ibm-granite/granite-embedding-english-r2` | O-embed's requests at 160 in flight, held to 34 a second by the route's limit; 90 s |
 | C-vision, benchmark B | `bulk-vision-150.yaml` | vision, through the gateway, bulk key | `google/gemma-4-26B-A4B-it` | O-vision's requests at 20 concurrent; 150 s |
 | C-vision, benchmark D | `bulk-vision-120.yaml` | vision, through the gateway, bulk key | `google/gemma-4-26B-A4B-it` | O-vision's requests at 20 concurrent; 120 s |
@@ -40,13 +40,14 @@ slice 3 sections,
 [`docs/findings/agentgateway.md`](../docs/findings/agentgateway.md#slice-2--overhead) and
 [its cap cells](../docs/findings/agentgateway.md#the-cap-cells).
 
-Benchmark C's two cells (the priority task's behavior 9) run the same way, through the gateway with
-`cap`, one level each, past the row's queue limit (agent 24, vision 32), where the row answers 503
-and the gateway sends the alias to its Azure AI Foundry deployment while the row is evicted.
-Their requests are sized to Azure's capacity, so the row fills on concurrency, not tokens, and each
-vision body stays under the 64 KiB the gateway retries. A cell stops early if Azure answers 429; no
-GuideLLM constraint tells a 429 from the row's 503s, so the session watches `azure_count` and
-interrupts the run by hand. `overflow_read <name>` reads each run. Their finding is
+Benchmark C (the priority task's behavior 9) was resized to Azure's capacity and ran as C-agent
+only. Its cell runs the same way, through the gateway with `cap`, one level, past the agent row's
+queue limit of 24, where the row answers 503 and the gateway sends the alias to its Azure AI
+Foundry deployment while the row is evicted. Its requests are sized so the row fills on
+concurrency, not tokens. A cell stops early if Azure answers 429; no GuideLLM constraint tells a
+429 from the row's 503s, so the session watches `azure_count` and interrupts the run by hand.
+`overflow_read <name>` reads the run. C-agent breached the task's Azure stop rule, and the
+architect dropped C-vision (`overflow-vision.yaml`, kept, never run). The finding is
 [`docs/findings/priority.md`](../docs/findings/priority.md).
 
 Benchmarks A, B, and D (the priority task's slice 3) each run two cells at once, in two terminals,
