@@ -474,6 +474,7 @@ slices 4/4 committed (slices 1–3 done; slice 4 walkthrough run by the architec
 - priority: go-ai's two audio tests (TestAudioInResponsesRefused, TestTranscribeChat) are rerun with the rows down after warming the audio row's eviction, about 6 Azure requests, so behavior 10 records Azure's answer rather than the row's 503 (architect, 2026-11-17, review escalation).
 - priority: currency at review: the gateway's uv moves to 0.13.9, and the engines are bumped too (architect, 2026-11-17, review escalation): uv 0.13.9, vLLM v0.33.0 -> v0.34.0, and llama.cpp b12098 -> b12464, ending the hold. This needs a second spike-model-engines `host/` PR, row restarts, and a post-upgrade smoke check: queue-limit bursts, the pass-through matrix, and the tiers. The task's benchmarks ran on v0.33.0 and are not rerun; the finding says so.
 - priority: the Postgres password is rotated, since a reviewer's diff printed it into a local transcript. The deploy no longer fills secret markers in comments (architect, 2026-11-17, review escalation).
+- priority: spike-model-engines' ROCm 7.2 fallback (VLLM_ROCM_FALLBACK, VLLM_ROCM_BUILD, the audio Dockerfile's rocm72 stage) is removed, since vLLM v0.34.0 publishes no -rocm72 image (#61939). The Framework runs the default ROCm 10.0 build, as it did throughout (architect, 2026-11-17, engines-bump escalation). Rejected: a fallback pinned to v0.33.0-rocm72.
 
 ## Pending edits
 
