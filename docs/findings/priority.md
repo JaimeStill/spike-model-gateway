@@ -28,23 +28,31 @@ In short, after slices 1–4:
   reported unlock, `/health` came in about 4 s (embedding) and 49 s (audio), and each row answered
   again the first request sent to it, about 57 s and 58 s after the unlock, when the recovery loop
   started; each time is a lower bound. A powered-down host costs each attempt a connect timeout of
-  about 11 s, so audio's large body got two 503s before its row was evicted.
+  about 11 s, so audio's large body got two 503s before its row was evicted. On overflow, audio
+  in a Responses request is refused by the gateway itself, whose typed parser has no audio input
+  part; Chat Completions with audio passes on Azure (the audio rerun, after the review).
 
-Azure has answered 183 of the task's 300 requests: none in slice 3, and 3 in the walkthrough; the
-audio rerun, after the review, adds its own ("The Azure count").
+Azure has answered 189 of the task's 300 requests: none in slice 3, 3 in the walkthrough, and 6 in
+the audio rerun after the review, one of them the gateway's own refusal ("The Azure count").
+After the review the rows run vLLM v0.34.0 and passed a smoke check; the benchmarks ran on
+v0.33.0 and are not rerun. Postgres was recreated on every deploy until `gateway/compose.sh` turned
+off buildx's default attestation, which Compose v5.2.0 ignores `provenance: false` for ("Why
+Postgres was recreated").
 "Answer for this task", below, gives what the gateway does and doesn't do.
 
 - **Measured:** from the laptop. Slice 1 ran 2026-11-16 13:05–13:56 local time, slice 2
-  14:17–14:41, slice 3 16:15–16:40; the walkthrough ran 2026-11-17 05:37–05:53. Every command is
-  under "Commands as run".
+  14:17–14:41, slice 3 16:15–16:40; the walkthrough ran 2026-11-17 05:37–05:53, and the readings
+  after the review 06:10–06:44. Every command the helpers logged is under "Commands as run".
 - **Path:** slices 1 and 2 ran over Tailscale's DERP relay, 51–52 ms; slice 3 ran on a direct
-  path, 1–2 ms. Only cells run in the same session compare.
+  path, 1–2 ms, and 2026-11-17 on a direct path, 0–1 ms. Only cells run in the same session compare.
 - **Gateway:** agentgateway v1.7.0, `cr.agentgateway.dev/agentgateway:v1.7.0`, on gb10-2, with its
   Postgres (`postgres:18.7-alpine`) in one compose project
   ([`gateway/compose.yml`](../../gateway/compose.yml)), configured from
   [`gateway/agentgateway/config.yaml`](../../gateway/agentgateway/config.yaml).
 - **Rows:** vLLM v0.33.0, each row serving its alias as its only model name, from
-  spike-model-engines `host/` at `2950b83`, the merge of its pull request #18.
+  spike-model-engines `host/` at `2950b83`, the merge of its pull request #18, for slices 1–4 and
+  every benchmark. After the review, vLLM v0.34.0 from `aaf19ed`, the merge of #19, with the same
+  flags, healthy from 06:39:55 on 2026-11-17; only the post-upgrade smoke check ran on it.
 - **Cloud:** Azure AI Foundry, the spike's own resource group and AIServices account in eastus2,
   SKU S0, one deployment per alias ("Azure AI Foundry", below).
 - **Sources:** agentgateway at the `v1.7.0` tag (`schema/config.md`, `crates/agentgateway/src/`,
@@ -202,10 +210,12 @@ The Framework's Docker version wasn't read at setup, and its stack wasn't read a
 the walkthrough's reboot; nor was the laptop's path to each host on 2026-11-17, the walkthrough's
 day. The session reads them after the review:
 
-- **The Framework's Docker version and stack after its update:** _to fill: kernel, Docker, and
-  `docker ps`, as the 13:20:44 read took them on the GB10s, with the time._
-- **The laptop's path to each host on 2026-11-17:** _to fill: `tailscale ping -c 1` to gb10-1,
-  gb10-2, and the Framework, direct or DERP and its latency, addresses replaced, with the time._
+- **The Framework's Docker version and stack after its update** (06:10:40): up 20 minutes since
+  the walkthrough's reboot, kernel 7.2.15-1-omarchy, 0 updates pending, Docker 29.9.2, and
+  `vllm-audio` and `vllm-embed` up, both still on v0.33.0 before the engines' bump below.
+- **The laptop's path to each host on 2026-11-17** (06:10:40): direct to all three, gb10-1 and
+  gb10-2 in 1 ms and the Framework in 0 s, as `tailscale ping` rounds it. The walkthrough's day
+  ran on a direct path, as slice 3 did.
 
 ### spike-model-engines current (behavior 1)
 
@@ -218,13 +228,34 @@ them. Only the pull and the row updates below are logged.
 The review (2026-11-17) bumped the engines again: uv 0.13.9, vLLM v0.33.0 → v0.34.0, and
 llama.cpp b12098 → b12464, ending the hold, through a second `host/` pull request, with the rows
 restarted and a smoke check after (the goal record's decision). The task's benchmarks ran on
-v0.33.0 and are not rerun. The session's readings, logged through the helpers:
+v0.33.0 and are not rerun. The session's readings, the rows' restarts and the smoke check logged
+through the helpers:
 
-- **The engines' currency after the upgrade:** _to fill: `mise run currency` and `mise run check`
-  in spike-model-engines, with the time, and the pull request and its merge commit._
-- **The post-upgrade smoke check:** _to fill: the queue-limit bursts (`row_burst` one past each
-  limit, agent 25, vision 33, audio 9), the pass-through matrix, and go-ai's and infer's tiers,
-  each with its time and result._
+- **The engines' currency after the upgrade:** spike-model-engines pull request #19, merged as
+  `aaf19ed`: uv 0.13.9, llama.cpp b12464 (the hold ended), vLLM v0.34.0, the ROCm 7.2 fallback
+  removed, and the four standing rows added to its `models.md`. vLLM v0.34.0 publishes no
+  `-rocm72` image (vLLM #61939), so the fallback had nothing to pin; the architect chose removal.
+  In spike-model-engines, `mise run check` passes and `mise run currency` reports only the two
+  Python holds; the session ran both outside the helpers, so neither is in the command log.
+- **The rows on v0.34.0:** all three hosts pulled `aaf19ed`, and the rows' updates started at
+  06:19:36, the Framework building its audio image first. The three hosts pulled at once over the
+  site's 118 Mbps link, so the Framework's 5.47 GB base layer came down at about 4 MB/s until the
+  GB10s' pulls ended, then at about 12.5 MB/s. All four rows were healthy on v0.34.0 at 06:39:55,
+  each container's flags unchanged (`docker inspect`).
+- **The post-upgrade smoke check** (06:40:06–06:44:24), every check passing:
+
+  | Check | Result | Time |
+  | --- | --- | --- |
+  | `row_burst` one past each limit | agent 24 × 200 and 1 × 503, vision 32 and 1, audio 8 and 1 | 06:40:06–06:42:08 |
+  | `/v1/models` on each `/<alias>/v1` | each lists its alias | 06:42:58 |
+  | a request to each alias | agent "ready"; an agent stream carries 1 usage chunk; vision "Red" for the red PNG; audio "The access code is 7429."; embedding 2 vectors of 768; no reply carries the overflow header | 06:42:58–06:43:03 |
+  | go-ai's tier, all four roles | 20 passed, 0 failed, 1 skipped; the key is not in its log | 06:43:09–06:44:02 |
+  | infer's tier, all four roles | 13 passed, 0 failed, 1 skipped; the key is not in its log | 06:44:02–06:44:24 |
+  | `azure_count` since 06:40:00 | 0 | 06:44:24 |
+
+  The benchmarks aren't rerun, and a rerun on v0.34.0 could differ from slice 3's: v0.34.0 brings
+  an extensible KV cache, a default block size of 64, and a cache fix for the DGX Spark, the GB10s'
+  platform, each of which can move throughput and latency.
 
 ### The rows' limits
 
@@ -259,9 +290,11 @@ The architect's az commands were not logged: they ran in the architect's own ter
 the helpers, so none is quoted under "Commands as run". The deployments' SKUs and capacities are
 read back from Azure after the review, to confirm the table below:
 
-- **The deployments' SKUs and capacities, as Azure reports them:** _to fill: per deployment, its
-  model, version, SKU, and capacity, from `az cognitiveservices account deployment list`, with the
-  time, the account and resource group names left out._
+- **The deployments' SKUs and capacities, as Azure reports them** (06:10:38, `az cognitiveservices
+  account deployment list`): `gpt-oss-120b` DataZoneStandard 50, `gpt-5-mini` GlobalStandard 10,
+  `gpt-audio-mini` GlobalStandard 10, and `text-embedding-3-small` DataZoneStandard 10, each
+  `Succeeded`, as the table below has them. The table output printed no model or version column,
+  though the query named both, so the versions below stay the ones read at setup.
 
 | Alias | Deployment | Version | SKU | Capacity |
 | --- | --- | --- | --- | --- |
@@ -341,15 +374,49 @@ container, though its definition hadn't changed. `request_logs` kept its rows: 1
 Slice 3's deploys and the walkthrough's did the same.
 
 **Why Postgres was recreated.** The deploy runs `compose up --build`, and BuildKit attached a new
-provenance attestation manifest to each build (the deploy's output read `exporting attestation
-manifest` with a new digest each time). The attestation records the build's own times, so the
-image's id changed on every build of an unchanged Dockerfile, and compose recreates a container
-whose image id changed. It is fixed in the commit that records this: Postgres's `build:` in
-[`gateway/postgres.yml`](../../gateway/postgres.yml) sets `provenance: false` and `sbom: false`,
-the compose file's documented fields, so a cached build of an unchanged Dockerfile is the same
-image and `up` leaves the container alone. On the laptop, two BuildKit builds of the Dockerfile
-gave two different image digests with provenance on, and the same digest twice with it off. The
-first deploy after the fix recreates Postgres once more, since its image loses the attestation.
+provenance attestation manifest to each build: the deploy's output read `exporting attestation
+manifest` with a new digest each time. The attestation records the build's own times. Every build
+exported the same image manifest (`sha256:86224ba1…`) and config (`sha256:f04b3a0b…`), but
+gb10-2's Docker 29.6.2 keeps images in the containerd image store
+(`io.containerd.snapshotter.v1`), where an image's id is the digest of the index that lists the
+manifest and its attestation. So the id changed on every build of an unchanged Dockerfile, and
+compose recreates a container whose image id changed: the container's `com.docker.compose.image`
+label is the last build's index, `sha256:5d0aafb2…`, which `docker image ls --tree` shows over
+the `linux/arm64` manifest `86224ba12265`.
+
+The first fix, after the review, set `provenance: false` and `sbom: false` under Postgres's
+`build:` in [`gateway/postgres.yml`](../../gateway/postgres.yml). It claimed the cause fixed, and
+it wasn't: the deploys after it (06:19:44, 06:29:49, and 06:29:57 on 2026-11-17) still exported
+an attestation manifest, each with a new digest, and each recreated Postgres. Compose v5.2.0,
+gb10-2's, drops both fields when it writes the bake definition it hands to `buildx bake`: its
+`toBakeAttest` adds an `attest` entry for `true` or for options, and nothing for `false`, so
+buildx applies its default, a provenance attestation. On gb10-2, `gateway/compose.sh build
+--print postgres` prints a target with no `attest`, and `docker buildx history inspect` lists the
+build's `https://slsa.dev/provenance/v1` attachment. The laptop's Compose 5.6.1 prints
+`type=provenance,disabled=true` and `type=sbom,disabled=true` for the same fields, and its Docker
+keeps the classic image store, where an image's id is its config's digest and an attestation
+doesn't move it, so the laptop's check didn't test what gb10-2 runs.
+
+Not the cause: Postgres's environment and `--build` itself. `postgres.env` is written on every
+deploy with the same password, except after a rotation, and compose compares its content, not the
+file. `gateway/compose.sh` exports the deploying user, the tailnet addresses, and the `config`
+section's hash, none of which varies between runs, and only agentgateway's label reads the last.
+agentgateway's `com.docker.compose.config-hash` equals `compose.sh config --hash agentgateway`.
+Postgres's (`b00e555a…`) differs from `config --hash postgres` (`463891e4…`), which a read-only
+check can't explain: compose computes it in `up` after the build, and the two deploys below show
+whether it holds steady.
+
+The fix: [`gateway/compose.sh`](../../gateway/compose.sh) exports
+`BUILDX_NO_DEFAULT_ATTESTATIONS=1`, which compose passes on to `buildx bake` with the rest of its
+environment, so a build with no `attest` gets none. `provenance: false` and `sbom: false` stay,
+for a Compose that honours them. A cached build of an unchanged Dockerfile then exports one
+manifest and no index, so its id is that manifest's digest each time, and `up` leaves the
+container alone; a changed Dockerfile still rebuilds it. The first deploy after the fix recreates
+Postgres once more, since its image id changes from the index to the manifest. To confirm it on
+gb10-2, two plain deploys back to back (`mise run agentgateway-deploy`, twice): neither build
+prints `exporting attestation manifest` or `exporting manifest list`, and the second prints
+`Container gateway-postgres-1 Running`, not `Recreate`, with the container's `.Created` time
+unchanged between the two.
 
 ### Rows up (behaviors 5, 6, 8)
 
@@ -413,11 +480,37 @@ unchanged (14:33:31–14:36:36). Transcription is skipped in both, as in every r
 | `TestChatUnknownModelIsAPIError` (all three formats) | an unknown model name succeeds, since the Azure provider sets the deployment as the model |
 | `TestStreamText/messages` | a translated Messages stream reports 0 input tokens |
 | `TestChatIncompleteAtMaxOutputTokens/responses` | a Responses reply cut off at its limit gives the reason `max_tokens`, where go-ai expects `max_output_tokens` |
-| `TestAudioInResponsesRefused`, `TestTranscribeChat` | a large audio body gets 503 ("connection refused") while the row isn't yet evicted, as above |
+| `TestAudioInResponsesRefused`, `TestTranscribeChat` | a large audio body gets 503 ("connection refused") while the row isn't yet evicted, as above. Rerun after the review with the row evicted first: `TestTranscribeChat` passes on Azure, and `TestAudioInResponsesRefused` fails, refused by the gateway itself (below) |
 
 Responses itself passed on agent (`TestChat/responses`). The brief expected it to fail on agent,
 since `gpt-oss-120b` serves Chat Completions only. The gateway translates a Responses request into
 Chat Completions for that provider, as it does Messages.
+
+**The audio rerun, after the review** (06:29:48–06:29:57). With `rows-down` deployed,
+`audio_rerun p5-audio` warmed the audio row's eviction with two text-only chats before each of
+go-ai's two audio tests, then ran the test alone. Each warm-up reached Azure, marked as overflow,
+and got Azure's 400 for a text-only chat, the gap recorded in slice 1; the first was Azure's on its
+third send, after the row's two refused connections evicted it. Then:
+
+- `TestTranscribeChat` passed on Azure: 1 passed, 0 failed.
+- `TestAudioInResponsesRefused` failed: 0 passed, 1 failed. The test sends audio in a Responses
+  request and wants the endpoint's own 400. The gateway answered 400 itself, in 4 ms, before
+  anything reached Azure: "failed to process LLM request: failed to parse Responses request: data
+  did not match any variant of untagged enum InputParam" (`reason=InvalidRequest` on its access
+  log line). agentgateway v1.7.0's typed Responses parser has no variant for an audio input part,
+  so on overflow, audio in a Responses request is refused by the gateway, with the gateway's
+  message, not Azure's: a parity finding for audio (behavior 12), watched with #4185's typed
+  parsing ([`docs/watch.md`](../watch.md), "agentgateway always-passthrough for `llm` models").
+
+With the rows up the same test passes, the row's vLLM refusing with its own 400. The config
+explains the difference. The route's `ai.routes` names `/v1/responses` as `responses` on both
+groups alike, so the row's request is classified as typed Responses too; what differs is the
+provider's `formats`. The row's provider lists `responses` (`&row-formats`), so the request passes
+through to the row unchanged. The Azure provider lists only `completions`, so the gateway
+translates a Responses request into Chat Completions for it, as it does for agent above, and the
+translation parses the whole input into its typed form, where the audio part fails. That the
+pass-through doesn't parse the input the same way is a reading of the config and the error, not
+of the source.
 
 **infer: 9 passed, 4 failed, 1 skipped.** Beside the gaps above, it adds:
 
@@ -485,7 +578,7 @@ stopped and escalated (escalation 2, below). C-vision did not run.
 | --- | --- | --- | --- |
 | agent | `gpt-oss-120b` | DataZoneStandard: within the data zone | refuses `tool_choice: required` and ignores a named function; an unknown model name succeeds; Responses is translated to Chat Completions, and a reply cut off at its limit reports `max_tokens`; a translated Messages stream reports 0 input tokens, and one at a 16-token limit didn't end within 15 s; no reasoning item at low effort through Messages; Azure's chat stream opens with an empty reply id and Responses adds its reasoning item in a form go-ai rejects (go-ai's to fix) |
 | vision | `gpt-5-mini` 2025-08-07 | GlobalStandard: processed globally | refuses `max_tokens` (wants `max_completion_tokens`) and reasoning effort `none`; an unknown model name succeeds; the stream gaps above; called a red PNG "pink" where the row said "Red" |
-| audio | `gpt-audio-mini` 2025-12-15 | GlobalStandard: processed globally | refuses a text-only chat; serves Chat Completions only; an audio body over 64 KiB isn't retried, so it gets the row's 503 until 2 failures evict the row, each after about 11 s when the Framework is powered down (walkthrough) |
+| audio | `gpt-audio-mini` 2025-12-15 | GlobalStandard: processed globally | refuses a text-only chat; serves Chat Completions only; audio in a Responses request is refused by the gateway itself on overflow (400, "failed to parse Responses request"), where the row refuses it with its own message (the audio rerun); an audio body over 64 KiB isn't retried, so it gets the row's 503 until 2 failures evict the row, each after about 11 s when the Framework is powered down (walkthrough) |
 | embedding | `text-embedding-3-small` | DataZoneStandard: within the data zone | another vector space at the same 768 dimensions; every reply is marked as overflow; with the Framework powered down, the first overflowed request took about 23 s (walkthrough) |
 
 Which workloads may leave the self-hosted machines is the architect's call in `answer`. These
@@ -507,11 +600,16 @@ Counted from the access log after each step that can overflow, through the whole
 | slice 3 | 0 | 0 |
 | the walkthrough, 2026-11-17, steps 3 and 6 | 3 (agent 1, audio 1, embedding 1; all 200) | 3 |
 | total before the audio rerun | 3,028 | 183 of 300 |
-| the audio rerun, after the review | _to fill: `azure_count` since the rerun's first warm-up, per status_ | _to fill_ |
-| total | _to fill_ | _to fill_ of 300 |
+| the audio rerun, after the review, 06:29:52–06:29:56 | 6 (audio: 400 ×5, 200 ×1) | 6 |
+| the post-upgrade smoke check, 06:40:00–06:44:24 | 0 | 0 |
+| total | 3,034 | 189 of 300 |
 
 The cap counts Azure's 2xx and its 4xx other than 429, since Azure refuses a 429 without
-processing it (escalation 2). Azure's 2,845 429s are reported apart.
+processing it (escalation 2). Azure's 2,845 429s are reported apart. Of the audio rerun's five
+400s, four are Azure's refusals of the text-only warm-ups; the fifth is the gateway's own refusal
+of `TestAudioInResponsesRefused`'s request, logged against the Azure provider and marked as
+overflow though it never reached Azure. `azure_count` counts it, so the total overstates Azure's
+by one, on the cap's safe side.
 
 ### Escalation 1 (2026-11-16)
 
@@ -1059,30 +1157,41 @@ benchmark C-agent, reported apart.
 
 ## After the review
 
-The spec review (2026-11-17) left readings that need the hosts, which the session takes after
-this commit, each through the helpers so it lands in the command log. Beside those under slice 1
-(the hosts, the Azure deployments, and the engines' upgrade), these:
+The spec review (2026-11-17) left readings that need the hosts, which the session took after it,
+06:10–06:44, each through the helpers so it lands in the command log, except where said. Beside
+those under slice 1 (the hosts, the Azure deployments, and the engines' upgrade), these:
 
 - **The audio rerun (behavior 10):** go-ai's two audio tests, rerun with the rows down after
   warming the audio row's eviction, so they record Azure's answer rather than the row's 503 (the
   goal record's decision). Run with `rows-down` deployed, as `audio_rerun <name>`
-  ([`scripts/clients-lib.sh`](../../scripts/clients-lib.sh)), then a plain deploy. _To fill: each
-  test's result and cause, the warm-up replies, and `azure_count` (the Azure count table, slice
-  2)._
-- **The watch run:** _to fill: `mise run watch` at the end of the task, its `checked` time, and
-  each line that differs, with the three entries added at review read for the first time._
+  ([`scripts/clients-lib.sh`](../../scripts/clients-lib.sh)), then a plain deploy, 06:29:48–06:29:57.
+  `TestTranscribeChat` passed on Azure; `TestAudioInResponsesRefused` failed, refused by the
+  gateway's own Responses parser before Azure, a parity finding for audio. Each warm-up got
+  Azure's 400 for a text-only chat. Azure: 6 (audio 400 ×5, 200 ×1), one of them the gateway's
+  refusal; the task's total is 189 of 300 ("The tiers on Azure" and "The Azure count", slice 2).
+- **The watch run** (06:19:48, `mise run watch`, `checked 2026-11-17T11:19Z`): it passes, and no
+  line differs from its record. The three entries added at review are present and read for the
+  first time: the UI's Logs and Analytics links (agentgateway#3860 open, and Shell.tsx's
+  `Boolean(config.data.llm)` present, each as recorded), and the budgets' sliding window and the
+  eviction growth without a cap, which list no lines to check.
 - **The Postgres password's rotation:** a reviewer's diff printed the password into a local
   transcript, through a comment the deploy filled; the deploy now refuses a secret marker in a
   comment, and the comment holds none. Rotated with `pg_password_rotate`, then a plain deploy,
   which recreates agentgateway once (its `config` section's hash changes) and Postgres once (its
-  environment changes, and its image loses the provenance attestation). _To fill: the rotation's
-  and the deploy's times, and a check that the gateway still writes `request_logs` after it._
+  environment changes). `pg_password_rotate` ran 06:19:43–06:19:44, and the deploy after it, at
+  06:19:44, recreated both containers. `request_logs` rose from 7,392 rows to 7,402 across the
+  post-upgrade smoke check (06:40–06:44), so the gateway connects and writes with the new password;
+  the two counts were read outside the helpers. Postgres was recreated again by the deploys at
+  06:29:49 and 06:29:57, with nothing changed: the attestation the first fix didn't remove (slice 2,
+  "Why Postgres was recreated").
 
 ## Commands as run
 
 Every command the logs hold, as logged, with its time, from
 `.state/priority/commands-2026-11-16.log` (slices 1–3) and `commands-2026-11-17.log` (the
-walkthrough). The output stays there, untracked. The two host reads were logged as `<time>,
+walkthrough and the readings after the review). The output stays there, untracked. After the
+review, the engines' check and currency, the hosts' pull of `aaf19ed`, and the two `request_logs`
+counts ran outside the helpers, so they aren't here. The two host reads were logged as `<time>,
 laptop: <command>`, the rest as `+ <time> <host>: <command>`. The helpers log curl's arguments
 joined by spaces, so a JSON body shows without its shell quotes, and an audio body read from a
 process substitution as `-d @/dev/fd/63`. The `mise run agentgateway-deploy` line is followed by
@@ -1610,4 +1719,105 @@ reboots and unlock are logged as theirs. The walkthrough's step 6 recovery loop 
 + 2026-11-17T05:52:42-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d @/dev/fd/63 http://gb10-2:3000/audio/v1/chat/completions
 + 2026-11-17T05:52:43-05:00 laptop: ssh -n gb10-2 "docker logs --timestamps --since 2026-11-17T05:48:38-05:00 agentgateway 2>&1" | awk "/ route=default\/(audio|embedding) / { o = \$1; for (i = 2; i <= NF; i++) if (\$i ~ /^(route|http\.status|gen_ai\.provider\.name|overflow)=/) o = o \" \" \$i; print o }" | tail -n 8
 + 2026-11-17T05:52:44-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-17T05:48:38-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
+```
+
+### 2026-11-17 · after the review: the Azure deployments, the Framework, and the path
+
+```text
++ 2026-11-17T06:10:38-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T06:10:38-05:00 laptop: az cognitiveservices account deployment list -g "$(sed -n "s/^AZURE_RG=//p" .state/azure/account.env)" -n "$(sed -n "s/^AZURE_ACCOUNT=//p" .state/azure/account.env)" --query "[].{deployment:name,model:model.name,version:model.version,sku:sku.name,capacity:sku.capacity,state:properties.provisioningState}" -o table
++ 2026-11-17T06:10:40-05:00 laptop: ssh -o BatchMode=yes framework 'uptime -p; uname -r; checkupdates 2>/dev/null | wc -l; docker --version; docker ps --format "{{.Names}} {{.Image}} {{.Status}}"'
++ 2026-11-17T06:10:40-05:00 laptop: for h in gb10-1 gb10-2 framework; do tailscale ping -c 1 $h | sed -E "s/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?/<addr>/g"; done
+```
+
+### 2026-11-17 · after the review: the rows' updates to v0.34.0
+
+```text
++ 2026-11-17T06:19:36-05:00 gb10-1: cd ~/repos/spike-model-engines && time VLLM_MODEL=gpt-oss-120b-agent-fp8 host/engines vllm update
++ 2026-11-17T06:19:36-05:00 gb10-2: cd ~/repos/spike-model-engines && time VLLM_MODEL=gemma-4-26B-A4B-NVFP4-vision-gb10 host/engines vllm update
++ 2026-11-17T06:19:36-05:00 framework: cd ~/repos/spike-model-engines && time docker build -t spike-model-engines/vllm-openai-rocm-audio:v0.34.0 host/vllm-rocm-audio && time VLLM_MODEL=gemma-4-E4B-it-audio-framework host/engines vllm update && time VLLM_MODEL=granite-embedding-english-r2-framework host/engines vllm update
+```
+
+### 2026-11-17 · after the review: the password's rotation, its deploy, and the watch run
+
+```text
++ 2026-11-17T06:19:43-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T06:19:43-05:00 laptop: pg_password_rotate
++ 2026-11-17T06:19:43-05:00 laptop: (umask 077 && openssl rand -hex 32 > .state/agentgateway/postgres-password.next)
++ 2026-11-17T06:19:43-05:00 laptop: printf "ALTER USER agentgateway WITH PASSWORD '%s';\n" "$(<.state/agentgateway/postgres-password.next)" | ssh gb10-2 'docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -q -v ON_ERROR_STOP=1 -v VERBOSITY=terse'
++ 2026-11-17T06:19:44-05:00 laptop: mv .state/agentgateway/postgres-password.next .state/agentgateway/postgres-password
++ 2026-11-17T06:19:44-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-17T06:19:44-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-17T06:19:44-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-17T06:19:44-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-17T06:19:44-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-17T06:19:44-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-17T06:19:44-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-17T06:19:44-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-17T06:19:44-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-17T06:19:44-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-17T06:19:48-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-17T06:19:48-05:00 laptop: mise run watch
+```
+
+### 2026-11-17 · after the review: the audio rerun
+
+```text
++ 2026-11-17T06:29:48-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T06:29:48-05:00 laptop: mise run agentgateway-deploy rows-down
++ 2026-11-17T06:29:48-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-17T06:29:48-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-17T06:29:48-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-17T06:29:48-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-17T06:29:49-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-17T06:29:49-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-17T06:29:49-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-17T06:29:49-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-17T06:29:49-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-17T06:29:52-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-17T06:29:52-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
++ 2026-11-17T06:29:52-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"audio","messages":[{"role":"user","content":"Reply with the word ready."}],"max_completion_tokens":16} http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-17T06:29:53-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"audio","messages":[{"role":"user","content":"Reply with the word ready."}],"max_completion_tokens":16} http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-17T06:29:53-05:00 laptop: goai_tier -run '^TestAudioInResponsesRefused$' p5-audio-TestAudioInResponsesRefused audio
++ 2026-11-17T06:29:53-05:00 laptop: cd .state/priority/go-ai/. && AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v -run '^TestAudioInResponsesRefused$' ./integration/... 2>&1 | tee .state/priority/clients/p5-audio-TestAudioInResponsesRefused.log
++ 2026-11-17T06:29:53-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"audio","messages":[{"role":"user","content":"Reply with the word ready."}],"max_completion_tokens":16} http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-17T06:29:53-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"audio","messages":[{"role":"user","content":"Reply with the word ready."}],"max_completion_tokens":16} http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-17T06:29:53-05:00 laptop: goai_tier -run '^TestTranscribeChat$' p5-audio-TestTranscribeChat audio
++ 2026-11-17T06:29:53-05:00 laptop: cd .state/priority/go-ai/. && AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v -run '^TestTranscribeChat$' ./integration/... 2>&1 | tee .state/priority/clients/p5-audio-TestTranscribeChat.log
++ 2026-11-17T06:29:56-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-17T06:29:52-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-17T06:29:56-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-17T06:29:57-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-17T06:29:57-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-17T06:29:57-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-17T06:29:57-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-17T06:29:57-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-17T06:29:57-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-17T06:29:57-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-17T06:29:57-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-17T06:29:57-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-17T06:30:00-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
+```
+
+### 2026-11-17 · after the review: the post-upgrade smoke check
+
+```text
++ 2026-11-17T06:40:06-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T06:40:06-05:00 laptop: for i in $(seq 25); do curl -s -o /dev/null -w '%{http_code}\n' -H 'content-type: application/json' -d '{"model":"agent","messages":[{"role":"user","content":"Count upward from 1, one number a line."}],"max_tokens":512,"ignore_eos":true}' http://gb10-1:8000/v1/chat/completions & done | sort | uniq -c
++ 2026-11-17T06:41:22-05:00 laptop: for i in $(seq 33); do curl -s -o /dev/null -w '%{http_code}\n' -H 'content-type: application/json' -d '{"model":"vision","messages":[{"role":"user","content":"Count upward from 1, one number a line."}],"max_tokens":512,"ignore_eos":true}' http://gb10-2:8000/v1/chat/completions & done | sort | uniq -c
++ 2026-11-17T06:42:08-05:00 laptop: for i in $(seq 9); do curl -s -o /dev/null -w '%{http_code}\n' -H 'content-type: application/json' -d '{"model":"audio","messages":[{"role":"user","content":"Count upward from 1, one number a line."}],"max_tokens":512,"ignore_eos":true}' http://framework:8001/v1/chat/completions & done | sort | uniq -c
++ 2026-11-17T06:42:58-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3000/agent/v1/models
++ 2026-11-17T06:42:58-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3000/vision/v1/models
++ 2026-11-17T06:42:58-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3000/audio/v1/models
++ 2026-11-17T06:42:58-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3000/embedding/v1/models
++ 2026-11-17T06:42:58-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p6-agent.json -H Content-Type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Reply with the word ready."}],"max_tokens":256} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-17T06:42:59-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -N -H Content-Type: application/json -d {"model":"agent","stream":true,"messages":[{"role":"user","content":"Count from 1 to 5."}],"max_tokens":200} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-17T06:43:01-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p6-vision.json -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":[{"type":"text","text":"What color is this image? One word."},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"}}]}],"max_tokens":64} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-17T06:43:02-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p6-audio.json -H Content-Type: application/json -d @/dev/fd/63 http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-17T06:43:03-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/p6-embed.json -H Content-Type: application/json -d {"model":"embedding","input":["gateway","routing"]} http://gb10-2:3000/embedding/v1/embeddings
++ 2026-11-17T06:43:09-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T06:43:09-05:00 laptop: goai_tier p6-goai agent vision audio embedding
++ 2026-11-17T06:43:09-05:00 laptop: cd .state/priority/go-ai/. && AI_AGENT_BASE_URL=http://gb10-2:3000/agent/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_VISION_BASE_URL=http://gb10-2:3000/vision/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3000/embedding/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/priority/clients/p6-goai.log
++ 2026-11-17T06:44:02-05:00 laptop: infer_tier p6-infer agent vision audio embedding
++ 2026-11-17T06:44:02-05:00 laptop: cd .state/priority/go-ai/tools/infer && AI_AGENT_BASE_URL=http://gb10-2:3000/agent/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_VISION_BASE_URL=http://gb10-2:3000/vision/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3000/embedding/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/priority/clients/p6-infer.log
++ 2026-11-17T06:44:24-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-17T06:40:00-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 ```

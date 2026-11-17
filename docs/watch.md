@@ -164,7 +164,13 @@ and the project has acted on it; the finding or decision that acted keeps the re
   and adds `stream_options.include_usage` to streams
   ([`docs/findings/routing.md`](findings/routing.md), "Behavior 2"). #4185 restores `passthrough`
   to its documented meaning, always pass through, and is marked breaking.
-- **Evidence:** the pull request's description; v1.7.0's tag is behind its merge commit.
+- **Evidence:** the pull request's description; v1.7.0's tag is behind its merge commit. The
+  priority task's audio rerun (2026-11-17) adds a cost of the typed parsing: on overflow, audio in
+  a Responses request is refused by the gateway itself, 400 "failed to parse Responses request:
+  data did not match any variant of untagged enum InputParam", since translating it for the Azure
+  provider's Chat Completions parses an input part the typed form lacks
+  ([`docs/findings/priority.md`](findings/priority.md), "The tiers on Azure"); with the rows up,
+  the row's provider lists `responses` and the request passes through.
 - **Upstream:**
   - `upstream agentgateway/agentgateway#4185 = merged` always-passthrough restored.
 - **Watched:**

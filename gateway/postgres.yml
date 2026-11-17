@@ -7,9 +7,13 @@ services:
   postgres:
     # The deploy runs `up --build`, and compose creates the container again whenever the built
     # image's id changes. BuildKit attaches a provenance attestation by default, which records the
-    # build's own times, so every build made a new image id from an unchanged Dockerfile, and every
-    # deploy recreated Postgres. With no attestation, a cached build of an unchanged Dockerfile is
-    # the same image, and `up` leaves the container alone; a changed Dockerfile still rebuilds it.
+    # build's own times, and with gb10-2's containerd image store the image id is the digest of the
+    # index that lists the attestation, so every build made a new id from an unchanged Dockerfile,
+    # and every deploy recreated Postgres. Compose v5.2.0 drops `provenance: false` and `sbom: false`
+    # from the bake definition it writes (`compose.sh build --print postgres` shows no `attest`), so
+    # compose.sh also sets BUILDX_NO_DEFAULT_ATTESTATIONS; a later Compose honours the two below.
+    # With no attestation, a cached build of an unchanged Dockerfile is the same image, and `up`
+    # leaves the container alone; a changed Dockerfile still rebuilds it.
     build:
       context: postgres
       provenance: false
