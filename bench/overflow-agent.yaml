@@ -1,8 +1,9 @@
 # C-agent, benchmark C's agent cell (the priority task's behavior 9; evidence 7): the agent row,
 # gpt-oss-120b with FP8 KV (agent on gb10-1's 8000), through the gateway only, at 28 concurrent for
 # 60 s: past the 24 the row holds before it refuses (twice its cap of 12 in flight,
-# --max-num-queued-reqs), so the row answers 503, two in a row evict it for 5 s, and the gateway
-# sends the agent alias to its Azure AI Foundry deployment, gpt-oss-120b, while it is out. The cell
+# --max-num-queued-reqs), so the row answers 503, two in a row evict it for 5 s, then 5 s times
+# the evictions so far, with no cap (config.yaml, &row-health), and the gateway sends the agent
+# alias to its Azure AI Foundry deployment, gpt-oss-120b, while it is out. The cell
 # reads 503s from the row, the requests Azure answered, whether a refused request reached Azure,
 # and the eviction windows a minute (overflow_read, scripts/measure-lib.sh). Every request Azure
 # answers counts against the task's cap of 300 (azure_count, scripts/clients-lib.sh).

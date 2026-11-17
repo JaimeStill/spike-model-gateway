@@ -250,8 +250,9 @@ ui:
 # request Azure answers, and `custom` on a row's. Every reply from it carries
 # `x-gateway-overflow: azure` (&overflow-marker); a row's reply never does. Its health policy is
 # the row's, with a 429 added (&azure-health): two 503s, 429s, or failed connections in a row
-# evict it for 5 s, where agentgateway's default for an `ai` backend of several groups would evict
-# it on one 5xx or failed connection, for 3 s (llm/mod.rs; http/health.rs) [src]. The 429 is there
+# evict it for 5 s, then 5 s times the evictions so far, with no cap, as a row's, where
+# agentgateway's default for an `ai` backend of several groups would evict it on one 5xx or
+# failed connection, for 3 s (llm/mod.rs; http/health.rs) [src]. The 429 is there
 # because Azure throttles a spent deployment with 429, and benchmark C-agent showed an Azure group
 # that stays in rotation while it throttles takes the alias's whole load during each row eviction. With both groups
 # evicted, the load balancer picks an evicted provider rather than none (types/loadbalancer.rs)

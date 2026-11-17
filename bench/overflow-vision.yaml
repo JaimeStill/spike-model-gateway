@@ -6,8 +6,9 @@
 # C-vision, benchmark C's vision cell (the priority task's behavior 9; evidence 7): the vision row,
 # NVFP4 26B-A4B (vision on gb10-2's 8000), through the gateway only, at 36 concurrent for 60 s:
 # past the 32 the row holds before it refuses (twice its cap of 16 in flight,
-# --max-num-queued-reqs), so the row answers 503, two in a row evict it for 5 s, and the gateway
-# sends the vision alias to its Azure AI Foundry deployment, gpt-5-mini, while it is out. The cell
+# --max-num-queued-reqs), so the row answers 503, two in a row evict it for 5 s, then 5 s times
+# the evictions so far, with no cap (config.yaml, &row-health), and the gateway sends the vision
+# alias to its Azure AI Foundry deployment, gpt-5-mini, while it is out. The cell
 # reads 503s from the row, the requests Azure answered, whether a refused request reached Azure,
 # the eviction windows a minute, and the time to the row's first refusal, which vLLM #58192 delays
 # on vision (overflow_read, scripts/measure-lib.sh). Every request Azure answers counts against the

@@ -42,7 +42,7 @@ Postgres was recreated").
 
 - **Measured:** from the laptop. Slice 1 ran 2026-11-16 13:05–13:56 local time, slice 2
   14:17–14:41, slice 3 16:15–16:40; the walkthrough ran 2026-11-17 05:37–05:53, and the readings
-  after the review 06:10–06:44. Every command the helpers logged is under "Commands as run".
+  after the review 06:10–06:57. Every command the helpers logged is under "Commands as run".
 - **Path:** slices 1 and 2 ran over Tailscale's DERP relay, 51–52 ms; slice 3 ran on a direct
   path, 1–2 ms, and 2026-11-17 on a direct path, 0–1 ms. Only cells run in the same session compare.
 - **Gateway:** agentgateway v1.7.0, `cr.agentgateway.dev/agentgateway:v1.7.0`, on gb10-2, with its
@@ -52,7 +52,9 @@ Postgres was recreated").
 - **Rows:** vLLM v0.33.0, each row serving its alias as its only model name, from
   spike-model-engines `host/` at `2950b83`, the merge of its pull request #18, for slices 1–4 and
   every benchmark. After the review, vLLM v0.34.0 from `aaf19ed`, the merge of #19, with the same
-  flags, healthy from 06:39:55 on 2026-11-17; only the post-upgrade smoke check ran on it.
+  flags; the logged reading at 06:57:39 on 2026-11-17 found every row on v0.34.0, its flags
+  unchanged, and its `/health` 200 ("spike-model-engines current (behavior 1)"). Only the
+  post-upgrade smoke check ran on it.
 - **Cloud:** Azure AI Foundry, the spike's own resource group and AIServices account in eastus2,
   SKU S0, one deployment per alias ("Azure AI Foundry", below).
 - **Sources:** agentgateway at the `v1.7.0` tag (`schema/config.md`, `crates/agentgateway/src/`,
@@ -240,8 +242,17 @@ through the helpers:
 - **The rows on v0.34.0:** all three hosts pulled `aaf19ed`, and the rows' updates started at
   06:19:36, the Framework building its audio image first. The three hosts pulled at once over the
   site's 118 Mbps link, so the Framework's 5.47 GB base layer came down at about 4 MB/s until the
-  GB10s' pulls ended, then at about 12.5 MB/s. All four rows were healthy on v0.34.0 at 06:39:55,
-  each container's flags unchanged (`docker inspect`).
+  GB10s' pulls ended, then at about 12.5 MB/s. The session's own poll, outside the helpers and not
+  logged, found all four rows' `/health` answering by 06:39:55, before the smoke check below. The
+  logged reading at 06:57:39 (`docker inspect` of each `vllm` container, and each row's `/health`)
+  shows every row on v0.34.0 with its flags unchanged:
+
+  | Host | Container | Image | Started (UTC) | Flags | `/health` |
+  | --- | --- | --- | --- | --- | --- |
+  | gb10-1 | `vllm` | `vllm/vllm-openai:v0.34.0` | 11:37:25Z | `--max-num-queued-reqs 24 --scheduling-policy priority` | 200 |
+  | gb10-2 | `vllm-vision` | `vllm/vllm-openai:v0.34.0` | 11:36:16Z | `--max-num-queued-reqs 32 --scheduling-policy priority` | 200 |
+  | framework | `vllm-embed` | `vllm/vllm-openai-rocm:v0.34.0` | 11:37:23Z | neither flag | 200 (8002) |
+  | framework | `vllm-audio` | `spike-model-engines/vllm-openai-rocm-audio:v0.34.0` | 11:37:22Z | `--max-num-queued-reqs 8` | 200 (8001) |
 - **The post-upgrade smoke check** (06:40:06–06:44:24), every check passing:
 
   | Check | Result | Time |
@@ -256,6 +267,11 @@ through the helpers:
   The benchmarks aren't rerun, and a rerun on v0.34.0 could differ from slice 3's: v0.34.0 brings
   an extensible KV cache, a default block size of 64, and a cache fix for the DGX Spark, the GB10s'
   platform, each of which can move throughput and latency.
+- **Scope: the engines' `models.md`.** Pull request #19's commit `683b78e` added the four standing
+  rows to spike-model-engines' `docs/engines/vllm/models.md`. That file is outside `host/`, which
+  is all experiment.hosting owns there, and outside the upgrade the goal record decided. The
+  session asked for it from the standards reviewer's finding, without the architect's decision; it
+  is raised in the session brief.
 
 ### The rows' limits
 
@@ -403,20 +419,26 @@ file. `gateway/compose.sh` exports the deploying user, the tailnet addresses, an
 section's hash, none of which varies between runs, and only agentgateway's label reads the last.
 agentgateway's `com.docker.compose.config-hash` equals `compose.sh config --hash agentgateway`.
 Postgres's (`b00e555a…`) differs from `config --hash postgres` (`463891e4…`), which a read-only
-check can't explain: compose computes it in `up` after the build, and the two deploys below show
-whether it holds steady.
+check can't explain: compose computes it in `up` after the build. It held steady between the two
+deploys below, since compose recreates a container whose config hash changed, and the second left
+Postgres running.
 
 The fix: [`gateway/compose.sh`](../../gateway/compose.sh) exports
 `BUILDX_NO_DEFAULT_ATTESTATIONS=1`, which compose passes on to `buildx bake` with the rest of its
 environment, so a build with no `attest` gets none. `provenance: false` and `sbom: false` stay,
 for a Compose that honours them. A cached build of an unchanged Dockerfile then exports one
 manifest and no index, so its id is that manifest's digest each time, and `up` leaves the
-container alone; a changed Dockerfile still rebuilds it. The first deploy after the fix recreates
-Postgres once more, since its image id changes from the index to the manifest. To confirm it on
-gb10-2, two plain deploys back to back (`mise run agentgateway-deploy`, twice): neither build
-prints `exporting attestation manifest` or `exporting manifest list`, and the second prints
-`Container gateway-postgres-1 Running`, not `Recreate`, with the container's `.Created` time
-unchanged between the two.
+container alone; a changed Dockerfile still rebuilds it.
+
+The fix holds. Two plain deploys ran back to back on gb10-2 after it, at 06:52:29 and 06:52:33 on
+2026-11-17, through the helpers ("Commands as run"). Neither build exported an attestation: each
+printed `exporting manifest sha256:86224ba1…` and `exporting config sha256:f04b3a0b…`, with no
+`exporting attestation manifest` and no `exporting manifest list`. The first recreated Postgres
+once more (`Container gateway-postgres-1 Recreate`), as expected, since its image id moved from the
+manifest list to the manifest. The second printed `Container gateway-postgres-1 Running`, not
+`Recreate`. The container's `Created` time, 2026-11-17T11:52:30.708Z, and its image,
+`sha256:86224ba12265…`, were the same after both deploys; the session read them outside the
+helpers, so that reading isn't in the command log.
 
 ### Rows up (behaviors 5, 6, 8)
 
@@ -1158,7 +1180,7 @@ benchmark C-agent, reported apart.
 ## After the review
 
 The spec review (2026-11-17) left readings that need the hosts, which the session took after it,
-06:10–06:44, each through the helpers so it lands in the command log, except where said. Beside
+06:10–06:57, each through the helpers so it lands in the command log, except where said. Beside
 those under slice 1 (the hosts, the Azure deployments, and the engines' upgrade), these:
 
 - **The audio rerun (behavior 10):** go-ai's two audio tests, rerun with the rows down after
@@ -1179,19 +1201,38 @@ those under slice 1 (the hosts, the Azure deployments, and the engines' upgrade)
   comment, and the comment holds none. Rotated with `pg_password_rotate`, then a plain deploy,
   which recreates agentgateway once (its `config` section's hash changes) and Postgres once (its
   environment changes). `pg_password_rotate` ran 06:19:43–06:19:44, and the deploy after it, at
-  06:19:44, recreated both containers. `request_logs` rose from 7,392 rows to 7,402 across the
-  post-upgrade smoke check (06:40–06:44), so the gateway connects and writes with the new password;
-  the two counts were read outside the helpers. Postgres was recreated again by the deploys at
-  06:29:49 and 06:29:57, with nothing changed: the attestation the first fix didn't remove (slice 2,
-  "Why Postgres was recreated").
+  06:19:44, recreated both containers. `request_logs` held 7,392 rows when read after the
+  rotation's deploy, and 7,402 when read after the smoke check's five curl requests through the
+  gateway, before the tiers. A later read-only count found 7,397 rows started before 06:40:00, 5
+  from 06:40:00 to 06:43:09, and 82 after, 7,484 in all. So the gateway connects and writes with
+  the rotated password. All three counts were read outside the helpers. Postgres was recreated
+  again by the deploys at 06:29:49 and 06:29:57, with nothing changed: the attestation the first
+  fix didn't remove (slice 2, "Why Postgres was recreated").
+- **Postgres's fix confirmed** (06:52:29 and 06:52:33): two plain deploys back to back; the first
+  recreated Postgres once more, the second left it running, and neither build exported an
+  attestation (slice 2, "Why Postgres was recreated").
+- **The rows' reading** (06:57:39): each row's image, start time, and flags, and its `/health`,
+  all four on v0.34.0 and answering 200 (slice 1, "spike-model-engines current (behavior 1)").
+- **The watch run at the end** (06:57:40, `mise run watch`, `checked 2026-11-17T11:57Z`): it
+  passes, every line as recorded, and each entry's last-checked line in
+  [`docs/watch.md`](../watch.md) is taken from it. The task's start-of-task read,
+  `checked 2026-11-16T16:34Z`, was taken before the brief's approval, so it isn't in a priority
+  command log.
+- **Currency and the check (behavior 20)**, the gateway's own, at review: `mise run currency`
+  prints only `mise.bench.toml: python 3.14.10 -> 3.15.2`, the bench tools' held Python, and exits
+  1, since [`scripts/currency.sh`](../../scripts/currency.sh) exits 1 for any line it prints, held
+  or not. agentgateway's image pin and the compose FROM pin print nothing, so they are current.
+  `mise run check` exits 0.
 
 ## Commands as run
 
 Every command the logs hold, as logged, with its time, from
 `.state/priority/commands-2026-11-16.log` (slices 1–3) and `commands-2026-11-17.log` (the
 walkthrough and the readings after the review). The output stays there, untracked. After the
-review, the engines' check and currency, the hosts' pull of `aaf19ed`, and the two `request_logs`
-counts ran outside the helpers, so they aren't here. The two host reads were logged as `<time>,
+review, these ran outside the helpers, so they aren't here: the engines' `mise run currency` and
+`mise run check`; the hosts' `git pull` of `aaf19ed`; the session's `/health` poll of the rows that
+found them answering by 06:39:55; the comparison of the Postgres container's `Created` time and
+image across the 06:52 deploys; and the `request_logs` counts. The two host reads were logged as `<time>,
 laptop: <command>`, the rest as `+ <time> <host>: <command>`. The helpers log curl's arguments
 joined by spaces, so a JSON body shows without its shell quotes, and an audio body read from a
 process substitution as `-d @/dev/fd/63`. The `mise run agentgateway-deploy` line is followed by
@@ -1820,4 +1861,40 @@ reboots and unlock are logged as theirs. The walkthrough's step 6 recovery loop 
 + 2026-11-17T06:44:02-05:00 laptop: infer_tier p6-infer agent vision audio embedding
 + 2026-11-17T06:44:02-05:00 laptop: cd .state/priority/go-ai/tools/infer && AI_AGENT_BASE_URL=http://gb10-2:3000/agent/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_VISION_BASE_URL=http://gb10-2:3000/vision/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3000/embedding/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/priority/clients/p6-infer.log
 + 2026-11-17T06:44:24-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-17T06:40:00-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
+```
+
+### 2026-11-17 · after the review: two deploys back to back, for Postgres
+
+```text
++ 2026-11-17T06:52:29-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T06:52:29-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-17T06:52:29-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-17T06:52:29-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-17T06:52:29-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-17T06:52:29-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-17T06:52:29-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-17T06:52:29-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-17T06:52:29-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-17T06:52:29-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-17T06:52:29-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-17T06:52:32-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-17T06:52:33-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-17T06:52:33-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-17T06:52:33-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-17T06:52:33-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-17T06:52:33-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-17T06:52:33-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-17T06:52:33-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-17T06:52:33-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-17T06:52:33-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-17T06:52:33-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-17T06:52:35-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
+```
+
+### 2026-11-17 · after the review: the rows' reading and the watch run
+
+```text
++ 2026-11-17T06:57:39-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T06:57:39-05:00 laptop: for h in gb10-1 gb10-2 framework; do ssh -o BatchMode=yes $h "docker inspect --format \"{{.Name}} {{.Config.Image}} {{.State.StartedAt}} {{join .Args \\\" \\\"}}\" \$(docker ps -q --filter name=vllm)" | grep -oE "^\S* \S* \S*|--max-num-queued-reqs [0-9]*|--scheduling-policy \S*" | paste -sd" " | sed "s/^/$h /"; done; for hp in gb10-1:8000 gb10-2:8000 framework:8001 framework:8002; do printf "%s /health " $hp; curl -s -o /dev/null -w "%{http_code}\n" --max-time 3 http://$hp/health; done
++ 2026-11-17T06:57:40-05:00 laptop: mise run watch
 ```

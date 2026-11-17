@@ -10,8 +10,9 @@
 # Azure: none. The vision row refuses with 503 only past 32 in flight (twice its cap of 16,
 # --max-num-queued-reqs), and this run holds 20; the agent row refuses only past 24, and O-agent
 # holds 4. So neither row refuses, neither is evicted, and nothing overflows while the rows are up.
-# A row that fails twice in a row for another reason, a lost connection, would be evicted for 5 s
-# and send its alias's requests to Azure meanwhile, so azure_count is read after the pair, and any
+# A row that fails twice in a row for another reason, a lost connection, would be evicted for 5 s,
+# then 5 s times the evictions so far, with no cap (config.yaml, &row-health), and send its
+# alias's requests to Azure meanwhile, so azure_count is read after the pair, and any
 # overflow stops the session. bulk's request-rate bucket, 600 a minute, and its budget, 1,000,000
 # tokens an hour, are above the run's load: about 1.9 requests a second of about 580 tokens each
 # (the agentgateway task's c-vision at 20).

@@ -15,6 +15,10 @@ by hand: each entry whose line differs is updated in place, its recorded value, 
 other fields as the change warrants, and every entry checked gets its last-checked line from the
 run. Git keeps the old text.
 
+The priority task's start-of-task read, `checked 2026-11-16T16:34Z`, which the first three
+entries' last-checked lines held until the run of 2026-11-17T11:57Z, was taken before the task's
+brief was approved, so it isn't in a priority command log.
+
 **An entry's fields:**
 
 - **Kind:** deprecation, capability, or other.
@@ -119,7 +123,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
   ([`docs/findings/agentgateway.md`](findings/agentgateway.md), "The paper inventory"), and record
   what `llm` must gain for parity.
 - **State:** watching.
-- **Last checked:** 2026-11-16T16:34Z, `mise run watch`: every line as recorded, at v1.7.0, the
+- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: every line as recorded, at v1.7.0, the
   latest release.
 
 ## agentgateway `llm` serving several base URLs on one port
@@ -151,7 +155,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
   moving the gateway to it: the same `/<alias>/v1` base URLs, served by the `llm` section, against
   re-checking its body handling (the always-passthrough entry below).
 - **State:** watching.
-- **Last checked:** 2026-11-16T16:34Z, `mise run watch`: as recorded, at v1.7.0.
+- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: as recorded, at v1.7.0.
 
 ## agentgateway always-passthrough for `llm` models
 
@@ -182,7 +186,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
   lists, whether streams still gain `include_usage`, and whether usage is still read for the access
   log and for `priority`'s budgets; then decide `passthrough` per model.
 - **State:** watching.
-- **Last checked:** 2026-11-16T16:34Z, `mise run watch`: as recorded; v1.7.0, the latest
+- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: as recorded; v1.7.0, the latest
   release, doesn't carry the merge.
 
 ## agentgateway UI links Logs and Analytics only with an `llm` section
@@ -211,8 +215,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Action:** on that release, drop the by-URL note from the walkthrough's step 5 and from
   `answer`'s gateway document.
 - **State:** watching.
-- **Last checked:** 2026-11-17, by hand at review (`gh search issues`, `gh api` of `Shell.tsx` at
-  v1.7.0); `mise run watch` reads it next.
+- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: as recorded, at v1.7.0.
 
 ## agentgateway budgets over a sliding window
 
@@ -234,8 +237,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Parity:** a release whose budget takes a sliding window, read in its schema and notes.
 - **Action:** weigh moving the budgets to it, and update `answer`'s gateway document.
 - **State:** watching.
-- **Last checked:** 2026-11-17, by hand at review (`gh search issues`); no line for `mise run
-  watch` to read.
+- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: the entry listed, with no line to read.
 
 ## agentgateway eviction growth without a cap
 
@@ -256,5 +258,4 @@ and the project has acted on it; the finding or decision that acted keeps the re
   deploy (a reload) is how a row is returned at once, and `answer`'s gateway document records the
   gap.
 - **State:** watching.
-- **Last checked:** 2026-11-17, by hand at review (`gh search issues`, `schema/config.md` at
-  v1.7.0); no line for `mise run watch` to read.
+- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: the entry listed, with no line to read.
