@@ -96,15 +96,21 @@ The experiment's rules, in `ai-hosting.md`, govern every session. In short:
   in the same copy from untracked files.
 - **Probe overlays:** `gateway/agentgateway/probes/` holds one-off config changes that the deploy
   applies to the copy it sends: `rate-limit-agent`, a request-rate limit on the agent route alone;
-  `in-flight-1`, the in-flight limit at 1; and `key-header`, keys read from `x-api-key`. A deploy
-  without them removes them. Each reply's Retry-After is in the access log without an overlay.
+  `in-flight-1`, the in-flight limit at 1; `key-header`, keys read from `x-api-key`; `rows-down`,
+  every row's provider at a closed port, so each alias overflows to Azure; `bulk-rate-low` and
+  `bulk-budget-low`, bulk's request bucket and token budget lowered; and `priority-flat`, every
+  key at bulk's priority on the rows. A deploy without them removes them. Each reply's Retry-After
+  is in the access log without an overlay.
 - **Step helpers:** [`scripts/measure-lib.sh`](../scripts/measure-lib.sh) runs and reads the
   GuideLLM cells in [`bench/`](../bench/README.md), and
   [`scripts/clients-lib.sh`](../scripts/clients-lib.sh) runs go-ai's and infer's tiers, the infer
   CLI, and curl through the gateway, each with a key read from its file. `gw_base <alias>` prints
   an alias's base URL, and `logged <command>` runs and logs a step that prints no key.
   `az_curl` sends one request straight to an Azure AI Foundry deployment, and `row_burst` sends a
-  burst straight to a row. Their state and command log are under `.state/priority/`.
+  burst straight to a row. `azure_count` counts the requests Azure answered, from the gateway's
+  access log; `budget_status` reads each key's token budget; and `request_log` reads the request
+  log in Postgres. measure-lib.sh's `overflow_read` and `rtfx` read a cell's overflow and audio's
+  real-time factor. Their state and command log are under `.state/priority/`.
 - **Watch register:** [`docs/watch.md`](../docs/watch.md) tracks each dependency's anticipated
   capabilities, deprecations, and other changes. Its agentgateway entries track whether route
   `ai`, which the gateway relies on, is deprecated, and whether the `llm` section can serve several
