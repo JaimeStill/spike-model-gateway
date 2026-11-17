@@ -5,29 +5,36 @@ work: overflow from each row to its own Azure AI Foundry deployment under the sa
 priority, request-rate buckets and token budgets, and embedding held to 34 requests a second
 (evidence 5–7 of [`context/README.md`](../../context/README.md#the-evidence)). This finding holds
 slice 1, the setup; slice 2, the overflow and benchmark C; slice 3, the keys and limits and
-benchmarks A, B, and D; and the walkthrough the architect runs as slice 4.
+benchmarks A, B, and D; and slice 4, the walkthrough the architect ran.
 
-In short, after slices 1–3:
+In short, after slices 1–4:
 
 - **Evidence 5:** the embedding route held a global 34 requests a second, and refused the rest
   with 429 and `Retry-After: 1`. Beside it, audio held its real-time factor: RTFx median 5.38,
   against the floor of 5.
 - **Evidence 6:** each key has its own request-rate bucket and token budget, kept in Postgres. A
   stream sent without `include_usage` was charged to its key, and a budget count survived a
-  gateway restart. Every request writes a metadata row and no content.
+  gateway restart. Every request writes a metadata row and no content. The UI's Logs and
+  Analytics pages show those rows, but its sidebar doesn't link them on this config: they load
+  by URL.
   - Chat held its floor beside bulk vision: agent ITL median 47.05 ms.
   - Priority by key cut interactive vision's median latency from 11.87 s to 10.47 s on a
     saturated row. That misses the 10 s mark by 0.47 s, because vLLM's priority orders only the
     waiting queue.
 - **Evidence 7:** with its row down, each alias was answered by its Azure deployment under the
   alias, marked as overflow, and returned to its row after. Under saturation, a row's 503 with
-  eviction sends nearly the whole load to Azure (benchmark C). The Framework reboot, behavior 11,
-  waits for the walkthrough.
+  eviction sends nearly the whole load to Azure (benchmark C). Through the Framework's reboot
+  (behavior 11), audio and embedding were answered by Azure while it was locked, and each row
+  answered again the first request sent after its `/health`: about 4 s (embedding) and 49 s
+  (audio) after the reported unlock. A powered-down host costs each attempt a connect timeout of
+  about 11 s, so audio's large body got two 503s before its row was evicted.
 
-Azure has answered 180 of the task's 300 requests, none of them in slice 3.
+Azure has answered 183 of the task's 300 requests: none in slice 3, and 3 in the walkthrough.
+"Answer for this task", below, gives what the gateway does and doesn't do.
 
-- **Measured:** 2026-11-16, from the laptop. Slice 1 ran 13:05–13:56 local time, slice 2
-  14:17–14:41, slice 3 16:15–16:40. Every command is under "Commands as run".
+- **Measured:** from the laptop. Slice 1 ran 2026-11-16 13:05–13:56 local time, slice 2
+  14:17–14:41, slice 3 16:15–16:40; the walkthrough ran 2026-11-17 05:37–05:53. Every command is
+  under "Commands as run".
 - **Path:** slices 1 and 2 ran over Tailscale's DERP relay, 51–52 ms; slice 3 ran on a direct
   path, 1–2 ms. Only cells run in the same session compare.
 - **Gateway:** agentgateway v1.7.0, `cr.agentgateway.dev/agentgateway:v1.7.0`, on gb10-2, with its
@@ -64,13 +71,41 @@ The brief's behaviors, each with the evidence it proves and the slice that shows
 | 17 | embedding held to 34 requests a second | 5 | 3 |
 | 18–20 | at most 300 Azure-answered requests, the records, currency and the check | — | all |
 
-What each piece of evidence has shown so far:
+### Answer for this task
 
-| Evidence | Result after slices 1–3 | Still open |
+**What agentgateway does natively on route `ai`.** Overflow: each alias's backend holds its row
+and then its Azure deployment as priority groups, and a row evicted after 2 failures goes to Azure
+for 5 s, under the alias, marked by a header and in the access log; 503s are retried for bodies up
+to 64 KiB. Priority: it sets vLLM's `priority` per key on the rows' providers, and vLLM orders its
+waiting queue by it. Limits: a request-rate bucket per key and route, and a global one, such as
+embedding's 34 a second, each refusing with 429 and `Retry-After`. Budgets: a token budget per key
+per clock hour in Postgres, Block or Audit, charging streams and surviving restarts. Every request
+writes a metadata row, which the UI's Logs and Analytics pages show.
+
+**What it can't do.** It can't overflow a single request when a row is full: Azure answers only
+once the row is evicted, so the requests that evict it get 503 unless retried, a large body never
+is, and a powered-down host costs each attempt about 11 s first. Nothing caps what an eviction
+sends: every request in its 5 s window goes to Azure, nearly the whole load under saturation
+(benchmark C). Priority goes no further than queue order: a running request shares the batch, so
+interactive vision missed 10 s by 0.47 s beside bulk. The UI doesn't link Logs or Analytics on
+route `ai`, and agentgateway logs no eviction. Its `azure` provider builds neither the verified
+Foundry host nor its path, so each deployment is a `custom` provider.
+
+**The parity gaps that decide which workloads may leave the self-hosted machines** ("Per alias:
+the cloud model and its parity", behavior 12): agent and embedding are processed within the data
+zone, vision and audio globally. agent's tool-calling workloads break on Azure (`tool_choice:
+required` refused, a named function ignored). Embedding's vectors come from another space, so
+nothing indexed by the row may be searched with them. Audio serves only Chat Completions with
+audio in, and vision needs `max_completion_tokens` and no reasoning effort `none`. Which
+workloads leave is the architect's call in `answer`.
+
+What each piece of evidence has shown:
+
+| Evidence | Result after slices 1–4 | Still open |
 | --- | --- | --- |
 | 5, embedding held beside audio | The global 34/1s bucket admitted 34 of a 40-request burst and 34.0 a second under 160 in flight, refusing the rest with 429 and `Retry-After: 1`. Audio inside it: RTFx median 5.38, 43 of 64 at 5 or more, so the floor meets and no paced bucket is needed (benchmark A). | — |
-| 6, keys ranked, limited, and charged | bulk refused by its own bucket (429, `retry-after: 59`) and by its Block budget (429 `budget_exceeded`, `retry-after: 2609`), while go-ai kept answering. A stream without `include_usage` was charged 128 tokens. bulk's count of 44 survived a gateway restart. Request log: metadata only, 0 payload rows. Benchmark B: agent ITL median 47.05 ms beside bulk vision. Benchmark D: interactive vision median latency 10.47 s with priority, 11.87 s without. | the UI's Logs and Analytics pages (walkthrough) |
-| 7, overflow when a row is down or full | Every alias answered by Azure under its alias with the rows down, and by its row once the overlay was removed. Under saturation, a row's 503 with eviction sent nearly the whole load to Azure (C-agent). Parity gaps per alias are recorded. | the Framework reboot and its unlock-to-`/health` time (behavior 11, walkthrough) |
+| 6, keys ranked, limited, and charged | bulk refused by its own bucket (429, `retry-after: 59`) and by its Block budget (429 `budget_exceeded`, `retry-after: 2609`), while go-ai kept answering. A stream without `include_usage` was charged 128 tokens. bulk's count of 44 survived a gateway restart. Request log: metadata only, 0 payload rows. Benchmark B: agent ITL median 47.05 ms beside bulk vision. Benchmark D: interactive vision median latency 10.47 s with priority, 11.87 s without. The UI's Logs page listed each request with its key as the user and its provider, with prompt logging off; Analytics totalled tokens and calls. The sidebar doesn't link either on route `ai`; both load by URL (walkthrough step 5). | — |
+| 7, overflow when a row is down or full | Every alias answered by Azure under its alias with the rows down, and by its row once the overlay was removed. Under saturation, a row's 503 with eviction sent nearly the whole load to Azure (C-agent). With the Framework rebooted and locked, audio and embedding were answered by Azure; after the unlock, `/health` came in about 4 s (embedding) and 49 s (audio), and each row answered the first request sent after it (behavior 11). Parity gaps per alias are recorded. | — |
 
 ## Method
 
@@ -78,8 +113,8 @@ What each piece of evidence has shown so far:
 helpers, [`scripts/clients-lib.sh`](../../scripts/clients-lib.sh) and
 [`scripts/measure-lib.sh`](../../scripts/measure-lib.sh), or the deploy,
 [`scripts/agentgateway-deploy.sh`](../../scripts/agentgateway-deploy.sh), which log each command to
-`.state/priority/commands-2026-11-16.log` before it runs. The architect runs the root steps (host
-updates, the gb10-2 reboot) and the Azure walk, Foundry's first.
+`.state/priority/commands-<date>.log` before it runs. The architect runs the root steps (host
+updates, the gb10-2 and Framework reboots, the LUKS unlock) and the Azure walk, Foundry's first.
 
 **Overflow.** Each alias route's `ai` backend has two priority groups: the alias's row, then its
 Azure deployment. A request goes to the first group with a provider not evicted, so Azure answers
@@ -372,13 +407,15 @@ stopped and escalated (escalation 2, below). C-vision did not run.
 | --- | --- | --- | --- |
 | agent | `gpt-oss-120b` | DataZoneStandard: within the data zone | refuses `tool_choice: required` and ignores a named function; an unknown model name succeeds; Responses is translated to Chat Completions, and a reply cut off at its limit reports `max_tokens`; a translated Messages stream reports 0 input tokens, and one at a 16-token limit didn't end within 15 s; no reasoning item at low effort through Messages; Azure's chat stream opens with an empty reply id and Responses adds its reasoning item in a form go-ai rejects (go-ai's to fix) |
 | vision | `gpt-5-mini` 2025-08-07 | GlobalStandard: processed globally | refuses `max_tokens` (wants `max_completion_tokens`) and reasoning effort `none`; an unknown model name succeeds; the stream gaps above; called a red PNG "pink" where the row said "Red" |
-| audio | `gpt-audio-mini` 2025-12-15 | GlobalStandard: processed globally | refuses a text-only chat; serves Chat Completions only; an audio body over 64 KiB isn't retried, so it gets the row's 503 until 2 failures evict the row |
-| embedding | `text-embedding-3-small` | DataZoneStandard: within the data zone | another vector space at the same 768 dimensions; every reply is marked as overflow |
+| audio | `gpt-audio-mini` 2025-12-15 | GlobalStandard: processed globally | refuses a text-only chat; serves Chat Completions only; an audio body over 64 KiB isn't retried, so it gets the row's 503 until 2 failures evict the row, each after about 11 s when the Framework is powered down (walkthrough) |
+| embedding | `text-embedding-3-small` | DataZoneStandard: within the data zone | another vector space at the same 768 dimensions; every reply is marked as overflow; with the Framework powered down, the first overflowed request took about 23 s (walkthrough) |
 
 Which workloads may leave the self-hosted machines is the architect's call in `answer`. These
 gaps are its inputs: agent and embedding stay within the data zone, while vision and audio are
 processed globally. Only synthetic and test-fixture content was sent to Azure: the helpers'
-prompts, a 1×1 PNG, go-ai's `phrase.wav` fixture, and GuideLLM's synthetic text.
+prompts, a 1×1 PNG, go-ai's `phrase.wav` fixture, and GuideLLM's synthetic text. The walkthrough
+(slice 4) added the audio and embedding rows' times through a host power-down; the table is
+complete for the task.
 
 ### The Azure count
 
@@ -670,8 +707,9 @@ the walk for the session to escalate.
    - `azure_count`: agent 1 or 2, every one 200, and no 429.
 
 4. **A budget Block.** The `bulk-budget-low` overlay lowers bulk's budget to 1 token and keeps
-   its count. The request that crosses a budget is answered, and the next one is refused, so
-   bulk's first request this hour may still get 200.
+   its count. The request that crosses a budget is answered, and the next one is refused. So
+   when bulk has used nothing in the current hour, its first request gets 200 and is charged,
+   and the second gets the 429.
 
    ```sh
    logged "mise run agentgateway-deploy bulk-budget-low"
@@ -685,8 +723,8 @@ the walk for the session to escalate.
 
    Expected:
    - the deploy prints `overlay bulk-budget-low: applied`;
-   - bulk's first request: `HTTP/1.1 200 OK` if bulk has no tokens yet this hour, otherwise as
-     the second;
+   - bulk's first request: `HTTP/1.1 200 OK` when bulk has used nothing in the current hour,
+     otherwise as the second;
    - bulk's second: `HTTP/1.1 429 Too Many Requests`, a `retry-after` of the seconds to the next
      hour, and `{"error":{"message":"budget exceeded","type":"rate_limit_error","code":"budget_exceeded"}}`;
    - go-ai: `HTTP/1.1 200 OK`;
@@ -705,8 +743,9 @@ the walk for the session to escalate.
    logged "mise run gateway:ui"
    ```
 
-   Then open http://localhost:3001/ui in a browser, and the Logs and Analytics pages. In the first
-   terminal, the same rows as text:
+   Then open the two pages by URL in a browser, http://localhost:3001/ui/llm/logs and
+   http://localhost:3001/ui/llm/analytics. The UI's sidebar doesn't link them, since the config
+   has no `llm` section ("Results", step 5). In the first terminal, the same rows as text:
 
    ```sh
    request_log 8
@@ -827,21 +866,114 @@ the walk for the session to escalate.
 
 ### Results
 
-Pending: the session fills this in after the architect's walk. It records:
+The architect ran the walk on 2026-11-17, 05:37:50–05:52:44, from the laptop, with every command
+under "Commands as run". Each of its four deploys validated the config and reloaded it in place,
+the agentgateway container staying up; each also recreated the Postgres container, as in slices 2
+and 3.
 
-- each step's outputs;
-- behavior 11's two times: from the unlock to each row's `/health`, and to the first request
-  each row answers again;
-- the walk's Azure count, toward the cap of 300.
+**Step 1.** One line, `+ 2026-11-17T05:37:50-05:00 laptop: source scripts/clients-lib.sh`.
+
+**Step 2.** At 05:38:04, audio's `/models` answered
+`{"object":"list","data":[{"id":"audio","object":"model","owned_by":"gateway"}]}`: the gateway's
+answer, not the row's.
+
+**Step 3.** As expected:
+
+| Time | Command | Result |
+| --- | --- | --- |
+| 05:38:39 | deploy `rows-down` | `overlay rows-down: applied`, `Configuration is valid!` |
+| 05:39:00 | agent, rows down | 200, `x-gateway-overflow: azure`; `{"model":"gpt-oss-120b","content":"ready"}` |
+| 05:39:20 | plain deploy | no overlay applied, `Configuration is valid!` |
+| 05:39:54 | agent, rows up | 200, no overflow header; `{"model":"agent","content":"ready"}` |
+| 05:40:08 | `azure_count` | agent 1, 200 ×1; 0 429 |
+
+**Step 4.** `bulk-budget-low` was deployed at 05:40:27 (`overlay bulk-budget-low: applied`).
+bulk's first request, at 05:40:47, got 200: the budget's window had rolled to the 05:00 hour,
+with nothing used, so this was the request that crosses the budget. It was charged 22 tokens. go-ai
+got 200 at 05:40:53. `budget_status bulk` then read `used 22 of 1 Tokens, exceeded true, Block;
+window ends 06:00:00` (05:41:07), and after the plain deploy at 05:41:15, `used 22 of 1000000
+Tokens, exceeded false, Block` (05:41:24): the same count under the restored budget. bulk's second
+request, which would have shown the 429, wasn't run; slice 3 showed it live ("bulk's budget
+Block"). The walkthrough's step 4 text now says the first request is 200 when bulk has used
+nothing in the current hour.
+
+**Step 5.** The tunnel opened at 05:42:17. The UI's sidebar showed no Logs or Analytics link. It
+links them only when the config has an `llm` section (`hasLlm`, `ui/src/components/Shell.tsx`,
+102) [src], and the route `ai` form this config uses has none. The pages load by URL, at
+`/ui/llm/logs` and `/ui/llm/analytics`, and the walkthrough's step 5 now gives both.
+
+- **Logs** listed each request with its key's name as the user and its provider, and the note
+  "Prompt logging is off". Step 3's overflow read: provider Azure, model `gpt-oss-120b`, 73 tokens
+  in, 27 out, 805 ms, user architect, client curl.
+- **Analytics** showed $0.0023, 2,429,559 tokens, and 7,386 calls over the last 24 hours. The
+  cost is unexplained, since the config sets no model catalog or prices. It is probably
+  agentgateway's built-in pricing for an Azure model; that is unverified.
+- `request_log 8` wasn't run; slice 3's read of the same table ("The request log") showed
+  `payload_rows` 0.
+
+A watch-register candidate, not yet in [`docs/watch.md`](../watch.md): **the UI links Logs and
+Analytics only when an `llm` section exists.** A capability wanted from agentgateway: the links
+shown for a config whose request log comes from route `ai` backends.
+
+**Step 6, the Framework reboot (behavior 11).** No overlay was live (`# overlays: none`), and
+`W6` was 2026-11-17T05:48:38-05:00.
+
+| Time | Event |
+| --- | --- |
+| 05:49:51 | the architect reported `omarchy update` and `sudo reboot` done; both Framework rows' `/health` read 000 |
+| 05:49:57 → 05:50:08 | audio: 503 after about 11 s, a row attempt (`gen_ai.provider.name=custom`) |
+| 05:50:08 → 05:50:19 | audio again: 503 after about 11 s; the row's second failure evicts it |
+| 05:50:19 → 05:50:21 | audio again: 200, `x-gateway-overflow: azure`, from `gpt-audio-mini-2025-12-15`: "The text in the clip is: \"The access code is 7429.\"" |
+| 05:50:21 → 05:50:44 | embedding: 200, `x-gateway-overflow: azure`, after about 23 s, from `text-embedding-3-small` at 768 dimensions |
+| 05:50:44 | `azure_count` since `W6`: audio 1, embedding 1, each 200; 0 429 |
+| 05:50:52 | the `/health` poll started |
+| 05:51:45 | the architect reported the LUKS unlock; the unlock itself was a little earlier |
+| 05:51:49 | `framework:8002 /health 200`, embedding |
+| 05:52:34 | `framework:8001 /health 200`, audio |
+| 05:52:42 | embedding: 200 from its row, the recovery loop's first request |
+| 05:52:43 | audio: 200 from its row, the loop's first request |
+| 05:52:44 | `azure_count` since `W6`: still 2, each 200; 0 429 |
+
+The log read printed the six audio and embedding requests since `W6`: the two 503s and the two
+rows' answers as `gen_ai.provider.name=custom` with no `overflow`, and Azure's two as
+`gen_ai.provider.name=azure overflow="azure"`.
+
+Behavior 11's two times, from the reported unlock at 05:51:45:
+
+| Row | Unlock to `/health` 200 | First request answered again |
+| --- | --- | --- |
+| embedding, 8002 | ≈ 4 s (05:51:49) | 05:52:42, the loop's first try |
+| audio, 8001 | ≈ 49 s (05:52:34) | 05:52:43, the loop's first try |
+
+Since the real unlock came a little before 05:51:45, each time is a little longer than shown.
+spike-model-layout recorded audio's start at 68.7 s after the passphrase. Each row answered the
+first request sent after its `/health`, so neither waited out an eviction: by then the rows'
+eviction windows from 05:50 had long passed.
+
+**A powered-down host costs a connect timeout per attempt.** In slice 2 the rows-down overlay
+pointed at a closed port, and each attempt was refused at once. A host that is powered down
+doesn't refuse: each attempt waits out a connect timeout, about 11 s here, before it counts as a
+failure. Audio's 258,652-byte body is past the 64 KiB the gateway retries, so it isn't retried,
+and its first two requests each got a 503 after about 11 s until the two failures evicted the row.
+Embedding's small body is retried, and its 23 s is consistent with two timed-out attempts on the
+row before the retry reached Azure, though the log doesn't show the attempts. So during a host's
+power-down the first callers of each alias wait about 11 s per attempt, and large bodies get 503s.
+
+**The walk's Azure count** was 3, all 200 and no 429: agent 1 in step 3, and audio 1 and
+embedding 1 in step 6. The task's count is 183 of 300, with Azure's 2,845 429s, all from
+benchmark C-agent, reported apart.
 
 ## Commands as run
 
-Every command the log holds, as logged, with its time, from
-`.state/priority/commands-2026-11-16.log`. The output stays there, untracked. The two host reads
-were logged as `<time>, laptop: <command>`, the rest as `+ <time> <host>: <command>`. The helpers
-log curl's arguments joined by spaces, so a JSON body shows without its shell quotes. The
-`mise run agentgateway-deploy` line is followed by the deploy's own `+` lines, from its output,
-appended to the log by `tee -a`. The architect's reboot is logged as theirs.
+Every command the logs hold, as logged, with its time, from
+`.state/priority/commands-2026-11-16.log` (slices 1–3) and `commands-2026-11-17.log` (the
+walkthrough). The output stays there, untracked. The two host reads were logged as `<time>,
+laptop: <command>`, the rest as `+ <time> <host>: <command>`. The helpers log curl's arguments
+joined by spaces, so a JSON body shows without its shell quotes, and an audio body read from a
+process substitution as `-d @/dev/fd/63`. The `mise run agentgateway-deploy` line is followed by
+the deploy's own `+` lines, from its output, appended to the log by `tee -a`. The architect's
+reboots and unlock are logged as theirs. The walkthrough's step 6 recovery loop logged only the
+`gw_curl` requests of its one pass, since both rows answered on its first try.
 
 ### 2026-11-16 · the hosts
 
@@ -1272,4 +1404,95 @@ appended to the log by `tee -a`. The architect's reboot is logged as theirs.
 + 2026-11-16T16:39:54-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
 + 2026-11-16T16:39:57-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
 + 2026-11-16T16:39:57-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-16T16:35:14-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
+```
+
+### 2026-11-17 · walkthrough steps 1–3: the helpers, `/models`, and a row-down overflow
+
+```text
++ 2026-11-17T05:37:50-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T05:38:04-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS http://gb10-2:3000/audio/v1/models
++ 2026-11-17T05:38:39-05:00 laptop: mise run agentgateway-deploy rows-down
++ 2026-11-17T05:38:39-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-17T05:38:39-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-17T05:38:39-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-17T05:38:39-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-17T05:38:40-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-17T05:38:40-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-17T05:38:40-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-17T05:38:40-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-17T05:38:40-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-17T05:38:43-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-17T05:39:00-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/walk-down-agent.json -H Content-Type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Reply with the word ready."}],"max_tokens":64} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-17T05:39:14-05:00 laptop: jq -c '{model, content: .choices[0].message.content}' .state/priority/walk-down-agent.json
++ 2026-11-17T05:39:20-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-17T05:39:20-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-17T05:39:20-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-17T05:39:20-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-17T05:39:20-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-17T05:39:20-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-17T05:39:20-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-17T05:39:21-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-17T05:39:21-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-17T05:39:21-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-17T05:39:24-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-17T05:39:54-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/walk-up-agent.json -H Content-Type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Reply with the word ready."}],"max_tokens":256} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-17T05:40:02-05:00 laptop: jq -c '{model, content: .choices[0].message.content}' .state/priority/walk-up-agent.json
++ 2026-11-17T05:40:08-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-17T05:37:56-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
+```
+
+### 2026-11-17 · walkthrough steps 4 and 5: a budget Block and the UI
+
+```text
++ 2026-11-17T05:40:27-05:00 laptop: mise run agentgateway-deploy bulk-budget-low
++ 2026-11-17T05:40:27-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-17T05:40:27-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-17T05:40:28-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-17T05:40:28-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-17T05:40:28-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-17T05:40:28-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-17T05:40:28-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-17T05:40:28-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-17T05:40:28-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-17T05:40:31-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-17T05:40:47-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/bulk)" | curl -K - -sS -D - -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-17T05:40:53-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/go-ai)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Hi"}],"max_tokens":8} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-17T05:41:07-05:00 laptop: ssh -n gb10-2 "curl -sS --max-time 5 'http://127.0.0.1:3001/api/budgets/status?apiKeyName=bulk'" | jq -r '.budgets[] | one line each'
++ 2026-11-17T05:41:15-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-17T05:41:15-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-17T05:41:15-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-17T05:41:15-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-17T05:41:15-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-17T05:41:15-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-17T05:41:15-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-17T05:41:15-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-17T05:41:15-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-17T05:41:15-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-17T05:41:18-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-17T05:41:24-05:00 laptop: ssh -n gb10-2 "curl -sS --max-time 5 'http://127.0.0.1:3001/api/budgets/status?apiKeyName=bulk'" | jq -r '.budgets[] | one line each'
++ 2026-11-17T05:42:11-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T05:42:17-05:00 laptop: mise run gateway:ui
+```
+
+### 2026-11-17 · walkthrough step 6: the Framework reboot
+
+```text
++ 2026-11-17T05:48:38-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T05:48:38-05:00 laptop: ssh gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
++ 2026-11-17T05:49:51-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T05:49:51-05:00 framework (architect): omarchy update, then sudo reboot (reported done by 05:49:51)
++ 2026-11-17T05:49:57-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/walk-fw-audio.json -H Content-Type: application/json -d @/dev/fd/63 http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-17T05:50:08-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/walk-fw-audio.json -H Content-Type: application/json -d @/dev/fd/63 http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-17T05:50:19-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/walk-fw-audio.json -H Content-Type: application/json -d @/dev/fd/63 http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-17T05:50:21-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o .state/priority/walk-fw-embed.json -H Content-Type: application/json -d {"model":"embedding","input":"ready"} http://gb10-2:3000/embedding/v1/embeddings
++ 2026-11-17T05:50:44-05:00 laptop: jq -c '{model, content: .choices[0].message.content}' .state/priority/walk-fw-audio.json; jq -c '{model, dims: (.data[0].embedding | length)}' .state/priority/walk-fw-embed.json
++ 2026-11-17T05:50:44-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-17T05:48:38-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-17T05:50:52-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T05:50:52-05:00 laptop: for p in 8001 8002; do ( until [[ $(curl -s -o /dev/null -w "%{http_code}" --max-time 2 http://framework:$p/health) == 200 ]]; do sleep 1; done; echo "framework:$p /health 200 at $(date -Is)" ) & done; wait
++ 2026-11-17T05:51:45-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T05:51:45-05:00 framework (architect): LUKS unlocked at the console (reported by 05:51:45)
++ 2026-11-17T05:52:42-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-17T05:52:42-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d {"model":"embedding","input":"ready"} http://gb10-2:3000/embedding/v1/embeddings
++ 2026-11-17T05:52:42-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sS -D - -o /dev/null -H Content-Type: application/json -d @/dev/fd/63 http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-17T05:52:43-05:00 laptop: ssh -n gb10-2 "docker logs --timestamps --since 2026-11-17T05:48:38-05:00 agentgateway 2>&1" | awk "/ route=default\/(audio|embedding) / { o = \$1; for (i = 2; i <= NF; i++) if (\$i ~ /^(route|http\.status|gen_ai\.provider\.name|overflow)=/) o = o \" \" \$i; print o }" | tail -n 8
++ 2026-11-17T05:52:44-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-17T05:48:38-05:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 ```
