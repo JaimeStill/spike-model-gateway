@@ -40,7 +40,6 @@
 #                        it also reaches gb10-2 in ~/gateway/postgres.env, 0600, for Postgres
 #   azure-key            .state/azure/key, the Azure AI Foundry account's key
 #   azure-account        AZURE_ACCOUNT in .state/azure/account.env, the account's resource name
-#   azure-rg             AZURE_RG there, its resource group
 #
 # The Azure files are written when the account is set up, outside the deploy, and read only if
 # present: a marker whose file is missing stops the deploy before anything is sent, naming the
@@ -120,14 +119,9 @@ if [[ -s .state/azure/account.env ]]; then
   # Read as assignments, not sourced: each value is the line's text after `=`, quotes stripped.
   while IFS='=' read -r var value; do
     value=${value%\"} value=${value#\"} value=${value%\'} value=${value#\'}
-    case $var in
-      AZURE_ACCOUNT) secrets[azure-account]=$value ;;
-      AZURE_RG) secrets[azure-rg]=$value ;;
-    esac
+    [[ $var != AZURE_ACCOUNT ]] || secrets[azure-account]=$value
   done <.state/azure/account.env
-  for name in azure-account azure-rg; do
-    [[ -z ${secrets[$name]+set} ]] || echo "secret $name: read"
-  done
+  [[ -z ${secrets[azure-account]+set} ]] || echo "secret azure-account: read"
 fi
 # A value is substituted into YAML and a URL as it is, so it may hold only these characters.
 for name in "${!secrets[@]}"; do
