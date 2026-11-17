@@ -186,7 +186,7 @@ ui:
 #   finish_request) [src], so a retry sent at once can still find the row; the backoff lets the
 #   eviction land, so the refused request itself is carried to Azure. Against a mock row on the
 #   laptop, with no backoff the request whose two 503s evicted the row got its third 503 from the
-#   row, and with 20 ms it went to Azure on its third attempt; benchmark C is to show it live. A
+#   row, and with 20 ms it went to Azure on its third attempt; C-agent showed it live, 18 of 18. A
 #   body is buffered for a retry only up to 64 KiB (MAX_BUFFERED_BYTES); a larger one, such as a
 #   1440p image, is sent once, unretried [src].
 # - A request-rate bucket per key (&key-rates on agent, vision, and audio; embedding has its own,

@@ -12,9 +12,9 @@ The scenarios name no model, target, or key. `cell <name> <scenario> <direct|gat
 `GUIDELLM__SPEC__BACKEND__TARGET` (the row's `http://<host>:<port>/v1`, or the gateway's
 `http://gb10-2:3000/<alias>/v1`), and, for a gateway or cap run only, the named key, bench unless
 another is given, in `GUIDELLM__SPEC__BACKEND__API_KEY`, read from
-`.state/agentgateway/keys/<key>` into GuideLLM's environment. Each file points GuideLLM's backend check at `/v1/models`, since its default,
-`/health` at the target's root, is a path the gateway doesn't route: it serves the serving
-endpoints alone.
+`.state/agentgateway/keys/<key>` into GuideLLM's environment. Each file points GuideLLM's
+backend check at `/v1/models`, since its default, `/health` at the target's root, is a path the
+gateway doesn't route: it serves the serving endpoints alone.
 
 | Cell | Scenario | Alias, row | Tokenizer | Load |
 | --- | --- | --- | --- | --- |
@@ -35,19 +35,19 @@ endpoints alone.
 
 The overhead cells (O-) run direct and through the gateway; the cap cells (C-) run through the
 gateway only, with `cell <name> <scenario> cap <alias>`, two levels in one run, past each row's
-target. The plans, the step commands, and how the runs are read are in the finding's slice 2 and
-slice 3 sections,
+target. The plans, the step commands, and how the runs are read are in the agentgateway task's
+finding, its slice 2 and slice 3 sections,
 [`docs/findings/agentgateway.md`](../docs/findings/agentgateway.md#slice-2--overhead) and
 [its cap cells](../docs/findings/agentgateway.md#the-cap-cells).
 
-Benchmark C (the priority task's behavior 9) was resized to Azure's capacity and ran as C-agent
-only. Its cell runs the same way, through the gateway with `cap`, one level, past the agent row's
-queue limit of 24, where the row answers 503 and the gateway sends the alias to its Azure AI
-Foundry deployment while the row is evicted. Its requests are sized so the row fills on
-concurrency, not tokens. A cell stops early if Azure answers 429; no GuideLLM constraint tells a
-429 from the row's 503s, so the session watches `azure_count` and interrupts the run by hand.
-`overflow_read <name>` reads the run. C-agent breached the task's Azure stop rule, and the
-architect dropped C-vision (`overflow-vision.yaml`, kept, never run). The finding is
+Benchmark C, the priority task's overflow benchmark, runs each `overflow-` cell through the
+gateway with `cap`, one level past the row's queue limit (agent 24, vision 32). There the row
+answers 503, and the gateway sends the alias to its Azure AI Foundry deployment while the row is
+evicted. The requests are sized to Azure's capacity, so the row fills on concurrency, not tokens.
+A cell stops early if Azure answers 429: no GuideLLM constraint tells a 429 from the row's 503s,
+so the session watches `azure_count` and interrupts the run by hand. `overflow_read <name>` reads
+the run. Only C-agent has run; C-vision was dropped after C-agent breached the task's Azure stop
+rule. The runs and their reading are in the priority task's finding,
 [`docs/findings/priority.md`](../docs/findings/priority.md).
 
 Benchmarks A, B, and D (the priority task's slice 3) each run two cells at once, in two terminals,

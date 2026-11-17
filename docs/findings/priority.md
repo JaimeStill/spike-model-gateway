@@ -89,8 +89,8 @@ The brief's behaviors, each with the evidence it proves and the slice that shows
 and then its Azure deployment as priority groups, and a row evicted after 2 failures goes to Azure
 while it is out, under the alias, marked by a header and in the access log: 5 s the first time,
 and 5 s times the evictions so far each time after, with no cap, until a reload clears the count.
-503s are retried for bodies up to 64 KiB, a request sent at most 3 times. Priority: it sets vLLM's `priority` per key on the rows' providers, and vLLM orders its
-waiting queue by it. Limits: a request-rate bucket per key and route, and a global one, such as
+503s are retried for bodies up to 64 KiB, a request sent at most 3 times. Priority: it sets
+vLLM's `priority` per key on the rows' providers, and vLLM orders its waiting queue by it. Limits: a request-rate bucket per key and route, and a global one, such as
 embedding's 34 a second, each refusing with 429 and `Retry-After`. Budgets: a token budget per key
 per clock hour in Postgres, Block or Audit, charging streams and surviving restarts. Every request
 writes a metadata row, which the UI's Logs and Analytics pages show.
@@ -99,12 +99,14 @@ writes a metadata row, which the UI's Logs and Analytics pages show.
 once the row is evicted, so the requests that evict it get 503 unless retried, a large body never
 is, and a powered-down host costs each attempt about 11 s first. Nothing caps what an eviction
 sends: every request in an eviction's window goes to Azure, nearly the whole load under
-saturation (benchmark C), and nothing caps how long the windows grow. Priority goes no further than queue order: a running request shares the batch, so
-interactive vision missed 10 s by 0.47 s beside bulk. A budget's `rolling: 1h` is a fixed UTC
+saturation (benchmark C), and nothing caps how long the windows grow. Priority goes no further
+than queue order: a running request shares the batch, so interactive vision missed 10 s by 0.47 s
+beside bulk. A budget's `rolling: 1h` is a fixed UTC
 clock hour, not a sliding window. The UI doesn't link Logs or Analytics on route `ai`, and
 agentgateway logs no eviction. The uncapped eviction growth, the fixed window, and the missing
-links are entries in the watch register, [`docs/watch.md`](../watch.md). Its `azure` provider builds neither the verified
-Foundry host nor its path, so each deployment is a `custom` provider.
+links are entries in the watch register, [`docs/watch.md`](../watch.md). agentgateway's `azure`
+provider builds neither the verified Foundry host nor its path, so each deployment is a `custom`
+provider.
 
 **The parity gaps that decide which workloads may leave the self-hosted machines** ("Per alias:
 the cloud model and its parity", behavior 12): agent and embedding are processed within the data
@@ -173,8 +175,9 @@ the deployment as the model, `/openai/v1/<path>`, `api-key`, and the overflow he
 dimensions on embeddings, added `include_usage` to a stream, kept vLLM's own fields and image and
 audio parts on a row's request, and returned to the row about 5 s after an eviction. Two readings
 bear on slice 2: an eviction reaches the load balancer through a spawned task, so a retry sent with
-no backoff still found the evicted row, and the request whose 503s evicted it got its 503; and a
-5xx from the Azure provider evicts it for 3 s under agentgateway's default for several groups.
+no backoff still found the evicted row, and the request whose 503s evicted it got its 503; and,
+with no health policy of its own, the Azure provider was evicted for 3 s by a single 5xx, under
+agentgateway's default for several groups. Escalation 1, below, answered both.
 
 **The Azure cap.** Azure answers at most 300 requests in the task. After each step that can
 overflow, the session reads `azure_count <since>`, which counts the access log lines marked
@@ -579,8 +582,8 @@ from 14:37:10 to 14:38:31. Read with `summarize` and `overflow_read`:
 So a refused request does reach Azure: the 20 ms backoff lets the eviction land before the retry.
 But under saturation the row's 503 with eviction sends nearly the whole load to Azure. Each
 eviction opens a window in which every new request goes to the Azure group: 5 s the first time,
-and 5 s times the evictions so far each time after, with no cap, until a reload clears the count. Azure's
-`gpt-oss-120b` throttled within seconds, and its 429s didn't evict it under the health policy
+and 5 s times the evictions so far each time after, with no cap, until a reload clears the
+count. Azure's `gpt-oss-120b` throttled within seconds, and its 429s didn't evict it under the health policy
 then deployed. So it stayed in rotation and answered the alias's load with 429s. Every 429 carried
 `Retry-After: 1`.
 
@@ -642,7 +645,8 @@ were answered:
   (`types/loadbalancer.rs`, `finish_request`) [src], so it lands asynchronously, and a retry sent
   with no backoff reaches the row again: on the laptop mock, the request whose two 503s evicted the
   row got its third 503 from the row. With 20 ms the same request went to Azure on its third
-  attempt. The route retry (`&retry-503`) now sets `backoff: 20ms`; benchmark C is to show it live.
+  attempt. The route retry (`&retry-503`) now sets `backoff: 20ms`. Benchmark C-agent showed it
+live: all 18 refused requests it retried reached Azure.
 - **Azure provider health: the rows' policy.** Each `<alias>-azure` provider now carries
   `&row-health`: two 503s or failed connections in a row evict it, for 5 s the first time. It had
   none, so agentgateway's default for several groups held: one 5xx or failed connection evicted it
@@ -663,7 +667,6 @@ The implementer's earlier checks "on the mock" used a throwaway Python mock upst
 session's scratchpad, never committed: an exception to the experiment's no-authored-Python rule,
 which the architect was told about.
 
-
 ### Escalation 2 (2026-11-16)
 
 Benchmark C-agent breached the stop rule, and the architect decided:
@@ -673,8 +676,8 @@ Benchmark C-agent breached the stop rule, and the architect decided:
   units.
 - **Azure groups also evict on 429.** Each `<alias>-azure` provider now carries `&azure-health`: a
   503, a 429, or a failed connection, 2 in a row, evicts it, for 5 s the first time, so a
-  throttling Azure leaves rotation. It was deployed as `2ba52b8` at 14:40:43 and passes `--validate-only`. It is not shown
-  live: a live 429 needs Azure to throttle (about 60 counted requests on one deployment), and
+  throttling Azure leaves rotation. It was deployed as `2ba52b8` at 14:40:43 and passes
+  `--validate-only`. It is not shown live: a live 429 needs Azure to throttle (about 60 counted requests on one deployment), and
   agentgateway logs no eviction.
 - **The cap counts 2xx and non-429 4xx.** The count is 180 of 300 after C, with Azure's 429s
   reported apart. `azure_count` prints both.
@@ -818,8 +821,8 @@ The anchors ran first, O-agent alone, direct and through the gateway with the be
 | `b-bulk` | vision, gateway, bulk | 249 ok, 16 incomplete of 265 | 3248.69 (8198.94) | 72.61 (83.05) | 10413.24 | 2.60% |
 
 Chat holds its floor: agent's ITL median beside bulk vision was 47.05 ms, against ≤100 ms, and
-within 1.5 ms of both anchors (47.63 direct, 48.54 through the gateway). Its TTFT median was 33 ms above the direct anchor's. The
-gateway's CPU rose from 0.68% for agent alone to 3.46% with both runs through it. With one direct
+within 1.5 ms of both anchors (47.63 direct, 48.54 through the gateway). Its TTFT median was
+33 ms above the direct anchor's. The gateway's CPU rose from 0.68% for agent alone to 3.46% with both runs through it. With one direct
 run there is no direct spread, so each change is read against the two anchors. Each O-agent
 run's 4 incomplete requests are the sessions still running at its 110 s end.
 
@@ -871,7 +874,7 @@ The architect runs the walkthrough from the repository root on the laptop, one s
 Every command goes through the helpers, so each lands in
 `.state/priority/commands-<date>.log`. Each step's expected result comes from slices 1–3. Steps 3
 and 6 send requests to Azure: about 2 in step 3, and at most about 55 in step 6. That keeps the
-count, 180 now, under 300. An Azure 429, or a row still overflowing after step 6's loop, stops
+count, 180 before the walk, under 300. An Azure 429, or a row still overflowing after step 6's loop, stops
 the walk for the session to escalate.
 
 1. **Source the helpers.** This starts the day's command log and marks the walk's start, for

@@ -15,10 +15,6 @@ by hand: each entry whose line differs is updated in place, its recorded value, 
 other fields as the change warrants, and every entry checked gets its last-checked line from the
 run. Git keeps the old text.
 
-The priority task's start-of-task read, `checked 2026-11-16T16:34Z`, which the first three
-entries' last-checked lines held until the run of 2026-11-17T11:57Z, was taken before the task's
-brief was approved, so it isn't in a priority command log.
-
 **An entry's fields:**
 
 - **Kind:** deprecation, capability, or other.
@@ -118,8 +114,8 @@ and the project has acted on it; the finding or decision that acted keeps the re
   the schema moves it to removed.
 - **Fallback:** the `llm` form trialled in task `routing`
   ([`docs/findings/routing.md`](findings/routing.md), "The trial"): one alias per port, each model
-  authorized on its own port by `proxy.listener.name`. On a trigger, check what this project, and
-  what `priority` plans, still needs from route `ai`, such as route retries or `ai.groups`
+  authorized on its own port by `proxy.listener.name`. On a trigger, check what this project still
+  needs from route `ai`, such as route retries or `ai.groups`
   ([`docs/findings/agentgateway.md`](findings/agentgateway.md), "The paper inventory"), and record
   what `llm` must gain for parity.
 - **State:** watching.
@@ -169,21 +165,22 @@ and the project has acted on it; the finding or decision that acted keeps the re
   ([`docs/findings/routing.md`](findings/routing.md), "Behavior 2"). #4185 restores `passthrough`
   to its documented meaning, always pass through, and is marked breaking.
 - **Evidence:** the pull request's description; v1.7.0's tag is behind its merge commit. The
-  priority task's audio rerun (2026-11-17) adds a cost of the typed parsing: on overflow, audio in
-  a Responses request is refused by the gateway itself, 400 "failed to parse Responses request:
-  data did not match any variant of untagged enum InputParam", since translating it for the Azure
-  provider's Chat Completions parses an input part the typed form lacks
-  ([`docs/findings/priority.md`](findings/priority.md), "The tiers on Azure"); with the rows up,
-  the row's provider lists `responses` and the request passes through.
+  typed parsing has a cost on route `ai` too. On overflow, the gateway refuses audio in a
+  Responses request itself, with 400 "failed to parse Responses request: data did not match any
+  variant of untagged enum InputParam": translating the request for the Azure provider's Chat
+  Completions parses an input part the typed form lacks. With the rows up, the row's provider
+  lists `responses`, and the request passes through
+  ([`docs/findings/priority.md`](findings/priority.md), "The tiers on Azure").
 - **Upstream:**
   - `upstream agentgateway/agentgateway#4185 = merged` always-passthrough restored.
 - **Watched:**
   - `release-contains agentgateway/agentgateway 2a7c2ec473a221c643ff5c3adab77351bac65e71 = absent`
     the latest release carries the merge.
 - **Parity:** the release carrying it, read in its notes for what `passthrough: detect` now does.
-- **Action:** this applies if the gateway moves to `llm`, or if its `ai.routes` names a typed
-  route type in place of `detect`. Before either, on the release carrying it, re-check the gateway's body handling on every alias: the formats each model
-  lists, whether streams still gain `include_usage`, and whether usage is still read for the access
+- **Action:** this applies to the typed route types the gateway's `ai.routes` name (Chat
+  Completions, Messages, Responses, and embeddings), and to the `llm` form if the gateway moves to
+  it. On the release carrying it, re-check the gateway's body handling on every alias: the formats
+  each provider lists, whether streams still gain `include_usage`, and whether usage is still read for the access
   log and for `priority`'s budgets; then decide `passthrough` per model.
 - **State:** watching.
 - **Last checked:** 2026-11-17T11:57Z, `mise run watch`: as recorded; v1.7.0, the latest
@@ -229,8 +226,8 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Evidence:** the priority task's budget probes: bulk's Block answered `retry-after: 2609`, the
   seconds left in the clock hour, and the walkthrough's step 4 found bulk's count started again
   at the hour ([`docs/findings/priority.md`](findings/priority.md), "bulk's budget Block (behavior
-  15)" and "Results"). The architect's decision at review, 2026-11-17: the fixed window is recorded
-  as a finding, and a sliding window is a want for `answer`'s gateway document.
+  15)" and "Results"). The architect decided at review that a sliding window is a want for
+  `answer`'s gateway document.
 - **Upstream:** no upstream item. A search of agentgateway's issues and pull requests at review
   found none asking for a sliding budget window; #3970 (merged) added budgets that never refresh,
   a different change.
@@ -245,8 +242,8 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Dependency:** agentgateway, `agentgateway/agentgateway`, as above.
 - **Wants:** an upper bound on how long a repeatedly evicted endpoint stays out. At v1.7.0 each
   eviction lasts its `duration` times the number of evictions so far, 5 s, 10 s, 15 s on, with no
-  cap, until a config reload builds the backends again and clears the count
-  (`http/health.rs`) [src]. The eviction fields at v1.7.0 are `duration`, `restoreHealth`,
+  cap, until a config reload builds the backends again and clears the count (`http/health.rs`,
+  read in the source). The eviction fields at v1.7.0 are `duration`, `restoreHealth`,
   `consecutiveFailures`, and `healthThreshold` (`schema/config.md`); none bounds the growth.
 - **Evidence:** [`gateway/agentgateway/config.yaml`](../gateway/agentgateway/config.yaml),
   `&row-health`; the priority task's finding, "Benchmark C-agent (behavior 9)": a row under

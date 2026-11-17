@@ -417,71 +417,118 @@ slices 4/4 committed (all slices done) · standards ✓ (47e2296, 3698c32, 2dce7
 - routing: on route `ai` with `"*": detect`, a streamed chat carries no usage unless the client
   sends `include_usage` (realignment, live). priority weighs typing `/v1/chat/completions` as
   `completions`, which forces `include_usage`, and `/v1/embeddings` as `embeddings`, which Azure
-  overflow needs too (`context/priority-on-route-ai.md`).
+  overflow needs too (`gateway/agentgateway/config.yaml`, `&typed`).
 
 - priority: the Azure resource is the spike's own resource group and AIServices account, set up
   by the architect from a walk in the setup slice (R1 Q1).
 - priority: all four aliases overflow to Foundry at parity with the rows, and go-ai and infer are
   exercised on cloud-answered responses. This supersedes agent-only (R1 Q2; R2 Q1, Q2).
 - priority: a full row refuses with vLLM's `--max-num-queued-reqs`, so eviction moves its traffic
-  to Azure, and Bifrost stays on paper. Research: priority groups with eviction are the standard
-  pattern, using vLLM's 503 as the "full" signal is this design's own, and vLLM #58192 delays
-  vision's 503 (R1 Q3).
+  to Azure; Bifrost stays on paper. Priority groups with eviction are the standard pattern; vLLM's
+  503 as the "full" signal is this design's own, and vLLM #58192 delays vision's 503 (R1 Q3).
 - priority: Azure answers at most 300 requests in the task, with each deployment's capacity as a
   hard stop. This supersedes 50 (R1 Q4; R2 Q11).
-- priority: per-key priority comes from vLLM's priority scheduling on agent and vision, set by
-  the gateway on the row provider only, with per-key rate limits beside it (R1 Q5).
-- priority: Chat Completions, embeddings, Messages, and Responses are typed request formats on
-  all four routes (R1 Q6; R2 Q5).
+- priority: per-key priority comes from vLLM's priority scheduling on agent and vision, set by the
+  gateway on the row provider only, with per-key rate limits beside it (R1 Q5).
+- priority: Chat Completions, embeddings, Messages, and Responses are typed request formats on all
+  four routes (R1 Q6; R2 Q5).
 - priority: budgets and the request log live in Postgres, in one compose stack with the gateway on
-  gb10-2, following `~/architecture`'s convention. Compose and Postgres are known tools, not new
-  ones. This supersedes SQLite (R1 Q7; R2 Q13).
+  gb10-2, to `~/architecture`'s convention; Compose and Postgres are known tools. This supersedes
+  SQLite (R1 Q7; R2 Q13).
 - priority: Azure AI Foundry is the task's one new tool (R1 Q8).
-- priority: embedding is held by a global 34/1s limit answering 429 with Retry-After, and a paced
+- priority: embedding is held by a global 34/1s limit answering 429 with Retry-After; a paced
   bucket is an escalation (R1 Q9).
 - priority: the Framework-down evidence is a real reboot with the architect's LUKS unlock, as the
-  walkthrough's last step, and the session pauses there (R1 Q10; R2 Q16).
-- priority: benchmarks A and B run as briefed (R1 Q11, Q12). C and D run as briefed (R2 Q9, Q10).
-- priority: the cloud models are gpt-oss-120b, gpt-5.4-mini, and gpt-audio-mini 2025-12-15
-  (R2 Q1).
+  walkthrough's last step, where the session pauses (R1 Q10; R2 Q16).
+- priority: benchmarks A, B, and D run as briefed (R1 Q11, Q12; R2 Q10).
+- priority: the cloud models are gpt-oss-120b, gpt-5-mini 2025-08-07 (GlobalStandard, capacity
+  10, so vision overflow is processed globally), and gpt-audio-mini 2025-12-15 (R2 Q1, amended by
+  the architect, 2026-11-16, slice 1 escalation: gpt-5.4-mini has 0 quota in every eastus2 SKU;
+  the architect purged three soft-deleted accounts that held gpt-5-mini's quota).
 - priority: embedding overflows under its alias to text-embedding-3-small at 768 dimensions,
   marked by a header, and the marker is a gateway-document requirement (R2 Q2).
 - priority: transcription is out of scope (R2 Q3).
 - priority: the gateway answers each alias's `/v1/models` itself (R2 Q4).
 - priority: the tiers reach Azure through a rows-down probe overlay (R2 Q6).
-- priority: a row is evicted after 2 consecutive 503s for 5 s, and a route retry makes 2 attempts
-  on 503 with no backoff (R2 Q7).
+- priority: 2 consecutive 503s evict a row for 5 s, and a route retry on 503 waits 20 ms, since
+  eviction lands asynchronously and an immediate retry reached the row again (R2 Q7, amended by
+  the architect, 2026-11-16, slice 2 escalation).
 - priority: the queue limits are twice each cap (agent 24, vision 32, audio 8), and embedding has
   none (R2 Q8).
 - priority: the request log stores metadata only (R2 Q12).
 - priority: the engines upgrade and the `host/` pull request fold into the setup slice, keeping
   four slices (R2 Q14).
 - priority: held spike-model-engines' llama.cpp at b12098, declining b12407: inert, kept for
-  reference (R2 Q15).
-- priority: confirmed at approval (architect, 2026-11-16): each deployment is DataZoneStandard where the model offers it, and GlobalStandard otherwise; the Azure resource name stays untracked and is filled in at deploy; the budget Block is shown by a probe overlay that lowers bulk's budget.
-- priority: Postgres is pinned at 18.7-alpine, the latest `-alpine` tag, per rolling currency (the convention's example was 18.6). The compose FROM pin is read by crane, which go-web-service's currency already uses, so it is a known tool, not a new one.
-- priority: in the compose stack, agentgateway runs from its image pin rather than a Dockerfile, keeps `container_name: agentgateway` for the helpers, and is recreated only when its `config:` section changes (a hash label), since `config.*` is read at start. Tailnet addresses are looked up on gb10-2 at run time, and Postgres publishes no port.
-- priority: vision overflows to gpt-5-mini 2025-08-07, GlobalStandard at capacity 10, not gpt-5.4-mini (architect, 2026-11-16, escalation in slice 1). The subscription's gpt-5.4-mini quota is 0 in every SKU in eastus2, and gpt-5-mini has quota only in GlobalStandard, so vision overflow is processed globally. The soft-deleted accounts tau-ai, spike-harness-ai, and herald-ai held gpt-5-mini's quota until the architect purged them. Amends R2 Q1.
-- priority: the route retry waits 20 ms before trying again (architect, 2026-11-16, slice 2 escalation). Eviction lands asynchronously, so with no backoff the retry reaches the row again and the refused request itself gets 503. Amends R2 Q7.
-- priority: each Azure provider gets the rows' health policy, evicting after 2 consecutive 503s or failed connections for 5 s, so a single Azure error doesn't leave the alias without a healthy group (architect, 2026-11-16, slice 2 escalation).
-- priority: benchmark C is sized to Azure's capacity (architect, 2026-11-16, slice 2 escalation). C-agent sends single-turn 512-in, 128-out prompts at 28 concurrent for 60 s. C-vision sends a small synthetic image under 64 KiB, so the retry applies, at 36 concurrent for 60 s. Each is stopped early if Azure answers 429. The briefed loads would have tripped Azure's 429s: gpt-5-mini at 10 units and gpt-oss-120b at 50 units against 1440p images and 8k-token prompts. The 1440p case, never retried past 64 KiB, is recorded from the mock and the source. Amends R2 Q9.
-- priority: benchmark C-agent ran once and breached the Azure stop rule. It sent 2,944 requests to Azure in 60 s (429 x2845, 400 x99, no 2xx), because each row eviction sent the alias's whole load to an Azure group that stayed in rotation while it throttled. C-vision is dropped, and C-agent is recorded as it ran: under saturation, a row's 503 with eviction sends nearly the whole load to Azure (architect, 2026-11-16, escalation). Amends R2 Q9 and the C sizing decision.
-- priority: each Azure provider is also evicted on 429 (`&azure-health`: 503, 429, or a failed connection, 2 in a row, 5 s), so a throttling Azure leaves rotation (architect, 2026-11-16, escalation).
-- priority: the Azure cap of 300 counts Azure's 2xx and its 4xx other than 429. 429s are reported separately, since Azure refuses them without processing. The count after C-agent is 180: 81 before it and its 99 400s (architect, 2026-11-16, escalation). Amends behavior 18.
-- priority: Azure stream incompatibilities in go-ai are fixed at their root in a v1.ai.client hotfix task that blocks v1.ai.client's remaining tasks, never by a gateway transformation (architect, 2026-11-16).
-- priority: budgets use agentgateway v1.7.0's `rolling: 1h`, a fixed window per UTC clock hour; v1.7.0 has no sliding window. Recorded as a finding and a watch entry, with a sliding window as a want for `answer`'s gateway document (architect, 2026-11-17, review escalation). Amends behavior 15.
-- priority: the route retry's `attempts: 2` means 2 retries, so 3 sends (architect, 2026-11-17, review escalation). Amends behavior 9.
-- priority: go-ai's two audio tests (TestAudioInResponsesRefused, TestTranscribeChat) are rerun with the rows down after warming the audio row's eviction, about 6 Azure requests, so behavior 10 records Azure's answer rather than the row's 503 (architect, 2026-11-17, review escalation).
-- priority: currency at review: the gateway's uv moves to 0.13.9, and the engines are bumped too (architect, 2026-11-17, review escalation): uv 0.13.9, vLLM v0.33.0 -> v0.34.0, and llama.cpp b12098 -> b12464, ending the hold. This needs a second spike-model-engines `host/` PR, row restarts, and a post-upgrade smoke check: queue-limit bursts, the pass-through matrix, and the tiers. The task's benchmarks ran on v0.33.0 and are not rerun; the finding says so.
-- priority: the Postgres password is rotated, since a reviewer's diff printed it into a local transcript. The deploy no longer fills secret markers in comments (architect, 2026-11-17, review escalation).
-- priority: spike-model-engines' ROCm 7.2 fallback (VLLM_ROCM_FALLBACK, VLLM_ROCM_BUILD, the audio Dockerfile's rocm72 stage) is removed, since vLLM v0.34.0 publishes no -rocm72 image (#61939). The Framework runs the default ROCm 10.0 build, as it did throughout (architect, 2026-11-17, engines-bump escalation). Rejected: a fallback pinned to v0.33.0-rocm72.
+  reference (R2 Q15). The review's engines bump ended the hold (below).
+- priority: confirmed at approval (architect, 2026-11-16): DataZoneStandard where the model offers
+  it, GlobalStandard otherwise; the Azure resource name stays untracked, filled in at deploy; the
+  budget Block is shown by an overlay that lowers bulk's budget.
+- priority: Postgres is pinned at `18.7-alpine`, the latest `-alpine` tag; crane reads the compose
+  FROM pin, a known tool from go-web-service's currency.
+- priority: in the compose stack, agentgateway runs from its image pin, not a Dockerfile, keeps
+  `container_name: agentgateway` for the helpers, and is recreated only when its `config:` section
+  changes (a hash label); tailnet addresses are looked up on gb10-2 at run time, and Postgres
+  publishes no port.
+- priority: each Azure deployment is a `custom` provider at the verified Foundry host and
+  `/openai/v1` path, since agentgateway's `azure` provider builds neither. Rejected: the `azure`
+  provider's `openAI` type, on a host no deployment was verified on.
+- priority: the limits' values: vLLM priority 0 for the interactive keys and 10 for bulk; request
+  buckets of 600 a minute for bulk and 1,200 for the others; budgets of 1,000,000 tokens an hour,
+  Block, for bulk and 5,000,000, Audit, for the others, each sized above the benchmarks' use
+  (`gateway/agentgateway/config.yaml`).
+- priority: each Azure provider gets the rows' health policy, 2 consecutive 503s or failed
+  connections evicting it for 5 s, so one Azure error doesn't leave the alias without a healthy
+  group (architect, 2026-11-16, slice 2 escalation).
+- priority: each Azure provider is also evicted on 429 (`&azure-health`), so a throttling Azure
+  leaves rotation (architect, 2026-11-16, escalation 2).
+- priority: benchmark C is sized to Azure's capacity (C-agent 512 in, 128 out, 28 concurrent;
+  C-vision a sub-64 KiB image, 36 concurrent; 60 s each, stopped on an Azure 429). C-agent ran once
+  and breached the Azure stop rule: 2,944 requests reached Azure in 60 s (429 ×2845, 400 ×99, no
+  2xx), since each eviction sent the whole load to a throttling Azure group. It is recorded as run,
+  and C-vision is dropped (R2 Q9, amended by the architect, 2026-11-16, escalations 1 and 2).
+- priority: the Azure cap counts Azure's 2xx and its 4xx other than 429, which are reported apart
+  since Azure refuses them unprocessed (architect, 2026-11-16, escalation 2). Amends behavior 18.
+- priority: Azure stream incompatibilities in go-ai are fixed at their root in a v1.ai.client
+  hotfix task that blocks v1.ai.client's remaining tasks, never by a gateway transformation
+  (architect, 2026-11-16).
+- priority: budgets use agentgateway v1.7.0's `rolling: 1h`, a fixed UTC clock hour, since v1.7.0
+  has no sliding window; it is a finding and a watch entry, and a sliding window is a want for
+  `answer`'s gateway document (architect, 2026-11-17, review). Amends behavior 15.
+- priority: the route retry's `attempts: 2` means 2 retries, so a request is sent at most 3 times
+  (architect, 2026-11-17, review). Amends behavior 9.
+- priority: go-ai's two audio tests are rerun with the rows down after warming the audio row's
+  eviction, about 6 Azure requests, so behavior 10 records Azure's answer, not the row's 503
+  (architect, 2026-11-17, review).
+- priority: the review's currency bump (architect, 2026-11-17): the gateway's uv to 0.13.9, and
+  spike-model-engines' uv to 0.13.9, vLLM v0.33.0 to v0.34.0, and llama.cpp b12098 to b12464,
+  through a second `host/` pull request (#19), with row restarts and a smoke check (queue-limit
+  bursts, the pass-through matrix, the tiers). The benchmarks ran on v0.33.0 and are not rerun.
+- priority: spike-model-engines' ROCm 7.2 fallback is removed, since vLLM v0.34.0 publishes no
+  `-rocm72` image (#61939); the Framework runs the default ROCm 10.0 build, as it did throughout
+  (architect, 2026-11-17). Rejected: a fallback pinned to v0.33.0-rocm72.
+- priority: the Postgres password is rotated, since a reviewer's diff printed it into a local
+  transcript, and the deploy refuses a secret marker in a comment (architect, 2026-11-17, review).
+- priority: `gateway/compose.sh` exports `BUILDX_NO_DEFAULT_ATTESTATIONS=1`, since Compose v5.2.0
+  drops `provenance: false` and each build's new attestation changed Postgres's image id and
+  recreated it on every deploy; `provenance: false` and `sbom: false` stay for a Compose that
+  honours them (session, after the review).
+- priority: pull request #19 also added the four standing rows to spike-model-engines'
+  `docs/engines/vllm/models.md`, outside `host/`, from the standards reviewer's finding, without
+  the architect's decision (session; raised in the session brief).
+- priority: the mock upstream behind the laptop checks was throwaway Python in the session's
+  scratchpad, never committed, an exception to the experiment's no-authored-Python rule that the
+  architect was told of (session, slice 2).
 
 ## Pending edits
 
-- coordinator · experiment.hosting intake: spike-model-engines' `docs/engines/vllm/api.md` and
-  `models.md` are stale since its pull request #17: requests to the four standing rows now name the
-  alias, while the guide's examples send the Hugging Face repository. This spike changes only
-  `host/` there, so the fix is left to the experiment's intake. The same guide's rows table (`docs/engines/vllm/models.md`, "The rows") doesn't list the four standing rows either. Since task `priority`'s PR #18 it also doesn't show their `--max-num-queued-reqs` and `--scheduling-policy priority` flags (standards review, 2026-11-17).
+- coordinator · experiment.hosting intake: spike-model-engines' `docs/engines/vllm/api.md` is
+  stale since its pull request #17. Its examples send the Hugging Face repository as `"model"`
+  (`nvidia/Gemma-4-26B-A4B-NVFP4`, `openai/gpt-oss-120b`, `ibm-granite/granite-embedding-english-r2`)
+  and its opening names the pin's default row, while each host now stands on a standing row that
+  serves only its alias (agent, vision, audio, embedding), so requests to a standing row name the
+  alias. This spike changes only `host/` there, so the fix is the intake's. `models.md`, "The rows",
+  already lists the four standing rows with their queue limits and scheduling policy (#19,
+  `683b78e`).
 - coordinator · v1.ai.hosting: the gateway runs route `ai` backends, the form agentgateway's docs
   recommend for path-based LLM routing. The UI labels them "legacy", and since 1.7 the Kubernetes
   model form is called the recommended one (#4307); agentgateway has no deprecation policy (#2767,
@@ -492,28 +539,65 @@ slices 4/4 committed (all slices done) · standards ✓ (47e2296, 3698c32, 2dce7
   infrastructure repositories (architect, 2026-11-16): one entry per dependency for anticipated
   capabilities, deprecations, and other changes that would affect the infrastructure we maintain,
   with a read-only `gh` check run at each PLAN beside currency.
-- coordinator · roadmap: the per-alias base URL stays `/<alias>/v1`, whose `/models` lists only
-  that alias, served by route `ai`, the docs' routing form; priority's summary "in the form
-  routing settles" can name the route `ai` form.
+- coordinator · roadmap: priority's summary names what it built: on the route `ai` form, each
+  alias's `/<alias>/v1` (whose `/models` the gateway answers, listing only that alias) overflows to
+  its own Azure AI Foundry deployment when its row is down or full, with at most 300
+  Azure-answered requests; per-key priority on the agent and vision rows, request-rate buckets, and
+  token budgets per UTC clock hour in Postgres, counting streamed usage; the request log; and
+  embedding held to 34 requests a second, all in one compose stack with Postgres on gb10-2.
+- coordinator · roadmap: `answer`'s summary lists the gateway document's requirements and gaps
+  that priority adds to dot-segment hardening (spike-model-gateway `docs/findings/priority.md`,
+  "Answer for this task", and `docs/watch.md`):
+  - a sliding budget window, wanted: v1.7.0's `rolling: 1h` is a fixed UTC clock hour;
+  - the embedding overflow marker, which a client that stores vectors must honour;
+  - priority orders only vLLM's waiting queue (interactive vision missed 10 s by 0.47 s beside
+    bulk), so holding interactive latency under bulk load needs more, such as a cap on bulk's
+    concurrency;
+  - vLLM's queue limit counts every key alike, so a bulk flood also refuses interactive requests;
+  - under saturation a row's 503 with eviction sends nearly the whole load to Azure, and
+    eviction's growth has no cap;
+  - a body over 64 KiB isn't retried, and a powered-down host costs each attempt about 11 s;
+  - the UI's Logs and Analytics load only by URL on route `ai`;
+  - which workloads may leave the self-hosted machines, from the per-alias parity gaps: agent and
+    embedding are processed within the data zone, vision and audio globally.
 - coordinator · experiment.hosting intake: spike-model-layout's `docs/layout.md` requirement 3
   says traffic past embedding's 34 req/s limit "queues or overflows". agentgateway answers it with
   429 and Retry-After instead, and the client waits. `answer`'s gateway document records this.
-- coordinator · v1.ai.hosting: cloud embedding replies carry an overflow marker and come from
-  another vector space (text-embedding-3-small at 768 dimensions). A client that stores vectors
-  must refuse or re-route a marked reply. This is a gateway-document requirement.
+- coordinator · v1.ai.hosting: cloud embedding replies carry an overflow marker
+  (`x-gateway-overflow: azure`) and come from another vector space (text-embedding-3-small at 768
+  dimensions). A client that stores vectors must refuse or re-route a marked reply. This is a
+  gateway-document requirement.
 - coordinator · v1.ai.hosting: vLLM's queue limit counts every key alike, so a bulk flood also
-  refuses interactive requests, which then overflow. agentgateway's eviction multiplier has no
-  cap, so after a long outage a row can stay out for minutes after it is back.
-- coordinator · v1.ai.client: acceptance can run once priority ships. The gateway's form is
-  settled: typed routes, `/models` answered by the gateway, overflow to Foundry, and per-key
-  priority and budgets.
+  refuses interactive requests, which then overflow. Under saturation a row's 503 with eviction
+  sends nearly the whole load to Azure, and agentgateway's eviction multiplier has no cap, so after
+  a long outage or overload a row can stay out for minutes after it is back.
+- coordinator · v1.ai.client: acceptance can run once priority ships and the hotfix task below is
+  done. The gateway's form is settled: typed routes, `/models` answered by the gateway, overflow to
+  Foundry, and per-key priority, buckets, and budgets.
 - coordinator · experiment.hosting intake: the gateway's compose stack bind-mounts its config
   read-only, an exception to `~/architecture`'s convention, for the intake to weigh for the
-  capstone's stack.
-- coordinator · roadmap: priority's summary covers all four aliases overflowing to Foundry, with a
-  cap of 300.
-- coordinator · v1.ai.client: add a hotfix task, run ahead of v1.ai.client's remaining tasks, which wait on it (architect, 2026-11-16: "always fix problems at their root and avoid hiding them behind band aids"). It fixes go-ai, at tools/infer/v0.1.0, wherever go-ai is at fault in reading Azure AI Foundry's streams, with no gateway workaround:
-  - its Chat Completions parser rejects a chunk with an empty reply id, which Azure's chat streams start with;
-  - its Responses parser rejects how Azure adds a reasoning item.
-  - The checks behind them, at tools/infer/v0.1.0: `format/completions/decode.go:365-369` fixes the reply id from the first chunk, and Azure's first chunk has an empty id (likely its content-filter preamble, with no choices). `format/responses/stream.go:308-321` rejects an output item added with content, and `protocol/accumulator.go:222-232` has the same assumption.
-  The task first records a raw stream straight from Foundry and confirms the root cause of each against it and the OpenAI spec. Two gaps look like agentgateway translation bugs and are not go-ai's to fix (an upstream issue is the architect's to file): `incomplete_details.reason` of `max_tokens`, and 0 input tokens on a translated Messages stream. It also weighs the other Foundry gaps, which are model differences rather than go-ai's faults: gpt-oss-120b refuses `tool_choice: required`; gpt-5-mini refuses `max_tokens` and reasoning effort `none`; a Responses reply cut off at its limit reports `max_tokens`; a translated Messages stream reports 0 input tokens (spike-model-gateway `docs/findings/priority.md`, slice 2). This edit goes through a coordinator `plan` session, since BUILD doesn't change the coordinator.
+  capstone's stack. Its `gateway/compose.sh` also exports `BUILDX_NO_DEFAULT_ATTESTATIONS=1`:
+  Compose v5.2.0 ignores `provenance: false`, and on Docker's containerd image store each build's
+  new attestation changes the image id, so compose recreates the built service on every `up
+  --build`. The convention may want the same.
+- coordinator · v1.ai.client: add a hotfix task, run ahead of v1.ai.client's remaining tasks,
+  which wait on it (architect, 2026-11-16: "always fix problems at their root and avoid hiding them
+  behind band aids"). It fixes go-ai, at `tools/infer/v0.1.0`, wherever go-ai is at fault in
+  reading Azure AI Foundry's streams, with no gateway workaround:
+  - its Chat Completions parser rejects a chunk with an empty reply id, which Azure's chat streams
+    start with: `format/completions/decode.go:365-369` fixes the reply id from the first chunk, and
+    Azure's first chunk has an empty id (likely its content-filter preamble, with no choices);
+  - its Responses parser rejects how Azure adds a reasoning item:
+    `format/responses/stream.go:308-321` rejects an output item added with content, and
+    `protocol/accumulator.go:222-232` has the same assumption.
+
+  The task first records a raw stream straight from Foundry and confirms each root cause against
+  it and the OpenAI spec. Three gaps are the gateway's, not go-ai's to fix (an upstream issue is
+  the architect's to file): `incomplete_details.reason` of `max_tokens`, 0 input tokens on a
+  translated Messages stream, and, on overflow, audio in a Responses request refused by
+  agentgateway's typed Responses parser (400, "untagged enum InputParam"). It also weighs the other
+  Foundry gaps, which are model differences rather than go-ai's faults: gpt-oss-120b refuses
+  `tool_choice: required` and ignores a named function; gpt-5-mini refuses `max_tokens` and
+  reasoning effort `none`; gpt-audio-mini refuses a text-only chat (spike-model-gateway
+  `docs/findings/priority.md`, "The tiers on Azure" and "Per alias"). This edit goes through a
+  coordinator `plan` session, since BUILD doesn't change the coordinator.
