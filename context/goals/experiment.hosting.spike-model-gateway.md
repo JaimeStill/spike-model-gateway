@@ -251,7 +251,7 @@ Door          two-way, except what reached Azure:
 
 ## Progress
 
-slices 4/4 committed (slices 1–3 done; slice 4 walkthrough run by the architect 2026-11-17 05:37–05:52: /models, a rows-down overflow, a budget Block, the UI Logs and Analytics pages (reached by URL only, since the sidebar links them only when an `llm` section exists), and the Framework reboot: health 05:51:49 (embedding) and 05:52:34 (audio), first row answers 05:52:42 and 05:52:43, unlock reported 05:51:45; Azure count 183/300; walkthrough Results to fill in) · standards — · spec — · editor —
+slices 4/4 committed (all slices done) · standards ✓ (47e2296, 3698c32, 2dce759) · spec: 9 gaps, closing (e1acb6b; review readings logged 06:10; engines PR #19 merged, rows on vLLM v0.34.0 at 06:39:55, smoke check passed: bursts 24/1, 32/1, 8/1, matrix, go-ai 20/0/1, infer 13/0/1; audio rerun 06:29: TestTranscribeChat passes on Azure, TestAudioInResponsesRefused refused by the gateway's Responses parser (400, InputParam); Postgres password rotated 06:19; watch passes; Azure 189/300; open: Postgres still recreated on every deploy, finding placeholders) · editor —
 
 ## Decisions
 
