@@ -1,0 +1,17 @@
+# The gateway's stack on gb10-2: agentgateway in front of the four rows, and the Postgres it keeps
+# its state in. It follows go-web-service's compose convention (~/architecture's
+# go-web-service/compose/README.md): this file names the project and includes one file per service
+# group, and Postgres builds from its own Dockerfile, whose FROM line is its one pin.
+#
+# It runs from ~/gateway on gb10-2, where scripts/agentgateway-deploy.sh copies this directory's
+# compose files, gateway/compose.sh, deploy.env as the project's .env, the rendered config, and
+# Postgres's env file, then runs `gateway/compose.sh up --detach --wait --build`. compose.sh sets
+# the values read at run time on gb10-2 (the tailnet addresses, the user, the config section's
+# hash), so none is written down. Every service restarts with the host unless it was stopped
+# (`restart: unless-stopped`). `mise run gateway:up`, `gateway:down`, and `gateway:reset` act on
+# the deployed project over SSH; down keeps the named volume, and reset drops it.
+name: gateway
+
+include:
+  - postgres.yml
+  - agentgateway.yml

@@ -47,10 +47,11 @@ The answer is in the top-level [`README.md`](../README.md#the-answer).
    natively.
 5. **Embedding limit.** Embedding held to 34 requests a second while audio holds RTFx ≥5.
 6. **Priority.** Per-consumer budgets, rate limits, and priority: chat holds its floor while a
-   bulk key saturates vision.
-7. **Overflow.** Overflow to Azure AI Foundry under the same alias; no failover between hosts; the
-   Framework treated as down until `/health` answers after its LUKS unlock; and which workloads may
-   leave the self-hosted machines.
+   bulk key saturates vision, and an interactive key's vision request ranks ahead of bulk's on the
+   same row.
+7. **Overflow.** Overflow to Azure AI Foundry under the same alias when a row is down or full; no
+   failover between hosts; the Framework treated as down until `/health` answers after its LUKS
+   unlock; and which workloads may leave the self-hosted machines.
 8. **go-ai.** go-ai's integration tier, unchanged, through the gateway, with each `AI_*_BASE_URL`
    set to its purpose URL, and the released `infer` CLI's one-listed-model fallback.
 9. **Traces.** agentgateway's OpenTelemetry traces.
@@ -83,30 +84,56 @@ The experiment's rules, in `ai-hosting.md`, govern every session. In short:
 ## Capabilities
 
 - **Gateway bring-up:** `mise run agentgateway-deploy`
-  ([`scripts/agentgateway-deploy.sh`](../scripts/agentgateway-deploy.sh)) deploys agentgateway to
-  gb10-2 from [`gateway/agentgateway/`](../gateway/agentgateway/config.yaml) and reloads its
-  config in place. It publishes the consumer port, 3000, on gb10-2's tailnet address, where one
-  route per alias, each with an inline `ai` backend, serves `/<alias>/v1`.
+  ([`scripts/agentgateway-deploy.sh`](../scripts/agentgateway-deploy.sh)) deploys the gateway's
+  compose project ([`gateway/compose.yml`](../gateway/compose.yml)), agentgateway and its Postgres,
+  to gb10-2, with the config from [`gateway/agentgateway/`](../gateway/agentgateway/config.yaml)
+  bind-mounted read-only, and reloads that config in place. It publishes the consumer port, 3000,
+  on gb10-2's tailnet address, where one route per alias, each with an inline `ai` backend, serves
+  `/<alias>/v1`. `mise run gateway:up`, `gateway:down`, and `gateway:reset` start the stack, stop
+  it, and stop it and drop Postgres's volume, on gb10-2 over SSH. `mise run gateway:ui` tunnels the
+  gateway's UI to the laptop's `localhost:3001`.
+- **Overflow:** each alias route's `ai` backend holds two priority groups, the alias's row and then
+  its Azure AI Foundry deployment, so Azure answers the alias, marked by an `x-gateway-overflow:
+  azure` header, while the row is evicted after two 503s or failed connections. The routes type
+  Chat Completions, Messages, Responses, and embeddings, and the gateway answers each alias's
+  `/v1/models` itself.
+- **Per-key priority and limits:** each key's name sets vLLM's request priority on the agent and
+  vision rows, bulk behind the interactive keys. Each key has a request-rate bucket on each route
+  and a token budget per UTC clock hour, kept in Postgres (Block on bulk, Audit on the others),
+  which charges streams too. The embedding route holds a global 34 requests a second. Every
+  request writes a metadata row, with no content, to the request log in Postgres, which the UI's
+  Logs and Analytics pages show.
 - **Gateway keys:** the deploy creates each key the config names, kept untracked on the deploying
   machine, and sends gb10-2 a copy with each key's hash. Removing a name and deploying revokes it.
+  Secrets (Postgres's password, the Azure account's key and names) are markers in the config, filled
+  in the same copy from untracked files.
 - **Probe overlays:** `gateway/agentgateway/probes/` holds one-off config changes that the deploy
   applies to the copy it sends: `rate-limit-agent`, a request-rate limit on the agent route alone;
-  `in-flight-1`, the in-flight limit at 1; and `key-header`, keys read from `x-api-key`. A deploy
-  without them removes them. Each reply's Retry-After is in the access log without an overlay.
+  `in-flight-1`, the in-flight limit at 1; `key-header`, keys read from `x-api-key`; `rows-down`,
+  every row's provider at a closed port, so each alias overflows to Azure; `bulk-rate-low` and
+  `bulk-budget-low`, bulk's request bucket and token budget lowered; and `priority-flat`, every
+  key at bulk's priority on the rows. A deploy without them removes them. Each reply's Retry-After
+  is in the access log without an overlay.
 - **Step helpers:** [`scripts/measure-lib.sh`](../scripts/measure-lib.sh) runs and reads the
   GuideLLM cells in [`bench/`](../bench/README.md), and
   [`scripts/clients-lib.sh`](../scripts/clients-lib.sh) runs go-ai's and infer's tiers, the infer
   CLI, and curl through the gateway, each with a key read from its file. `gw_base <alias>` prints
   an alias's base URL, and `logged <command>` runs and logs a step that prints no key.
+  `az_curl` sends one request straight to an Azure AI Foundry deployment, and `row_burst` sends a
+  burst straight to a row. `azure_count` counts the requests Azure answered, from the gateway's
+  access log; `budget_status` reads each key's token budget; and `request_log` reads the request
+  log in Postgres. `audio_rerun` reruns go-ai's two audio tests on Azure with the audio row
+  evicted first, and `pg_password_rotate` rotates Postgres's password. measure-lib.sh's
+  `overflow_read` and `rtfx` read a cell's overflow and audio's real-time factor. The helpers keep
+  their state and command log under `.state/priority/`.
 - **Watch register:** [`docs/watch.md`](../docs/watch.md) tracks each dependency's anticipated
   capabilities, deprecations, and other changes. Its agentgateway entries track whether route
   `ai`, which the gateway relies on, is deprecated, and whether the `llm` section can serve several
   base URLs on one port, which would move the gateway to it. `mise run watch` is its read-only
   check of the entries' upstream issues and pull requests and release fields. It runs at every
   task's PLAN as its own block, beside `mise run currency` and separate from it.
-- **Planned:** admission on `/metrics`, per-key priority and budgets (streamed usage included),
-  embedding's rate limit, Azure AI Foundry overflow, OpenTelemetry traces through a Collector, and
-  the gateway document, the decision and its configuration as requirements for v1.ai.hosting.
+- **Planned:** admission on `/metrics` (a gap on paper, for `answer`'s gateway document), OpenTelemetry traces through a Collector, and the gateway
+  document, the decision and its configuration as requirements for v1.ai.hosting.
 
 ## Path
 
@@ -122,10 +149,11 @@ The tasks, in the order they run, each with the evidence it proves:
    under watch in [`docs/watch.md`](../docs/watch.md). Its finding is
    [`docs/findings/routing.md`](../docs/findings/routing.md), with the realignment under
    "Realignment on route `ai`".
-3. `priority`: on agentgateway alone, on the route `ai` form: Azure AI Foundry overflow, per-key
-   priority and budgets counting streamed usage, embedding's limit, the Framework down until
-   `/health` (evidence 5–7). [`priority-on-route-ai.md`](priority-on-route-ai.md) holds the
-   research for its plan round.
+3. `priority`: on agentgateway alone, on the route `ai` form, with Postgres beside it in one
+   compose stack: overflow to Azure AI Foundry when a row is down or full, per-key priority,
+   request-rate buckets, and token budgets counting streamed usage, the request log, embedding's
+   limit, and the Framework down until `/health` (evidence 5–7). Its finding is
+   [`docs/findings/priority.md`](../docs/findings/priority.md).
 4. `answer`: traces through an OpenTelemetry Collector, the paper sections with the gateway
    comparison, the gateway document (dot-segment hardening among its requirements), and the
    answer (evidence 9–11).

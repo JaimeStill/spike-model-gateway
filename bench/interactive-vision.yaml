@@ -1,0 +1,45 @@
+# O-vision at 1, benchmark D's interactive run (the priority task's behavior 13; evidence 6): the
+# vision row, NVFP4 26B-A4B (vision on gb10-2's 8000), through the gateway with the go-ai key, at 1
+# concurrent stream for 90 s. It runs inside bulk-vision-120.yaml, the bulk key's 20 concurrent on
+# the same row, in a second terminal, started about 15 s into the bulk run, so it ends inside it.
+# Each go-ai request reaches the row with vLLM's priority 0, ahead of bulk's 10 (config.yaml,
+# &row-priority); under the priority-flat probe overlay, the control, it carries bulk's 10. D reads
+# its median request latency against vision's floor of 10 s, with priority and without.
+#
+# Azure: none. Its 1 in flight beside the bulk run's 20 is 21, under the vision row's queue limit
+# of 32 (twice its cap of 16, --max-num-queued-reqs), so the row never refuses it with 503 and
+# nothing overflows to gpt-5-mini while the rows are up; azure_count after the pair shows none.
+# go-ai's request-rate bucket, 1,200 a minute, is far above the run's one request every few
+# seconds, and its budget only audits.
+#
+# Copied from overhead-vision.yaml (O-vision), its requests unchanged: one synthetic 1440p JPEG
+# beside 200 synthetic text tokens, exactly 100 output tokens. Adapted: 1 concurrent stream, where
+# O-vision ran vision's target of 4, so it is one interactive caller. The model is the alias,
+# vision, given on the command line with its tokenizer (google/gemma-4-26B-A4B-it) by `cell`, which
+# sets the target, the gateway's base URL, in GUIDELLM__SPEC__BACKEND__TARGET, the key named on its
+# command line, go-ai, in GUIDELLM__SPEC__BACKEND__API_KEY, and the run's own seed. It needs
+# GuideLLM's vision extra, which mise.bench.toml installs. Run from the repository root.
+spec:
+  backend:
+    kind: openai_http
+    request_format: /v1/chat/completions
+    # GuideLLM checks the backend before a run with GET <target>/health, the target's /v1 cut off.
+    # Through the gateway that is /vision/health, which no route serves (404), so the check reads
+    # /v1/models instead, which the gateway answers itself and which also proves the key before any
+    # load is sent.
+    api_routes:
+      /health: v1/models
+  profile:
+    kind: concurrent
+    streams: [1]
+  data:
+    - kind: synthetic_text
+      prompt_tokens: 200
+    - kind: synthetic_image
+      resolution: 1440p
+      format: jpeg
+      output_tokens: 100
+  # The level stops at 90 s; the request in flight then is counted incomplete.
+  constraints:
+    - kind: max_duration
+      seconds: 90

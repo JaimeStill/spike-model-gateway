@@ -1,14 +1,17 @@
 # yaml-language-server: $schema=https://agentgateway.dev/schema/config
 #
-# agentgateway v1.7.0 in front of the four vLLM rows, run on gb10-2 by
-# scripts/agentgateway-deploy.sh, which mounts this file's directory read-only at /config.
+# agentgateway v1.7.0 in front of the four vLLM rows, run on gb10-2 in the gateway's compose
+# project (gateway/compose.yml), which mounts the deployed copy's directory read-only at /config;
+# scripts/agentgateway-deploy.sh renders the copy and deploys the project.
 # agentgateway watches the file and reloads it in place, so a deploy that changes only this file
 # needs no restart. Fields under `config` are read once, at start.
 #
 # The routing form serves the four aliases: one route per alias on the `consumer` gateway, port
 # 3000, each with an inline `ai` backend. Each alias's base URL is http://gb10-2:3000/<alias>/v1,
-# which the route rewrites to its row's /v1 and passes through as is (`detect`); its /v1/models is
-# its row's, which lists that alias alone. agentgateway's docs recommend this form for path-based
+# which the route rewrites to /v1 and sends to its row, or, while the row is evicted, to its Azure
+# AI Foundry deployment under the same alias (the routes below); its /v1/models is answered by the
+# gateway, listing that alias alone, whether the row is up or not. agentgateway's docs recommend
+# this form for path-based
 # LLM routing (llm/configuration-modes.md). Task `routing` trialled the `llm` section, one port an
 # alias, and it passed, but the gateway stays on the documented form while `llm` converges; the
 # trial is in docs/findings/routing.md, and docs/watch.md tracks what would move the gateway to
@@ -27,15 +30,51 @@ config:
   # answers 403, so no key or route is ever created outside git.
   storage:
     mode: readOnly
+  # The compose project's Postgres (gateway/postgres.yml), reached by its service name on the
+  # project's network, where the request log and token budgets will be kept. agentgateway connects
+  # at start, and compose starts it only once Postgres is healthy. The password is committed only
+  # as a secret marker naming postgres-password, in the URL below, which
+  # scripts/agentgateway-deploy.sh replaces in the copy it sends with the password it keeps
+  # untracked under .state/agentgateway/. A comment never holds a marker: the deploy refuses one.
+  database:
+    url: postgres://agentgateway:@@secret:postgres-password@@@postgres:5432/agentgateway
 
-# Every request's access log line carries the reply's Retry-After as `retry_after` (empty or absent
-# when the reply has none), the only place a client's 429 or 503 shows it to a reader: GuideLLM
-# keeps a refused request's status but none of its headers. A log field only; it changes no routing
-# or limit (docs: observability/access-logs/view.md).
+# Every request's access log line carries two fields of the reply's headers, each empty or absent
+# when the reply has none. Log fields only; they change no routing or limit (docs:
+# observability/access-logs/view.md).
+# - `retry_after`, its Retry-After: the only place a client's 429 or 503 shows it to a reader, since
+#   GuideLLM keeps a refused request's status but none of its headers.
+# - `overflow`, its overflow marker: "azure" on every reply an Azure deployment answered, set by that
+#   provider's response header policy (&overflow-marker, below), which the log reads after it
+#   applies. Beside the route, which names the alias and so the deployment, it is what the Azure
+#   request count reads (scripts/clients-lib.sh, azure_count). `gen_ai.provider.name`, logged on
+#   every LLM request, reads `azure` there too (providerOverride), and `custom` on a row's.
+#   `endpoint` names the Azure account's host, so a quoted line has it replaced.
+# - `key_name`, the name of the key the request was admitted with (its `metadata.name`, which
+#   agentgateway flattens into `apiKey`; schema/cel.md), absent on a 401. It tells two runs on one
+#   alias apart, such as benchmark D's bulk and interactive runs, and shows which key a probe's 429
+#   refused (scripts/measure-lib.sh reads it).
+#
+# The request log in Postgres (`database`): every request also writes one row of `request_logs`
+# in config.database, which the UI's Logs and Analytics pages read. `llm: metadata` stores the
+# request's metadata, usage, timing, and cost, and no prompt or completion content: no
+# `request_log_payloads` row is written (telemetry/log.rs, database_llm_payload) [src]. The row
+# carries every field of the access log line, the key's name among them as `agw.api_key.name`,
+# which agentgateway adds itself (telemetry/log.rs, api_key_name) [src]; `agentgateway.user` is
+# set to the key's name too, so it fills the row's indexed `agentgateway_user` column, the user the
+# UI's Logs and Analytics filter and group by (telemetry/log_store.rs, promoted_attribute_column)
+# [src]. A row also holds the caller's address and the endpoint, as the access log line does, so a
+# quoted row names its columns.
 frontendPolicies:
   accessLog:
     add:
       retry_after: 'response.headers["retry-after"]'
+      overflow: 'response.headers["x-gateway-overflow"]'
+      key_name: 'apiKey.name'
+    database:
+      llm: metadata
+      add:
+        agentgateway.user: 'apiKey.name'
 
 gateways:
   # The consumer port, published on gb10-2's tailnet address (deploy.env). It isn't named
@@ -52,18 +91,69 @@ gateways:
     # missing key, then sends gb10-2 a copy of this file with each marker replaced by its key's
     # `sha256:<hex>`; a marker never reaches gb10-2. Adding an entry and deploying issues a key;
     # removing one and deploying revokes it with no restart (docs/findings/agentgateway.md, "Keys").
+    #
+    # Four keys: architect, bench, and go-ai are interactive, and bulk is for batch work. Each key's
+    # `metadata.name` is what every per-key policy reads: its priority on the agent and vision rows
+    # (&row-priority), its request-rate bucket on each route (&key-rates), and its budget here.
+    #
+    # Token budgets. Each key has one budget, `tokens`, charged after each LLM reply with the reply's
+    # total tokens, input and output (http/budget/mod.rs, settle) [src]. A streamed Chat Completions
+    # reply is charged too, whether or not the client sent `include_usage`: the routes type it as
+    # `completions`, which adds `include_usage` to every stream (&typed, below). The counter is
+    # checked before each request, so the request that crosses the limit is answered and charged,
+    # and the next one is refused. Block refuses it with 429 and a Retry-After of the seconds left in
+    # the window; Audit only logs `API key budget exceeded` and lets it through (http/budget/mod.rs,
+    # check; proxy/mod.rs) [src]. The counters live in memory and are written to config.database's
+    # `budget_usage` table every 5 s and at shutdown, and read back at start, so a count survives a
+    # gateway restart (http/budget/database.rs) [src]. A budget is keyed by its key's hash and its
+    # name, so a reload that changes a limit keeps the count; one that changes the window or the
+    # unit starts it again (BudgetCounter::configure) [src]. Budgets on the gateway's own apiKey
+    # policy take effect as a route's do: the gateway's policies are attached with the budget
+    # policy, and its budget runs right after its key check (types/local.rs; proxy/httpproxy.rs,
+    # the gateway's request policies) [src].
+    #
+    # The window: `rolling: 1h`, agentgateway's name for a fixed window aligned to the Unix epoch,
+    # here each UTC clock hour, not a sliding one (schema/config.md), so a count starts again at
+    # each hour and a Block's Retry-After is the time to the next hour. bulk Blocks at 1,000,000
+    # tokens an hour: above benchmarks B and D together, about 760 bulk vision requests (B's 150 s
+    # and D's two 120 s runs at about 1.9 requests a second at 20 concurrent, 116 a minute in the
+    # agentgateway task's c-vision) of about 580 tokens each (479 prompt, 100 output), some 440,000
+    # tokens, run within one hour. The interactive keys Audit at 5,000,000 an hour (&audit-budget):
+    # benchmark A's C-embed alone, 34 requests a second of 512 tokens for 90 s, is about 1,570,000.
+    # The bulk-budget-low probe overlay lowers bulk's to 1 token, so its next request is refused.
     apiKey:
       mode: strict
       keys:
       - keyHash: sha256:@@architect@@
         metadata:
           name: architect
+        budgets: &audit-budget
+        - name: tokens
+          limit:
+            unit: Tokens
+            amount: 5000000
+          window:
+            rolling: 1h
+          onBudgetExceeded: Audit
       - keyHash: sha256:@@bench@@
         metadata:
           name: bench
+        budgets: *audit-budget
       - keyHash: sha256:@@go-ai@@
         metadata:
           name: go-ai
+        budgets: *audit-budget
+      - keyHash: sha256:@@bulk@@
+        metadata:
+          name: bulk
+        budgets:
+        - name: tokens
+          limit:
+            unit: Tokens
+            amount: 1000000
+          window:
+            rolling: 1h
+          onBudgetExceeded: Block
   # The UI, read-only (config.storage), on its own port, published on gb10-2's loopback only and
   # reached through an SSH tunnel. The admin API's debug and shutdown endpoints stay on adminAddr.
   ui:
@@ -73,11 +163,102 @@ ui:
   gateways: ui
 
 # One route per alias. Each matches /<alias>/v1 and below, rewrites that prefix to /v1, and sends
-# the request to its row by short host name, over plain HTTP on the tailnet. The custom provider
-# with no formats translates nothing; every path is the `detect` route type, which forwards the
-# request unchanged and reads token usage from the reply. A path under /<alias>/v1 outside the
-# allow-list is answered 404 by the route itself, before any backend; any path outside
-# /<alias>/v1 matches no route, so it gets 404 too.
+# the request to one `ai` backend of two priority groups: the alias's row first, then its Azure AI
+# Foundry deployment. A request goes to the first group with a provider not evicted, so Azure
+# answers only while the row is out: nothing fails over between hosts, only from a row to its own
+# deployment (docs: the Kubernetes failover page, "Self-hosted primary, cloud fallback"; standalone,
+# schema/config.md `routes[].backends[].ai.groups`). `groups` must be the `ai` backend's only key,
+# or it parses as one provider (types/local.rs, LocalAIBackend) [src], so the row's host and every
+# policy sit on each provider.
+#
+# The route policies, the same on all four (anchored on agent's):
+# - The serving-path allow-list (&not-serving), and /v1/models answered by the gateway.
+# - Typed request formats (&typed): Chat Completions, embeddings, Messages, and Responses are parsed
+#   as such, so the gateway sets each provider's model in the body and its path (`detect` does
+#   neither for a JSON body: llm/mod.rs set_default_path; proxy/httpproxy.rs) [src], and adds
+#   `stream_options.include_usage` to every Chat Completions stream, so a stream's usage is read
+#   whether or not the client asks (llm/mod.rs) [src]. The keys are path suffixes, matched longest
+#   first with "*" last (llm/policy/mod.rs, resolve_route) [src]; the rest stay `detect`.
+# - A retry (&retry-503): up to 2 more attempts on a 503 or a failed connection, each after a
+#   20 ms backoff (`backoff`, a duration; http/retry/mod.rs) [src]. The provider is chosen again on
+#   each attempt (proxy/httpproxy.rs) [src], so a retry reaches Azure once the row is evicted. An
+#   eviction reaches the load balancer through a spawned task (types/loadbalancer.rs,
+#   finish_request) [src], so a retry sent at once can still find the row; the backoff lets the
+#   eviction land, so the refused request itself is carried to Azure. Against a mock row on the
+#   laptop, with no backoff the request whose two 503s evicted the row got its third 503 from the
+#   row, and with 20 ms it went to Azure on its third attempt; C-agent showed it live, 18 of 18. A
+#   body is buffered for a retry only up to 64 KiB (MAX_BUFFERED_BYTES); a larger one, such as a
+#   1440p image, is sent once, unretried [src].
+# - A request-rate bucket per key (&key-rates on agent, vision, and audio; embedding has its own,
+#   below): `localRateLimit` with `key: apiKey.name`, so each key's requests draw on a bucket of
+#   their own, and one key's refusals leave another's untouched (schema/config.md; the docs'
+#   rate-limits.md, "Routing-based") (http/localratelimit.rs, bucket) [src]. A bucket counts
+#   requests, once per client request, before the retry (proxy/httpproxy.rs) [src], and past it the
+#   gateway answers 429 with Retry-After and `x-ratelimit-*` itself; the row never sees the request,
+#   so a 429 evicts nothing and sends nothing to Azure. The first entry whose condition holds is
+#   the request's (`conditional`): bulk's, 600 requests a minute, then every other key's, 1,200 a
+#   minute, each a full minute's worth at once and refilled each minute. Neither binds in normal
+#   use or the benchmarks: bulk's heaviest is benchmark B's C-vision, 20 concurrent at about 1.9
+#   requests a second (the agentgateway task's c-vision at 20), 116 a minute; an interactive
+#   key's is O-audio, 64 requests in about 20 s. The bulk-rate-low probe overlay lowers bulk's to 2
+#   a minute, so bulk's third request in a minute is refused while another key answers. Buckets
+#   are local to the gateway process, and a reload that changes a rule starts it full.
+#
+# The row's provider (&row-*): a custom provider at the row's host and port over plain HTTP on the
+# tailnet, listing the four typed formats, so each passes through unchanged; it keeps the client's
+# model, the alias, which each row serves as its only model name. Its health policy (&row-health)
+# marks a reply unhealthy on 503, the row's refusal once twice its cap is in flight
+# (--max-num-queued-reqs, spike-model-engines host/), or on a failed connection, where there is no
+# reply; two in a row evict the row for 5 s, and each later eviction is longer, 5 s times the
+# times it has been evicted, with no cap (http/health.rs) [src].
+#
+# Priority by key (&row-priority, on the agent and vision rows' providers only): each request's
+# body is given vLLM's `priority` field from the key's name, 0 for an interactive key and 10 for
+# bulk. Both rows schedule by priority (--scheduling-policy priority, spike-model-engines host/),
+# where a lower value is served first, so interactive work is taken ahead of bulk's waiting
+# requests. `ai.transformations` sets a body field from a CEL expression after the request is
+# parsed (schema/config.md, `policies.ai.transformations`), and the expression reads the key: a
+# provider's policies are registered once the provider is chosen, before the request's snapshot,
+# which keeps the key's claims, so `apiKey.name` is in the expression's context
+# (proxy/httpproxy.rs, "Provider policies are only known once a provider is selected";
+# cel/types.rs, new_llm) [src]. The provider's `ai` policy is merged field by field with the
+# route's (&typed), so the route's `routes` still apply (store/binds.rs) [src]. An expression that
+# fails, such as one with no key, leaves the field out (llm/policy/mod.rs,
+# apply_request_body_mutations) [src]. It sits on the row's provider, not the route, so a request
+# the Azure provider answers never carries it: each attempt of a retry starts again from the
+# client's body (proxy/httpproxy.rs, the retry loop) [src], and the Azure provider has no
+# transformation. On the laptop, against a capturing mock row, bulk's chat reached the row with
+# `"priority":10`, go-ai's with `0`, the audio row's with none, and bulk's chat sent while the row
+# was unreachable reached the Azure provider with none. vLLM reads `priority` on Chat Completions,
+# Completions, and Responses; the field is set on every typed request to these two rows, Messages
+# too, which the benchmarks and probes don't send. The priority-flat probe overlay sets every key
+# to bulk's 10, benchmark D's control.
+#
+# The Azure provider (&azure-*): an OpenAI-compatible custom provider at the spike's Foundry
+# account, https://<account>.services.ai.azure.com/openai/v1/<path>, the endpoint each deployment
+# was verified on, with the account's key in `api-key` (backendAuth) on this provider alone, so no
+# row ever sees it. agentgateway's `azure` provider reaches neither that host and path: its
+# `foundry` resource type builds /api/projects/<project>/openai/v1/ (a Foundry project, which the
+# account has none of), and `openAI` builds <account>.openai.azure.com (crates/llm/src/azure.rs)
+# [src]. A host override drops the provider's default TLS, so `backendTLS: {}` restores it, with
+# SNI and Host from the host (proxy/httpproxy.rs, apply_auto_hostname) [src]. The account's name
+# and key are committed only as the secret markers azure-account and azure-key, which
+# scripts/agentgateway-deploy.sh fills from .state/azure/ in the copy it sends. Each provider
+# names its deployment as the model, lists only the formats that deployment serves (a Messages
+# request is translated to one of them; llm/mod.rs, CHAT_TRANSLATIONS) [src], and sets
+# `providerOverride: azure`, so the access log's `gen_ai.provider.name` reads `azure` on every
+# request Azure answers, and `custom` on a row's. Every reply from it carries
+# `x-gateway-overflow: azure` (&overflow-marker); a row's reply never does. Its health policy is
+# the row's, with a 429 added (&azure-health): two 503s, 429s, or failed connections in a row
+# evict it for 5 s, then 5 s times the evictions so far, with no cap, as a row's, where
+# agentgateway's default for an `ai` backend of several groups would evict it on one 5xx or
+# failed connection, for 3 s (llm/mod.rs; http/health.rs) [src]. The 429 is there
+# because Azure throttles a spent deployment with 429, and benchmark C-agent showed an Azure group
+# that stays in rotation while it throttles takes the alias's whole load during each row eviction. With both groups
+# evicted, the load balancer picks an evicted provider rather than none (types/loadbalancer.rs)
+# [src], so a request can then reach a row that is still out; on the laptop, a 502 the gateway made
+# of a reply it couldn't parse evicted the mock Azure provider, and the next request went to the
+# refused row.
 routes:
 - name: agent
   gateways: consumer
@@ -88,26 +269,106 @@ routes:
     urlRewrite:
       path:
         prefix: /v1
-    # The serving-path allow-list, read after the rewrite: route policies run in a fixed order, the
-    # URL rewrite before the direct response (proxy/httpproxy.rs, apply_request_policies). An exact
-    # path match can't do this: a prefix rewrite needs a prefix match (http/filters.rs).
-    # /v1/models/<id> is left out: no client here reads one model, and the rows don't serve it.
-    directResponse: &not-serving
+    # Read after the rewrite: route policies run in a fixed order, the URL rewrite before the direct
+    # response (proxy/httpproxy.rs, apply_request_policies). An exact path match can't do this: a
+    # prefix rewrite needs a prefix match (http/filters.rs). The first entry whose condition holds
+    # answers:
+    # - /v1/models, the alias alone, in OpenAI's list shape, from the gateway itself, whether the
+    #   row is up or not, so a client that takes the one listed model (go-ai's tier, infer) gets
+    #   the alias during an overflow too;
+    # - any path off the serving allow-list, 404. /v1/models/<id> is left out: no client here reads
+    #   one model.
+    directResponse:
       conditional:
-      - condition: >-
+      - condition: request.path == "/v1/models"
+        status: 200
+        headers:
+          content-type: '"application/json"'
+        body: '{"object":"list","data":[{"id":"agent","object":"model","owned_by":"gateway"}]}'
+      - &not-serving
+        condition: >-
           !(request.path in ["/v1/models", "/v1/chat/completions", "/v1/completions",
           "/v1/messages", "/v1/responses", "/v1/embeddings", "/v1/audio/transcriptions",
           "/v1/audio/translations"])
         status: 404
-    ai:
+    ai: &typed
       routes:
+        /v1/chat/completions: completions
+        /v1/embeddings: embeddings
+        /v1/messages: messages
+        /v1/responses: responses
         "*": detect
+    retry: &retry-503
+      attempts: 2
+      backoff: 20ms
+      codes: [503]
+    localRateLimit: &key-rates
+      conditional:
+      - condition: 'apiKey.name == "bulk"'
+        key: apiKey.name
+        type: requests
+        maxTokens: 600
+        tokensPerFill: 600
+        fillInterval: 60s
+      - key: apiKey.name
+        type: requests
+        maxTokens: 1200
+        tokensPerFill: 1200
+        fillInterval: 60s
   backends:
   - ai:
-      name: agent
-      hostOverride: gb10-1:8000
-      provider:
-        custom: {}
+      groups:
+      - providers:
+        - name: agent-row
+          hostOverride: gb10-1:8000
+          provider:
+            custom:
+              formats: &row-formats
+              - type: completions
+              - type: messages
+              - type: responses
+              - type: embeddings
+          policies:
+            health: &row-health
+              # A failed connection has no reply, so no response.code (proxy/httpproxy.rs,
+              # finalize_attempt_for_retry) [src].
+              unhealthyExpression: '!has(response.code) || response.code == 503'
+              eviction:
+                consecutiveFailures: 2
+                duration: 5s
+            ai: &row-priority
+              transformations:
+                priority: 'apiKey.name == "bulk" ? 10 : 0'
+      - providers:
+        - name: agent-azure
+          hostOverride: '@@secret:azure-account@@.services.ai.azure.com:443'
+          pathPrefix: /openai/v1
+          provider:
+            custom:
+              # gpt-oss-120b, DataZoneStandard: Chat Completions only; Messages is translated to it.
+              model: gpt-oss-120b
+              providerOverride: azure
+              formats:
+              - type: completions
+          policies: &azure-policies
+            health: &azure-health
+              # The row's policy, and a 429 too: Azure answers 429 when a deployment's capacity
+              # is spent, and an Azure group that stays in rotation while it throttles takes an
+              # alias's whole load during each row eviction (benchmark C-agent, 2026-11-16).
+              unhealthyExpression: '!has(response.code) || response.code == 503 || response.code == 429'
+              eviction:
+                consecutiveFailures: 2
+                duration: 5s
+            backendTLS: {}
+            backendAuth:
+              key:
+                value: '@@secret:azure-key@@'
+                location:
+                  header:
+                    name: api-key
+            responseHeaderModifier: &overflow-marker
+              set:
+                x-gateway-overflow: azure
 - name: vision
   gateways: consumer
   matches:
@@ -117,16 +378,43 @@ routes:
     urlRewrite:
       path:
         prefix: /v1
-    directResponse: *not-serving
-    ai:
-      routes:
-        "*": detect
+    directResponse:
+      conditional:
+      - condition: request.path == "/v1/models"
+        status: 200
+        headers:
+          content-type: '"application/json"'
+        body: '{"object":"list","data":[{"id":"vision","object":"model","owned_by":"gateway"}]}'
+      - *not-serving
+    ai: *typed
+    retry: *retry-503
+    localRateLimit: *key-rates
   backends:
   - ai:
-      name: vision
-      hostOverride: gb10-2:8000
-      provider:
-        custom: {}
+      groups:
+      - providers:
+        - name: vision-row
+          hostOverride: gb10-2:8000
+          provider:
+            custom:
+              formats: *row-formats
+          policies:
+            health: *row-health
+            ai: *row-priority
+      - providers:
+        - name: vision-azure
+          hostOverride: '@@secret:azure-account@@.services.ai.azure.com:443'
+          pathPrefix: /openai/v1
+          provider:
+            custom:
+              # gpt-5-mini 2025-08-07, GlobalStandard: Chat Completions and Responses; Messages is
+              # translated to Responses, the first translation listed for it.
+              model: gpt-5-mini
+              providerOverride: azure
+              formats:
+              - type: completions
+              - type: responses
+          policies: *azure-policies
 - name: audio
   gateways: consumer
   matches:
@@ -136,16 +424,41 @@ routes:
     urlRewrite:
       path:
         prefix: /v1
-    directResponse: *not-serving
-    ai:
-      routes:
-        "*": detect
+    directResponse:
+      conditional:
+      - condition: request.path == "/v1/models"
+        status: 200
+        headers:
+          content-type: '"application/json"'
+        body: '{"object":"list","data":[{"id":"audio","object":"model","owned_by":"gateway"}]}'
+      - *not-serving
+    ai: *typed
+    retry: *retry-503
+    localRateLimit: *key-rates
   backends:
   - ai:
-      name: audio
-      hostOverride: framework:8001
-      provider:
-        custom: {}
+      groups:
+      - providers:
+        - name: audio-row
+          hostOverride: framework:8001
+          provider:
+            custom:
+              formats: *row-formats
+          policies:
+            health: *row-health
+      - providers:
+        - name: audio-azure
+          hostOverride: '@@secret:azure-account@@.services.ai.azure.com:443'
+          pathPrefix: /openai/v1
+          provider:
+            custom:
+              # gpt-audio-mini 2025-12-15, GlobalStandard: Chat Completions only, and only with
+              # audio in or out; a text-only chat is refused, a parity gap the finding records.
+              model: gpt-audio-mini
+              providerOverride: azure
+              formats:
+              - type: completions
+          policies: *azure-policies
 - name: embedding
   gateways: consumer
   matches:
@@ -155,13 +468,72 @@ routes:
     urlRewrite:
       path:
         prefix: /v1
-    directResponse: *not-serving
-    ai:
-      routes:
-        "*": detect
+    directResponse:
+      conditional:
+      - condition: request.path == "/v1/models"
+        status: 200
+        headers:
+          content-type: '"application/json"'
+        body: '{"object":"list","data":[{"id":"embedding","object":"model","owned_by":"gateway"}]}'
+      - *not-serving
+    ai: *typed
+    retry: *retry-503
+    # Embedding's limits: the global 34 requests a second (the first rule, with no key, so every
+    # caller shares its one bucket), and a bucket per key. The global bucket holds 34 and gets 34
+    # back each second, so it admits a burst of 34 and then 34 a second, and answers 429 with
+    # Retry-After past it (http/localratelimit.rs; proxy/mod.rs) [src]. Its 429 is the gateway's
+    # own, before any backend, so it evicts nothing and sends nothing to Azure. The per-key bucket
+    # is twice the global, so the global binds first for any one key, and a request either rule
+    # refuses counts against neither (RateLimits::apply) [src]. Embedding's clients send many
+    # small requests a second, so its key buckets refill each second, where the chat routes'
+    # refill each minute (&key-rates).
+    localRateLimit:
+    - type: requests
+      maxTokens: 34
+      tokensPerFill: 34
+      fillInterval: 1s
+    - key: apiKey.name
+      type: requests
+      maxTokens: 68
+      tokensPerFill: 68
+      fillInterval: 1s
   backends:
   - ai:
-      name: embedding
-      hostOverride: framework:8002
-      provider:
-        custom: {}
+      groups:
+      - providers:
+        - name: embedding-row
+          hostOverride: framework:8002
+          provider:
+            custom:
+              formats: *row-formats
+          policies:
+            health: *row-health
+      - providers:
+        - name: embedding-azure
+          hostOverride: '@@secret:azure-account@@.services.ai.azure.com:443'
+          pathPrefix: /openai/v1
+          provider:
+            custom:
+              # text-embedding-3-small, DataZoneStandard: embeddings only.
+              model: text-embedding-3-small
+              providerOverride: azure
+              formats:
+              - type: embeddings
+          policies:
+            health: *azure-health
+            backendTLS: {}
+            backendAuth:
+              key:
+                value: '@@secret:azure-key@@'
+                location:
+                  header:
+                    name: api-key
+            responseHeaderModifier: *overflow-marker
+            # The row's vectors are 768 long (granite-embedding-english-r2), and
+            # text-embedding-3-small's are 1,536 unless asked: every request to Azure is set to 768,
+            # whatever the client sent, so an overflow vector is the row's length. Its values are
+            # still from another vector space; the overflow marker tells a client that stores
+            # vectors to refuse or re-route it.
+            ai:
+              overrides:
+                dimensions: 768

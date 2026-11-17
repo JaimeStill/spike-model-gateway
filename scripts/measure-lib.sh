@@ -7,15 +7,16 @@
 #
 #   source scripts/measure-lib.sh
 #
-#   cell <name> <scenario> <direct|gateway|cap> <alias>
+#   cell <name> <scenario> <direct|gateway|cap> <alias> [<key>]
 #                     one GuideLLM run of bench/<scenario>.yaml against the alias's row (direct)
 #                     or its base URL on the gateway (gateway, cap), http://gb10-2:3000/<alias>/v1
 #                     with the port from gateway/agentgateway/deploy.env, into
-#                     .state/routing/cells/<name>/; on a gateway or cap run, the gateway
-#                     container's CPU and memory sampled on gb10-2. A cap run is a gateway run
-#                     that also samples the row's running and waiting requests from its /metrics,
-#                     read direct from the row, and afterwards reads each of the run's requests
-#                     from the gateway's access log
+#                     .state/priority/cells/<name>/; on a gateway or cap run, the gateway
+#                     container's CPU and memory sampled on gb10-2, and the run sent with the named
+#                     key, bench by default (bulk, go-ai, or architect otherwise). A cap run is a
+#                     gateway run that also samples the row's running and waiting requests from its
+#                     /metrics, read direct from the row, and afterwards reads each of the run's
+#                     requests, those of its own key, from the gateway's access log
 #   summarize <name>  a run's requests and errors, TTFT, ITL and request latency (median, p95),
 #                     and on a gateway run the container's CPU and memory during the benchmark; on
 #                     a cap run, per level, every reply's status, any Retry-After, and the row's
@@ -24,23 +25,43 @@
 #   compare <direct-1> <gateway> <direct-2>
 #                     behavior 7's reading: each figure's spread between the two direct runs
 #                     beside what the gateway run adds over their mean
+#   overflow_read <name>
+#                     benchmark C's reading of a cap run (the priority task's behavior 9), from its
+#                     gateway-requests.tsv and result.json: the replies the row and Azure each
+#                     answered, per status; the 503s the row returned to the client; the requests
+#                     the route retried, and whether any of them reached Azure; the eviction
+#                     windows, an estimate, and their rate a minute; and the time from the
+#                     benchmark's start to the row's first refusal
+#   rtfx <name>...    audio's real-time factor in each named run, per benchmark: each successful
+#                     request's clip seconds over its request time, as median, minimum, and the
+#                     count at 5 or more, the floor (spike-model-layout's bench/levels.jq, its
+#                     method and median)
 #
 # No helper runs a benchmark on its own or chains runs: `cell` runs exactly one.
 #
+# Two runs at once (the priority task's benchmarks A, B, and D): each in its own terminal, each
+# terminal sourcing this file and calling `cell` once, the outer run first and the inner one
+# started inside it once the outer has reached its load. The two runs share nothing but the day's
+# command log, which each appends to a line at a time, and the gateway, which both sample. Two cap
+# runs on one alias each keep only their own key's requests from the access log, so benchmark D's
+# bulk and interactive runs, both on vision, are read apart; on a gateway run, nothing is read
+# from the log.
+#
 # The command log. Each helper call and each command it runs is appended to
-# .state/routing/commands-<YYYY-MM-DD>.log, and printed to stderr, as
+# .state/priority/commands-<YYYY-MM-DD>.log, and printed to stderr, as
 # `+ <ISO time> <host>: <command>`, the form the deploy script prints; what a helper reports
 # follows as `= <ISO time> <helper>: <line>`. The finding's "Commands as run" quotes that log.
 #
-# The key. A gateway run sends the bench key, read from .state/agentgateway/keys/bench, which the
-# deploy creates. It reaches GuideLLM only in its environment, as GUIDELLM__SPEC__BACKEND__API_KEY,
-# read with bash's `$(<file)` inside the run's subshell, with xtrace off there: never in a process's
-# argv, never printed, and logged only as that expression. GuideLLM 0.8.1 holds it as a pydantic
-# SecretStr (OpenAIHTTPBackendArgs.api_key), which every dump of its config writes as "**********",
-# the result JSON's included, and adds the Bearer header only when it sends a request, so no
-# request record carries it. After a gateway run, `cell` searches the run's files for the key,
-# reading the pattern from the key file (`grep -F -f`), and says whether it was found. A direct run
-# sends no key: the rows take none, and the key is the gateway's alone.
+# The key. A gateway run sends the named key, bench unless another is given, read from
+# .state/agentgateway/keys/<key>, which the deploy creates. It reaches GuideLLM only in its
+# environment, as GUIDELLM__SPEC__BACKEND__API_KEY, read with bash's `$(<file)` inside the run's
+# subshell, with xtrace off there: never in a process's argv, never printed, and logged only as
+# that expression. GuideLLM 0.8.1 holds it as a pydantic SecretStr (OpenAIHTTPBackendArgs.api_key),
+# which every dump of its config writes as "**********", the result JSON's included, and adds the
+# Bearer header only when it sends a request, so no request record carries it. After a gateway
+# run, `cell` searches the run's files for the key, reading the pattern from the key file
+# (`grep -F -f`), and says whether it was found. A direct run sends no key: the rows take none, and
+# the key is the gateway's alone.
 #
 # A cap run's statuses and Retry-After. GuideLLM 0.8.1 records a refused request as errored, with
 # its error as `repr` of httpx's HTTPStatusError (scheduler/worker.py), which names the status
@@ -48,9 +69,22 @@
 # successful request passed raise_for_status, so it was 2xx. So the status comes from GuideLLM, and
 # Retry-After from the gateway's access log: after the run, `cell` reads the log lines of the
 # alias's route inside the run's time (`docker logs --timestamps --since --until` on gb10-2) into
-# gateway-requests.tsv, keeping each line's time, status, path, and `retry_after`, a field
-# gateway/agentgateway/config.yaml adds to every line; the caller's address and every other field
-# stay out.
+# gateway-requests.tsv, keeping each line's time, status, path, `retry_after` and `overflow`, two
+# fields gateway/agentgateway/config.yaml adds to every line, `retry.attempt`, the attempt that
+# answered when the route retried, and `key_name`, the key the request was sent with, a third
+# field config.yaml adds; only the run's own key's lines are kept, and a line logged before
+# `key_name` was added is kept whatever its key. The caller's address, the endpoint (an
+# overflow's names the Azure account), and every other field stay out.
+#
+# Benchmark C's reading (overflow_read). Each line is one client request, its last attempt: the
+# row's reply if `overflow` is empty, Azure's if it is "azure". A line with `retry.attempt` n had n
+# earlier attempts refused (a 503 or a failed connection), each to the row unless the row was
+# already evicted. agentgateway logs no eviction and exports no metric of one (v1.7.0,
+# types/loadbalancer.rs), so the eviction windows are estimated from the lines in time order: a
+# window starts at an Azure-answered line that follows a row-answered one. A line's time is when the
+# request ended, so a long stream that started before a window can end inside it: the estimate is
+# coarse, and is labelled so. The row's first refusal is the earliest line with a 503 from the row,
+# a retry, or an Azure answer, timed from the benchmark's start in result.json.
 #
 # Settings, each an environment variable read when a helper runs:
 #   MEASURE_STATS_EVERY  seconds between gateway and row samples (default 5)
@@ -63,8 +97,8 @@ fi
 
 MEASURE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # Relative to the root: every command runs from there, so the log names no home directory.
-MEASURE_STATE=.state/routing
-MEASURE_KEY=.state/agentgateway/keys/bench
+MEASURE_STATE=.state/priority
+MEASURE_KEYS=.state/agentgateway/keys
 MEASURE_GATEWAY_HOST=gb10-2
 
 # The consumer port, deploy.env's AGW_PORT.
@@ -105,12 +139,13 @@ _measure_say() {
 }
 
 cell() {
-  local usage='usage: cell <name> <scenario> <direct|gateway|cap> <alias>'
-  if (($# != 4)); then
+  local usage='usage: cell <name> <scenario> <direct|gateway|cap> <alias> [<key>]'
+  if (($# != 4 && $# != 5)); then
     echo "$usage" >&2
     return 2
   fi
-  local name=$1 scenario=$2 target=$3 alias=$4 url rc
+  local name=$1 scenario=$2 target=$3 alias=$4 key_name=${5:-bench} url rc
+  local key=$MEASURE_KEYS/$key_name
   local dir=$MEASURE_STATE/cells/$name
   if [[ -z ${MEASURE_ROW[$alias]-} ]]; then
     echo "cell: unknown alias $alias (agent, vision, audio, embedding)" >&2
@@ -121,11 +156,18 @@ cell() {
     return 2
   fi
   case $target in
-    direct) url=http://${MEASURE_ROW[$alias]}/v1 ;;
+    direct)
+      url=http://${MEASURE_ROW[$alias]}/v1
+      # A direct run goes past the gateway, which alone takes a key.
+      if (($# == 5)); then
+        echo "cell: a direct run sends no key; drop <key>" >&2
+        return 2
+      fi
+      ;;
     gateway | cap)
       url=http://$MEASURE_GATEWAY_HOST:$AGW_PORT/$alias/v1
-      if [[ ! -s $MEASURE_ROOT/$MEASURE_KEY ]]; then
-        echo "cell: no key at $MEASURE_KEY; run mise run agentgateway-deploy first" >&2
+      if [[ ! $key_name =~ ^[a-z0-9-]+$ || ! -s $MEASURE_ROOT/$key ]]; then
+        echo "cell: no key at $key; run mise run agentgateway-deploy first" >&2
         return 2
       fi
       ;;
@@ -155,7 +197,7 @@ cell() {
     --output "kind=json,path=$dir/result.json"
     --disable-console-interactive)
   local keyed=
-  [[ $target == direct ]] || keyed="GUIDELLM__SPEC__BACKEND__API_KEY=\$(<$MEASURE_KEY) "
+  [[ $target == direct ]] || keyed="GUIDELLM__SPEC__BACKEND__API_KEY=\$(<$key) "
   _measure_log laptop "cell $*"
   _measure_log laptop "${keyed}GUIDELLM__SPEC__BACKEND__TARGET=$url MISE_ENV=bench ${run[*]} > $dir/guidellm.log 2>&1"
   [[ $target == direct ]] ||
@@ -176,7 +218,7 @@ cell() {
       export MISE_ENV=bench GUIDELLM__SPEC__BACKEND__TARGET=$url
       unset GUIDELLM__SPEC__BACKEND__API_KEY
       if [[ $target != direct ]]; then
-        GUIDELLM__SPEC__BACKEND__API_KEY=$(<"$MEASURE_KEY")
+        GUIDELLM__SPEC__BACKEND__API_KEY=$(<"$key")
         export GUIDELLM__SPEC__BACKEND__API_KEY
       fi
       exec "${run[@]}"
@@ -231,7 +273,7 @@ cell() {
   )
   rc=$?
   echo "$rc" >"$MEASURE_ROOT/$dir/exit"
-  [[ $target != cap ]] || _measure_requests "$name" "$alias" "$since" "$(($(date +%s) + 1))"
+  [[ $target != cap ]] || _measure_requests "$name" "$alias" "$key_name" "$since" "$(($(date +%s) + 1))"
   {
     case $rc in
       0) echo "$name: exit 0" ;;
@@ -240,7 +282,7 @@ cell() {
     esac
     # grep's 1 is "not found"; any other failure is no answer, and says so.
     if [[ $target != direct ]]; then
-      grep -rqF -f "$MEASURE_ROOT/$MEASURE_KEY" "$MEASURE_ROOT/$dir" 2>/dev/null
+      grep -rqF -f "$MEASURE_ROOT/$key" "$MEASURE_ROOT/$dir" 2>/dev/null
       case $? in
         0) echo "$name: THE KEY IS IN $dir; delete it before anything is shared" ;;
         1) echo "$name: the key is in none of $dir's files" ;;
@@ -299,26 +341,41 @@ summarize() {
 }
 
 # A cap run's requests as the gateway logged them, read after the run: the access log lines of the
-# alias's route between two epochs, each kept as its time (docker's, UTC), status, path, and the
-# `retry_after` field config.yaml adds, empty when the reply had no Retry-After. The rest of each
-# line, the caller's address among it, is left out. Each alias has its own route, so a line is the
-# alias's by the route the access log names, `route=default/<alias>`.
+# alias's route between two epochs, each kept as its time (docker's, UTC), status, path, the
+# `retry_after` and `overflow` fields config.yaml adds, empty when the reply had neither header;
+# `retry.attempt`, empty when the request wasn't retried; and `key_name`, the key it was sent with.
+# The rest of each line, the caller's address and the endpoint among it, is left out. Each alias
+# has its own route, so a line is the alias's by the route the access log names,
+# `route=default/<alias>`, and the run's by its key, `key_name="<key>"`: a line of another key,
+# such as the other run of benchmark D's pair on the same alias, is left out, and a line with no
+# key_name, logged before config.yaml added it or refused 401, is kept.
 _measure_requests() {
-  local name=$1 alias=$2 since=$3 until=$4
-  local out=$MEASURE_STATE/cells/$name/gateway-requests.tsv
+  local name=$1 alias=$2 key_name=$3 since=$4 until=$5
+  local out=$MEASURE_STATE/cells/$name/gateway-requests.tsv st
   local remote="docker logs --timestamps --since $since --until $until agentgateway 2>&1"
-  _measure_log laptop "ssh -n $MEASURE_GATEWAY_HOST '$remote' | the lines of route=default/$alias as time, status, path, retry_after > $out"
+  _measure_log laptop "ssh -n $MEASURE_GATEWAY_HOST '$remote' | the lines of route=default/$alias and key_name=\"$key_name\" as time, status, path, retry_after, overflow, retry_attempt, key_name > $out"
   {
-    printf 'time\tstatus\tpath\tretry_after\n'
+    printf 'time\tstatus\tpath\tretry_after\toverflow\tretry_attempt\tkey_name\n'
     # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
     ssh -n "$MEASURE_GATEWAY_HOST" "$remote" |
-      awk -v route=" route=default/$alias " 'index($0, route) {
-        st = ""; p = ""; ra = ""
+      awk -v route=" route=default/$alias " -v key="$key_name" 'index($0, route) {
+        st = ""; p = ""; ra = ""; of = ""; rt = ""; kn = ""
+        if (match($0, / key_name="[a-z0-9-]+"/)) kn = substr($0, RSTART + 11, RLENGTH - 12)
+        if (kn != "" && kn != key) next
         if (match($0, / http\.status=[0-9]+/)) st = substr($0, RSTART + 13, RLENGTH - 13)
         if (match($0, / http\.path=[^ ]+/)) p = substr($0, RSTART + 11, RLENGTH - 11)
         if (match($0, / retry_after=[^ ]+/)) ra = substr($0, RSTART + 13, RLENGTH - 13)
-        printf "%s\t%s\t%s\t%s\n", $1, st, p, ra }'
+        if (match($0, / overflow="[a-z]+"/)) of = substr($0, RSTART + 11, RLENGTH - 12)
+        if (match($0, / retry\.attempt=[0-9]+/)) rt = substr($0, RSTART + 15, RLENGTH - 15)
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", $1, st, p, ra, of, rt, kn }'
+    st=${PIPESTATUS[0]}
   } >"$MEASURE_ROOT/$out"
+  # A log that wasn't read would otherwise pass as a run the gateway logged no request of.
+  if ((st != 0)); then
+    echo "$name: reading the gateway log failed (ssh exit $st); $out is not a reading" |
+      _measure_say cell
+    return "$st"
+  fi
   printf '%s: %d request lines from the gateway log\n' "$name" \
     "$(($(wc -l <"$MEASURE_ROOT/$out") - 1))" | _measure_say cell
 }
@@ -404,6 +461,112 @@ compare() {
   _measure_log laptop "compare $*"
   jq -nr --slurpfile d1 "$cells/$1/result.json" --slurpfile g "$cells/$2/result.json" \
     --slurpfile d2 "$cells/$3/result.json" "$_MEASURE_COMPARE_JQ" | _measure_say compare
+}
+
+overflow_read() {
+  local name=${1:?usage: overflow_read <name>}
+  local dir=$MEASURE_ROOT/$MEASURE_STATE/cells/$name start end iso_s iso_e
+  for f in gateway-requests.tsv result.json; do
+    [[ -f $dir/$f ]] || {
+      echo "overflow_read: no $f in $MEASURE_STATE/cells/$name; run it with cell ... cap <alias>" >&2
+      return 2
+    }
+  done
+  if ! head -1 "$dir/gateway-requests.tsv" | grep -q $'\toverflow\t'; then
+    echo "overflow_read: $MEASURE_STATE/cells/$name was read before the overflow column; nothing to read" >&2
+    return 2
+  fi
+  _measure_log laptop "overflow_read $name"
+  start=$(jq '[.benchmarks[].start_time] | min' "$dir/result.json")
+  end=$(jq '[.benchmarks[].end_time] | max' "$dir/result.json")
+  [[ $start =~ ^[0-9]+(\.[0-9]+)?$ && $end =~ ^[0-9]+(\.[0-9]+)?$ ]] || {
+    echo "overflow_read: no benchmark start and end times in $MEASURE_STATE/cells/$name/result.json" >&2
+    return 1
+  }
+  iso_s=$(date -u -d "@${start%.*}" +%Y-%m-%dT%H:%M:%S)
+  iso_e=$(date -u -d "@$((${end%.*} + 1))" +%Y-%m-%dT%H:%M:%S)
+  # The lines inside the benchmark, the gateway's /models lines (GuideLLM's backend check) left out,
+  # in time order; docker's RFC 3339 times, all UTC, sort as text.
+  tail -n +2 "$dir/gateway-requests.tsv" | sort |
+    awk -F'\t' -v s="$iso_s" -v e="$iso_e" -v secs="$(( ${end%.*} - ${start%.*} ))" '
+      substr($1, 1, 19) < s || substr($1, 1, 19) >= e || $3 ~ /\/models$/ { next }
+      {
+        k++; src = ($5 == "azure") ? "azure" : "row"
+        by[src, $2]++; n[src]++
+        if (src == "row" && $2 == 503) row503++
+        if ($6 != "") { retried++; tries += $6; if (src == "azure") rescued++ }
+        if (src == "azure" && last != "azure") windows++
+        last = src
+        if (!first && ((src == "row" && $2 == 503) || $6 != "" || src == "azure")) first = $1
+      }
+      END {
+        if (!k) { print "  no request lines inside the benchmark"; exit }
+        for (x in n) {
+          line = ""
+          for (key in by) { split(key, ks, SUBSEP); if (ks[1] == x) line = line (line ? ", " : "") ks[2] " x" by[key] }
+          printf "  answered by %s: %d (%s)\n", x, n[x], line
+        }
+        printf "  503 from the row to the client: %d\n", row503
+        printf "  retried: %d requests, %d retries; of them answered by Azure: %d, so a refused request %s Azure\n",
+          retried, tries, rescued, (rescued ? "reached" : "did not reach")
+        printf "  eviction windows (estimated from the log order): %d in %d s, %.1f a minute\n",
+          windows, secs, (secs ? windows * 60 / secs : 0)
+        printf "  first refusal: %s\n", (first ? first : "none")
+      }' | while IFS= read -r line; do
+      # The first refusal'"'"'s time, as seconds from the benchmark'"'"'s start.
+      if [[ $line == '  first refusal: '* && $line != *none ]]; then
+        t=${line#'  first refusal: '}
+        line="  first refusal: $(awk -v a="$(date -u -d "$t" +%s.%N)" -v b="$start" 'BEGIN { printf "%.1f", a - b }') s after the benchmark's start ($t)"
+      fi
+      printf '%s\n' "$line"
+    done | { echo "$name: benchmark C"; cat; } | _measure_say overflow_read
+}
+
+# Audio's real-time factor (benchmark A; evidence 5), spike-model-layout's reading, from its
+# bench/levels.jq: each successful request's RTFx is its clip's seconds, GuideLLM's
+# input_metrics.audio_seconds, over its request time, request_end_time - request_start_time; the
+# level's figure is their median, interpolated linearly between the two nearest ranks, beside the
+# minimum and how many reach the floor of 5. A request with no clip is left out. The median, not the
+# mean, is what the floor is judged by: audio's RTFx median at 5 or more.
+# shellcheck disable=SC2016 # jq's variables.
+_MEASURE_RTFX_JQ='
+def r: . * 100 | round / 100;
+def pct($p):
+  sort as $xs | ($xs | length) as $n
+  | if $n == 0 then null
+    else (($n - 1) * $p) as $k | ($k | floor) as $lo | ([$lo + 1, $n - 1] | min) as $hi
+    | $xs[$lo] + ($xs[$hi] - $xs[$lo]) * ($k - $lo)
+    end;
+.benchmarks[] | .config.strategy.streams as $n
+| [.requests.successful[] | select((.input_metrics.audio_seconds // 0) > 0)
+   | .input_metrics.audio_seconds / (.request_end_time - .request_start_time)] as $x
+| if ($x | length) == 0 then "  \($n) streams: no successful request with a clip"
+  else "  \($n) streams: RTFx median \($x | pct(0.5) | r), min \($x | min | r), \([$x[] | select(. >= 5)] | length) of \($x | length) at 5 or more; floor (median >= 5) \(if ($x | pct(0.5)) >= 5 then "meets" else "misses" end)"
+  end'
+
+rtfx() {
+  (($# >= 1)) || {
+    echo 'usage: rtfx <name>...' >&2
+    return 2
+  }
+  local cells=$MEASURE_ROOT/$MEASURE_STATE/cells n
+  for n in "$@"; do
+    [[ -f $cells/$n/result.json ]] || {
+      echo "rtfx: no result.json for $n" >&2
+      return 2
+    }
+  done
+  _measure_log laptop "rtfx $*"
+  # A run jq can't read fails the call, rather than leaving a name with no figure under it.
+  {
+    local rc=0
+    for n in "$@"; do
+      echo "$n:"
+      jq -r "$_MEASURE_RTFX_JQ" "$cells/$n/result.json" || rc=1
+    done
+    ((rc == 0))
+  } | _measure_say rtfx
+  return "${PIPESTATUS[0]}"
 }
 
 mkdir -p "$MEASURE_ROOT/$MEASURE_STATE/cells"

@@ -9,6 +9,11 @@
 # base URL, in GUIDELLM__SPEC__BACKEND__TARGET, and for a gateway run the key in
 # GUIDELLM__SPEC__BACKEND__API_KEY; and the backend check reads /v1/models (below). Run from the
 # repository root.
+#
+# The priority task's benchmark B runs it with the go-ai key inside bulk-vision-150.yaml, and
+# alone, direct and through the gateway, as B's anchors. Azure: none. Its 4 sessions stay under
+# the agent row's queue limit of 24 (twice its cap of 12, --max-num-queued-reqs), so the row never
+# refuses with 503 and nothing overflows to gpt-oss-120b while the rows are up.
 spec:
   backend:
     kind: openai_http

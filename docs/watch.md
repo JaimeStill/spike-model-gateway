@@ -114,12 +114,12 @@ and the project has acted on it; the finding or decision that acted keeps the re
   the schema moves it to removed.
 - **Fallback:** the `llm` form trialled in task `routing`
   ([`docs/findings/routing.md`](findings/routing.md), "The trial"): one alias per port, each model
-  authorized on its own port by `proxy.listener.name`. On a trigger, check what this project, and
-  what `priority` plans, still needs from route `ai`, such as route retries or `ai.groups`
+  authorized on its own port by `proxy.listener.name`. On a trigger, check what this project still
+  needs from route `ai`, such as route retries or `ai.groups`
   ([`docs/findings/agentgateway.md`](findings/agentgateway.md), "The paper inventory"), and record
   what `llm` must gain for parity.
 - **State:** watching.
-- **Last checked:** 2026-11-16T16:34Z, `mise run watch`: every line as recorded, at v1.7.0, the
+- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: every line as recorded, at v1.7.0, the
   latest release.
 
 ## agentgateway `llm` serving several base URLs on one port
@@ -151,7 +151,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
   moving the gateway to it: the same `/<alias>/v1` base URLs, served by the `llm` section, against
   re-checking its body handling (the always-passthrough entry below).
 - **State:** watching.
-- **Last checked:** 2026-11-16T16:34Z, `mise run watch`: as recorded, at v1.7.0.
+- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: as recorded, at v1.7.0.
 
 ## agentgateway always-passthrough for `llm` models
 
@@ -164,17 +164,95 @@ and the project has acted on it; the finding or decision that acted keeps the re
   and adds `stream_options.include_usage` to streams
   ([`docs/findings/routing.md`](findings/routing.md), "Behavior 2"). #4185 restores `passthrough`
   to its documented meaning, always pass through, and is marked breaking.
-- **Evidence:** the pull request's description; v1.7.0's tag is behind its merge commit.
+- **Evidence:** the pull request's description; v1.7.0's tag is behind its merge commit. The
+  typed parsing has a cost on route `ai` too. On overflow, the gateway refuses audio in a
+  Responses request itself, with 400 "failed to parse Responses request: data did not match any
+  variant of untagged enum InputParam": translating the request for the Azure provider's Chat
+  Completions parses an input part the typed form lacks. With the rows up, the row's provider
+  lists `responses`, and the request passes through
+  ([`docs/findings/priority.md`](findings/priority.md), "The tiers on Azure").
 - **Upstream:**
   - `upstream agentgateway/agentgateway#4185 = merged` always-passthrough restored.
 - **Watched:**
   - `release-contains agentgateway/agentgateway 2a7c2ec473a221c643ff5c3adab77351bac65e71 = absent`
     the latest release carries the merge.
 - **Parity:** the release carrying it, read in its notes for what `passthrough: detect` now does.
-- **Action:** this applies if the gateway moves to `llm`, or if its `ai.routes` names a typed
-  route type in place of `detect`. Before either, on the release carrying it, re-check the gateway's body handling on every alias: the formats each model
-  lists, whether streams still gain `include_usage`, and whether usage is still read for the access
+- **Action:** this applies to the typed route types the gateway's `ai.routes` name (Chat
+  Completions, Messages, Responses, and embeddings), and to the `llm` form if the gateway moves to
+  it. On the release carrying it, re-check the gateway's body handling on every alias: the formats
+  each provider lists, whether streams still gain `include_usage`, and whether usage is still read for the access
   log and for `priority`'s budgets; then decide `passthrough` per model.
 - **State:** watching.
-- **Last checked:** 2026-11-16T16:34Z, `mise run watch`: as recorded; v1.7.0, the latest
+- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: as recorded; v1.7.0, the latest
   release, doesn't carry the merge.
+
+## agentgateway UI links Logs and Analytics only with an `llm` section
+
+- **Kind:** capability.
+- **Dependency:** agentgateway, `agentgateway/agentgateway`, as above.
+- **Wants:** the UI's sidebar linking its Logs and Analytics pages whenever the request log is kept
+  (`frontendPolicies.accessLog.database`), whatever form the routes take. On this config, route
+  `ai` backends and no `llm` section, both pages work but the sidebar doesn't link them, so they
+  load only by URL, at `/ui/llm/logs` and `/ui/llm/analytics`.
+- **Evidence:** at v1.7.0 the sidebar shows its LLM pages only when `hasLlm`, which is
+  `Boolean(config.data.llm)`, true only when the config has an `llm` section
+  (`ui/src/components/Shell.tsx`, 102). The priority task's walkthrough, step 5, found no link and
+  loaded both pages by URL ([`docs/findings/priority.md`](findings/priority.md), "Results").
+- **Upstream:** agentgateway#3860 reports the same symptom in Kubernetes mode (the pages reachable
+  by URL, missing from the navigation), with a maintainer's comment that logging and analytics were
+  designed for standalone. Nothing upstream names standalone route `ai`; the facts above are for
+  the architect to add there, or to file, in their own words.
+  - `upstream agentgateway/agentgateway#3860 = open` Logs and Analytics missing from the
+    navigation, Kubernetes mode.
+- **Watched:**
+  - `text agentgateway/agentgateway ui/src/components/Shell.tsx Boolean(config.data.llm) = present`
+    the sidebar's condition at the latest release; its absence is the change to read.
+- **Parity:** a release whose sidebar links Logs and Analytics on a config with a request log and
+  no `llm` section.
+- **Action:** on that release, drop the by-URL note from the walkthrough's step 5 and from
+  `answer`'s gateway document.
+- **State:** watching.
+- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: as recorded, at v1.7.0.
+
+## agentgateway budgets over a sliding window
+
+- **Kind:** capability.
+- **Dependency:** agentgateway, `agentgateway/agentgateway`, as above.
+- **Wants:** a token budget over a sliding window, so a key's spend is counted over the last hour
+  whenever it is read. At v1.7.0 `rolling: 1h` is a fixed window, aligned to the Unix epoch, so
+  each UTC clock hour: a count starts again at each hour, a key can spend twice its budget across
+  an hour's boundary, and a Block's `Retry-After` is the time to the next hour
+  ([`gateway/agentgateway/config.yaml`](../gateway/agentgateway/config.yaml), "The window").
+- **Evidence:** the priority task's budget probes: bulk's Block answered `retry-after: 2609`, the
+  seconds left in the clock hour, and the walkthrough's step 4 found bulk's count started again
+  at the hour ([`docs/findings/priority.md`](findings/priority.md), "bulk's budget Block (behavior
+  15)" and "Results"). The architect decided at review that a sliding window is a want for
+  `answer`'s gateway document.
+- **Upstream:** no upstream item. A search of agentgateway's issues and pull requests at review
+  found none asking for a sliding budget window; #3970 (merged) added budgets that never refresh,
+  a different change.
+- **Parity:** a release whose budget takes a sliding window, read in its schema and notes.
+- **Action:** weigh moving the budgets to it, and update `answer`'s gateway document.
+- **State:** watching.
+- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: the entry listed, with no line to read.
+
+## agentgateway eviction growth without a cap
+
+- **Kind:** other.
+- **Dependency:** agentgateway, `agentgateway/agentgateway`, as above.
+- **Wants:** an upper bound on how long a repeatedly evicted endpoint stays out. At v1.7.0 each
+  eviction lasts its `duration` times the number of evictions so far, 5 s, 10 s, 15 s on, with no
+  cap, until a config reload builds the backends again and clears the count (`http/health.rs`,
+  read in the source). The eviction fields at v1.7.0 are `duration`, `restoreHealth`,
+  `consecutiveFailures`, and `healthThreshold` (`schema/config.md`); none bounds the growth.
+- **Evidence:** [`gateway/agentgateway/config.yaml`](../gateway/agentgateway/config.yaml),
+  `&row-health`; the priority task's finding, "Benchmark C-agent (behavior 9)": a row under
+  saturation is evicted again and again, so after a long outage or a long overload it can stay
+  out for minutes after it is back, sending its alias to Azure.
+- **Upstream:** no upstream item. A search at review found only fixes to the count (#1912, merged:
+  an ejection is counted only when a new window starts), and no issue asking for a bound.
+- **Action:** if a release bounds it, set the bound on every row and Azure provider; until then, a
+  deploy (a reload) is how a row is returned at once, and `answer`'s gateway document records the
+  gap.
+- **State:** watching.
+- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: the entry listed, with no line to read.

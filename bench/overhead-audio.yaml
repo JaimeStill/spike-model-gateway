@@ -8,6 +8,11 @@
 # GUIDELLM__SPEC__BACKEND__TARGET, and for a gateway run the key in
 # GUIDELLM__SPEC__BACKEND__API_KEY; and the backend check reads /v1/models (below). It needs
 # GuideLLM's audio extra, which mise.bench.toml installs. Run from the repository root.
+#
+# The priority task's benchmark A runs it with the go-ai key inside limited-embed.yaml, and alone,
+# direct and through the gateway, as A's anchors; `rtfx` reads each. Azure: none. Its 4 streams stay
+# under the audio row's queue limit of 8 (twice its cap of 4, --max-num-queued-reqs), so the row
+# never refuses with 503 and nothing overflows to gpt-audio-mini while the rows are up.
 spec:
   backend:
     kind: openai_http

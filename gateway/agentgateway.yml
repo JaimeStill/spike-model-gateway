@@ -1,0 +1,45 @@
+# agentgateway, from the image deploy.env pins (AGW_IMAGE, read here from the project's .env, which
+# the deploy copies from deploy.env), as the deploy ran it before the compose project. Two
+# exceptions to the compose convention, both recorded in docs/findings/priority.md:
+#
+# - The image is pulled, not built: agentgateway's image pin stays in deploy.env, where the deploy
+#   validates a config copy with it and `mise run currency` compares it with agentgateway's latest
+#   release.
+# - The config is bind-mounted, read-only, not baked into an image. The deploy renders it on the
+#   laptop with each key's hash and each secret substituted, so it can't be committed into a build
+#   context, and agentgateway reloads it in place when a new copy is moved in, so a config-only
+#   deploy needs no restart. The directory is mounted, not the file, so the rename that moves a
+#   copy into place reaches the container.
+#
+# Fields under the config's top-level `config` are read once, at start, so a change there needs a
+# restart: compose.sh hashes that section into the spike.config-section label, and a changed label
+# makes `up` create the container again.
+services:
+  agentgateway:
+    image: ${AGW_IMAGE:?}
+    # A fixed name, as the deploy gave it before: the step helpers read `docker stats agentgateway`
+    # and `docker logs agentgateway` on gb10-2.
+    container_name: agentgateway
+    command: ["-f", "/config/config.yaml"]
+    # The deploying user, so the container reads the config it owns and writes nothing as root.
+    user: ${AGW_USER:?}
+    restart: unless-stopped
+    # The consumer port on gb10-2's tailnet address, and the UI's on its loopback, reached through
+    # an SSH tunnel.
+    ports:
+      - "${AGW_ADDR:?}:${AGW_PORT:?}:${AGW_PORT:?}"
+      - "127.0.0.1:${AGW_UI_PORT:?}:${AGW_UI_PORT:?}"
+    volumes:
+      - ./agentgateway:/config:ro
+    # gb10-2 resolves names through systemd-resolved's stub (127.0.0.53), which a container can't
+    # reach, so docker gives it an outside resolver that doesn't know the tailnet's short names. Each
+    # row's host is added by its tailnet address, looked up on gb10-2 by compose.sh.
+    extra_hosts:
+      - "gb10-1:${GB10_1_ADDR:?}"
+      - "gb10-2:${GB10_2_ADDR:?}"
+      - "framework:${FRAMEWORK_ADDR:?}"
+    labels:
+      spike.config-section: ${AGW_CONFIG_SECTION:?}
+    depends_on:
+      postgres:
+        condition: service_healthy

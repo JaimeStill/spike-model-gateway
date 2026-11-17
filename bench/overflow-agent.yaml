@@ -1,0 +1,46 @@
+# C-agent, benchmark C's agent cell (the priority task's behavior 9; evidence 7): the agent row,
+# gpt-oss-120b with FP8 KV (agent on gb10-1's 8000), through the gateway only, at 28 concurrent for
+# 60 s: past the 24 the row holds before it refuses (twice its cap of 12 in flight,
+# --max-num-queued-reqs), so the row answers 503, two in a row evict it for 5 s, then 5 s times
+# the evictions so far, with no cap (config.yaml, &row-health), and the gateway sends the agent
+# alias to its Azure AI Foundry deployment, gpt-oss-120b, while it is out. The cell
+# reads 503s from the row, the requests Azure answered, whether a refused request reached Azure,
+# and the eviction windows a minute (overflow_read, scripts/measure-lib.sh). Every request Azure
+# answers counts against the task's cap of 300 (azure_count, scripts/clients-lib.sh).
+#
+# Sized to Azure's capacity (the slice 2 escalation, docs/findings/priority.md): the deployment has
+# 50 units, about 50,000 tokens a minute, which O-agent's sessions (8,192 prompt tokens to start)
+# would pass within seconds of an overflow. So each request is short, and the row fills on
+# concurrency, not tokens: one turn, 512 synthetic prompt tokens and 128 output tokens, the next
+# request sent when a reply ends.
+#
+# The cell stops early if Azure answers 429. No GuideLLM 0.8.1 constraint can: max_errors and the
+# error-rate constraints count every errored request, and the row's 503s are errors too, with no
+# status code to tell them apart. So the session watches azure_count, which flags any 429 from
+# Azure, or the access log, and interrupts the run by hand.
+#
+# The model is the alias, agent, given on the command line with its tokenizer (openai/gpt-oss-120b)
+# by `cell`, which sets the target, the gateway's base URL, in GUIDELLM__SPEC__BACKEND__TARGET, the
+# bench key in GUIDELLM__SPEC__BACKEND__API_KEY, and the run's own seed. Run from the repository
+# root.
+spec:
+  backend:
+    kind: openai_http
+    request_format: /v1/chat/completions
+    # GuideLLM checks the backend before a run with GET <target>/health, the target's /v1 cut off.
+    # Through the gateway that is /agent/health, which no route serves (404), so the check reads
+    # /v1/models instead, which the gateway answers itself and which also proves the key before any
+    # load is sent.
+    api_routes:
+      /health: v1/models
+  profile:
+    kind: concurrent
+    streams: [28]
+  data:
+    - kind: synthetic_text
+      prompt_tokens: 512
+      output_tokens: 128
+  # The level stops at 60 s; the requests in flight then are counted incomplete.
+  constraints:
+    - kind: max_duration
+      seconds: 60
