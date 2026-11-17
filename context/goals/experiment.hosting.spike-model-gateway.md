@@ -469,6 +469,11 @@ slices 4/4 committed (slices 1–3 done; slice 4 walkthrough run by the architec
 - priority: each Azure provider is also evicted on 429 (`&azure-health`: 503, 429, or a failed connection, 2 in a row, 5 s), so a throttling Azure leaves rotation (architect, 2026-11-16, escalation).
 - priority: the Azure cap of 300 counts Azure's 2xx and its 4xx other than 429. 429s are reported separately, since Azure refuses them without processing. The count after C-agent is 180: 81 before it and its 99 400s (architect, 2026-11-16, escalation). Amends behavior 18.
 - priority: Azure stream incompatibilities in go-ai are fixed at their root in a v1.ai.client hotfix task that blocks v1.ai.client's remaining tasks, never by a gateway transformation (architect, 2026-11-16).
+- priority: budgets use agentgateway v1.7.0's `rolling: 1h`, a fixed window per UTC clock hour; v1.7.0 has no sliding window. Recorded as a finding and a watch entry, with a sliding window as a want for `answer`'s gateway document (architect, 2026-11-17, review escalation). Amends behavior 15.
+- priority: the route retry's `attempts: 2` means 2 retries, so 3 sends (architect, 2026-11-17, review escalation). Amends behavior 9.
+- priority: go-ai's two audio tests (TestAudioInResponsesRefused, TestTranscribeChat) are rerun with the rows down after warming the audio row's eviction, about 6 Azure requests, so behavior 10 records Azure's answer rather than the row's 503 (architect, 2026-11-17, review escalation).
+- priority: currency at review: the gateway's uv moves to 0.13.9, and the engines are bumped too (architect, 2026-11-17, review escalation): uv 0.13.9, vLLM v0.33.0 -> v0.34.0, and llama.cpp b12098 -> b12464, ending the hold. This needs a second spike-model-engines `host/` PR, row restarts, and a post-upgrade smoke check: queue-limit bursts, the pass-through matrix, and the tiers. The task's benchmarks ran on v0.33.0 and are not rerun; the finding says so.
+- priority: the Postgres password is rotated, since a reviewer's diff printed it into a local transcript. The deploy no longer fills secret markers in comments (architect, 2026-11-17, review escalation).
 
 ## Pending edits
 
