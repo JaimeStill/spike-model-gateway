@@ -1,6 +1,6 @@
 # goal · experiment.hosting.spike-model-gateway
 
-- **State:** building
+- **State:** brief ready
 - **Task:** priority
 - **Branch:** priority
 
@@ -251,7 +251,7 @@ Door          two-way, except what reached Azure:
 
 ## Progress
 
-slices 4/4 committed (all slices done) · standards ✓ (47e2296, 3698c32, 2dce759) · spec: 9 gaps, closing (e1acb6b; review readings logged 06:10; engines PR #19 merged, rows on vLLM v0.34.0 at 06:39:55, smoke check passed: bursts 24/1, 32/1, 8/1, matrix, go-ai 20/0/1, infer 13/0/1; audio rerun 06:29: TestTranscribeChat passes on Azure, TestAudioInResponsesRefused refused by the gateway's Responses parser (400, InputParam); Postgres password rotated 06:19; watch passes; Azure 189/300; open: Postgres still recreated on every deploy, finding placeholders) · editor —
+slices 4/4 committed · standards ✓ · spec ✓ (13 gaps closed) · editor ✓
 
 ## Decisions
 
