@@ -1,14 +1,14 @@
 # goal · experiment.hosting.spike-model-gateway
 
-- **State:** brief ready
-- **Task:** priority
-- **Branch:** priority
+- **State:** idle
+- **Task:** none
+- **Branch:** none
 
 ## Tasks
 
 1. [x] agentgateway
 2. [x] routing
-3. [ ] priority
+3. [x] priority
 4. [ ] answer
 
 ## Task brief · priority
@@ -249,9 +249,6 @@ Door          two-way, except what reached Azure:
               under its data-processing terms.
 ```
 
-## Progress
-
-slices 4/4 committed · standards ✓ · spec ✓ (13 gaps closed) · editor ✓
 
 ## Decisions
 
