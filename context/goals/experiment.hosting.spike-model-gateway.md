@@ -251,7 +251,7 @@ Door          two-way, except what reached Azure:
 
 ## Progress
 
-slices 3/4 committed (slices 1–2 done; slice 3: a69766b and 4cb9e52 deployed 16:15:59 on a direct tailnet path; behaviors 13–17 shown live; A: audio RTFx median 5.38 beside embedding held to 34/s, anchors 5.28 direct and 6.46 gateway; B: agent ITL median 47.05 ms beside bulk vision, anchors 47.63 and 48.54; D: interactive vision median latency 10.47 s with priority against 11.87 s flat, TTFT 2.61 against 3.55 s, missing the 10 s mark by 0.47 s on 7 requests; Azure 0 in slice 3, count 180/300; next: slice 3 finding section and the slice 4 walkthrough) · standards — · spec — · editor —
+slices 4/4 committed (slices 1–3 done; slice 4 walkthrough run by the architect 2026-11-17 05:37–05:52: /models, a rows-down overflow, a budget Block, the UI Logs and Analytics pages (reached by URL only, since the sidebar links them only when an `llm` section exists), and the Framework reboot: health 05:51:49 (embedding) and 05:52:34 (audio), first row answers 05:52:42 and 05:52:43, unlock reported 05:51:45; Azure count 183/300; walkthrough Results to fill in) · standards — · spec — · editor —
 
 ## Decisions
 
