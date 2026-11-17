@@ -475,7 +475,7 @@ slices 4/4 committed (slices 1–3 done; slice 4 walkthrough run by the architec
 - coordinator · experiment.hosting intake: spike-model-engines' `docs/engines/vllm/api.md` and
   `models.md` are stale since its pull request #17: requests to the four standing rows now name the
   alias, while the guide's examples send the Hugging Face repository. This spike changes only
-  `host/` there, so the fix is left to the experiment's intake.
+  `host/` there, so the fix is left to the experiment's intake. The same guide's rows table (`docs/engines/vllm/models.md`, "The rows") doesn't list the four standing rows either. Since task `priority`'s PR #18 it also doesn't show their `--max-num-queued-reqs` and `--scheduling-policy priority` flags (standards review, 2026-11-17).
 - coordinator · v1.ai.hosting: the gateway runs route `ai` backends, the form agentgateway's docs
   recommend for path-based LLM routing. The UI labels them "legacy", and since 1.7 the Kubernetes
   model form is called the recommended one (#4307); agentgateway has no deprecation policy (#2767,
