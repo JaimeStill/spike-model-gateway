@@ -284,7 +284,10 @@ Sync          coordinator:
 
 ## Progress
 
-- slice 1 clients: next
+- slice 1 clients: done (33b1d34, 5e7c70b, 494fc50, 3bc100a, f8c028d). Rows-up tiers pass;
+  every priority discrepancy revalidated as expected (the 16-token Messages stall no longer
+  occurs); the four retry cases pass with cross-checks; Azure 48 of 80, no 429.
+- slice 2 traces: next
 
 ## Decisions
 
@@ -573,6 +576,10 @@ Sync          coordinator:
   2026-11-18).
 - answer: every priority discrepancy is revalidated at v0.2.0 before the answer completes
   (architect, 2026-11-18).
+- answer: the three Critical Dell firmware upgrades (BIOS 5.0.0, EC 0x02000d00, PD 0x00000519)
+  were applied to both GB10s at session start, gb10-1 first (architect, 2026-11-18, escalation 1).
+- answer: rate-limit-agent's bucket moved into the agent route's own `conditional` rate limits,
+  since the route's `localRateLimit` replaced the overlay's top-level policy (session, slice 1).
 
 ## Pending edits
 
