@@ -108,7 +108,8 @@ The experiment's rules, in `ai-hosting.md`, govern every session. In short:
   Secrets (Postgres's password, the Azure account's key and names) are markers in the config, filled
   in the same copy from untracked files.
 - **Probe overlays:** `gateway/agentgateway/probes/` holds one-off config changes that the deploy
-  applies to the copy it sends: `rate-limit-agent`, a request-rate limit on the agent route alone;
+  applies to the copy it sends: `rate-limit-agent`, a request-rate limit on the agent route (and vision's and audio's, which
+  share its rules);
   `in-flight-1`, the in-flight limit at 1; `key-header`, keys read from `x-api-key`; `rows-down`,
   every row's provider at a closed port, so each alias overflows to Azure; `bulk-rate-low` and
   `bulk-budget-low`, bulk's request bucket and token budget lowered; and `priority-flat`, every

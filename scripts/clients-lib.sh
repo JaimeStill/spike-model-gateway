@@ -128,8 +128,10 @@
 # request, its last attempt: an Azure 503 that the route retried leaves no line of its own. The log
 # lasts as long as the container, which compose recreates only when the config's `config` section
 # or the stack changes, so the count is read after each step, not once at the end. What counts
-# toward the cap of 300 is Azure's 2xx and its 4xx other than 429; its 429s, refused without being
-# processed, are printed apart (the architect's decision after benchmark C-agent, 2026-11-16).
+# toward the cap is Azure's 2xx and its 4xx other than 429; its 429s, refused without being
+# processed, are printed apart (the architect's decision after benchmark C-agent, 2026-11-16). The
+# cap is the answer task's, 80 in the task (priority's was 300); azure_count prints one step's
+# count, and the finding sums the steps.
 #
 # Budgets and the request log (the priority task's behaviors 15 and 16). budget_status reads
 # agentgateway's own count, which the UI serves at /api/budgets/status, filtered by key name
@@ -585,7 +587,7 @@ azure_count() {
           for (k in status) { split(k, ks, SUBSEP); if (ks[1] == a) line = line (line ? ", " : "") ks[2] " x" status[k] }
           printf "  %s (%s): %d%s%s\n", a, dep[a], per[a], (line ? ": " line : ""), (unanswered[a] ? sprintf("; %d sent with no reply from Azure", unanswered[a]) : "")
         }
-        printf "  toward the cap of 300: %d (2xx, and 4xx other than 429); 429, reported apart: %d\n", counted, limited
+        printf "  toward the cap of 80: %d (2xx, and 4xx other than 429); 429, reported apart: %d\n", counted, limited
         if (limited) printf "  STOP: Azure answered 429 %d times; the task stops and escalates\n", limited
       }' <<<"$log" | _clients_say azure_count
   return "${PIPESTATUS[0]}"

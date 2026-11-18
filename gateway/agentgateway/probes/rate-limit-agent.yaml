@@ -1,26 +1,26 @@
-# The 429 probe (the agentgateway task's behavior 9): a local request-rate limit on the agent route
-# alone, small enough that a handful of requests trips it. Its bucket holds 2 requests and gets 2
-# back every 10 s, so the third request within a 10 s window answers 429 with `retry-after` (the
-# seconds to the next refill, at least 1) and `x-ratelimit-limit`, `-remaining`, and `-reset`; an
-# admitted reply carries the `x-ratelimit-*` headers too (crates/agentgateway/src/proxy/mod.rs,
-# ProxyError's response; http/localratelimit.rs). No `key`, so every caller of the agent route
-# shares the one bucket. A top-level policy attached to the route, so config.yaml's route is
-# untouched; the route's name is `agent` in the `default` namespace, as the access log's
-# `route=default/agent` shows. Applied by `scripts/agentgateway-deploy.sh rate-limit-agent`,
-# removed by a deploy without it; each reply's Retry-After is in the access log without an overlay
-# (config.yaml).
-#@ append
-policies:
-- name:
-    name: probe-rate-limit-agent
-    namespace: default
-  target:
-    route:
-      name: agent
-      namespace: default
-  policy:
-    localRateLimit:
-    - type: requests
-      maxTokens: 2
-      tokensPerFill: 2
-      fillInterval: 10s
+# The 429 probe (the agentgateway task's behavior 9, and the answer task's retry case
+# rate-limit-agent): a local request-rate limit on the agent route, small enough that a handful of
+# requests trips it. Its bucket holds 2 requests and gets 2 back every 10 s, so the third request
+# within a 10 s window answers 429 with `retry-after` (the seconds to the next refill, at least 1)
+# and `x-ratelimit-limit`, `-remaining`, and `-reset`; an admitted reply carries the
+# `x-ratelimit-*` headers too (crates/agentgateway/src/proxy/mod.rs, ProxyError's response;
+# http/localratelimit.rs). No `key`, so every caller of the route shares the one bucket.
+#
+# It is the first entry of the route's own `localRateLimit` (&key-rates in config.yaml), its
+# condition always true, so every request's bucket is this one, ahead of the per-key entries (the
+# first entry whose condition holds is the request's); the config's check refuses an entry with no
+# condition anywhere but last. A top-level policy attached to route default/agent, the
+# probe's form before the per-key buckets, no longer applies: the route's inline `localRateLimit`
+# takes its place, and every reply carried the go-ai key's bucket, x-ratelimit-limit 1200 (the
+# answer task, 2026-11-18). The vision and audio routes alias &key-rates, so the probe limits each
+# of them too, each route with a bucket of its own; the retry case sends to agent alone. Applied
+# by `scripts/agentgateway-deploy.sh rate-limit-agent`, removed by a deploy without it. Its 429 is
+# the gateway's own, so it evicts nothing and sends nothing to Azure; each reply's Retry-After is
+# in the access log without an overlay (config.yaml).
+#@ replace       - condition: 'apiKey.name == "bulk"'
+      - condition: 'true'
+        type: requests
+        maxTokens: 2
+        tokensPerFill: 2
+        fillInterval: 10s
+      - condition: 'apiKey.name == "bulk"'
