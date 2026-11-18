@@ -25,10 +25,13 @@ services:
     user: ${AGW_USER:?}
     restart: unless-stopped
     # The consumer port on gb10-2's tailnet address, and the UI's on its loopback, reached through
-    # an SSH tunnel.
+    # an SSH tunnel. The stats port, 15020, agentgateway's Prometheus metrics, on the loopback too,
+    # read over SSH: requests_shed counts the in-flight limit's refusals, which leave no access log
+    # line (scripts/clients-lib.sh, requests_shed).
     ports:
       - "${AGW_ADDR:?}:${AGW_PORT:?}:${AGW_PORT:?}"
       - "127.0.0.1:${AGW_UI_PORT:?}:${AGW_UI_PORT:?}"
+      - "127.0.0.1:15020:15020"
     volumes:
       - ./agentgateway:/config:ro
     # gb10-2 resolves names through systemd-resolved's stub (127.0.0.53), which a container can't
