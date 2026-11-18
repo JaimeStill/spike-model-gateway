@@ -7,9 +7,11 @@ jq = "1.8.2"
 shellcheck = "0.11.0"
 # Lists an image's tags for `mise run currency`, which compares each compose Dockerfile's FROM pin.
 crane = "0.22.1"
+# The retry test's module (retry/), which `mise run check` vets and tests.
+go = "1.27.4"
 
 [tasks.check]
-description = "Shellcheck every tracked shell script and resolve every relative Markdown link; reads no network, writes nothing"
+description = "Shellcheck every tracked shell script, resolve every relative Markdown link, and vet and test the retry module; reads no network but the Go module proxy on a cold cache, writes nothing tracked"
 run = "scripts/check.sh"
 
 [tasks.currency]
