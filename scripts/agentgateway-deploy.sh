@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Deploys the gateway's compose project, agentgateway and its Postgres (gateway/compose.yml), to
-# gb10-2 from the laptop over Tailscale SSH. Idempotent. It creates any consumer key config.yaml
-# names that this machine lacks, and Postgres's password if this machine lacks it, renders the
-# config with each key's hash and each secret substituted, copies the compose project to ~/gateway
-# on gb10-2 and the rendered config beside the live one, pulls the pinned image if gb10-2 lacks it,
+# Deploys the gateway's compose project, agentgateway, its Postgres, and its traces' Collector,
+# Tempo, and Grafana (gateway/compose.yml), to gb10-2 from the laptop over Tailscale SSH.
+# Idempotent. It creates any consumer key config.yaml names that this machine lacks, and
+# Postgres's password if this machine lacks it, renders the config with each key's hash and each
+# secret substituted, copies the compose project to ~/gateway on gb10-2 and the rendered config
+# beside the live one, pulls the pinned image if gb10-2 lacks it,
 # validates the copy with that image, and moves it into place, where agentgateway reloads it with
 # no restart. It then runs `docker compose up --detach --wait --build` there, through
 # gateway/compose.sh, which creates a container again only when its image, build, or settings
@@ -252,8 +253,10 @@ fi
 on_host 'mkdir -p ~/gateway/agentgateway'
 
 # The compose project, as gateway/ holds it, with deploy.env as the project's .env, the values its
-# compose files read; the rendered config and Postgres's env file follow, each its own copy.
-project=(compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env)
+# compose files read; the rendered config and Postgres's env file follow, each its own copy. The
+# trace services' build contexts go whole, each directory as the image copies it.
+project=(compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env
+  otel-collector.yml otel-collector tempo.yml tempo grafana.yml grafana)
 on_laptop "tar -C gateway --transform 's,^agentgateway/deploy.env\$,.env,' -cf - ${project[*]} | ssh $host 'tar -C ~/gateway -xf -'"
 tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - "${project[@]}" |
   ssh "$host" 'tar -C ~/gateway -xf -'

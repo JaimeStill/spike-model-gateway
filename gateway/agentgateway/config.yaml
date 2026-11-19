@@ -38,6 +38,23 @@ config:
   # untracked under .state/agentgateway/. A comment never holds a marker: the deploy refuses one.
   database:
     url: postgres://agentgateway:@@secret:postgres-password@@@postgres:5432/agentgateway
+  # Traces (the answer task's behavior 10): a span per request, exported over OTLP gRPC to the
+  # compose project's OpenTelemetry Collector, reached by its service name on the project's
+  # network (gateway/otel-collector.yml), which forwards it to Tempo. randomSampling starts a trace
+  # for every request that arrives without one; one that arrives with a sampled traceparent is
+  # traced under it, clientSampling's default. agentgateway sends the request's traceparent on to
+  # the row, whose own span is then its child when the row traces (spike-model-engines'
+  # host/vllm.env, VLLM_TRACE). No prompt or completion content is added: agentgateway sends none
+  # by default (its examples/llm-telemetry/tracing/openllmetry.yaml at v1.7.0: "By default, prompt
+  # and completions are not sent"), and this config adds no tracing field and no
+  # frontendPolicies.tracing attribute. A span may hold the caller's address and the endpoint, an
+  # overflow's the Azure account's host, as the access log line does, so the trace reads print
+  # attribute keys, not values (scripts/clients-lib.sh, traces). Read only at start: the config
+  # section's hash label recreates the container when it changes (gateway/agentgateway.yml).
+  tracing:
+    otlpEndpoint: http://otel-collector:4317
+    otlpProtocol: grpc
+    randomSampling: "true"
 
 # Every request's access log line carries two fields of the reply's headers, each empty or absent
 # when the reply has none. Log fields only; they change no routing or limit (docs:

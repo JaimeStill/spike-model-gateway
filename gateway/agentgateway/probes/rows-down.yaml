@@ -9,8 +9,9 @@
 # deploy without it, which returns each alias to its row once the row's eviction ends (5 s, longer
 # after repeated evictions).
 #
-# Every request sent while it is applied reaches Azure and counts against the task's cap of 300
-# Azure-answered requests (scripts/clients-lib.sh, azure_count).
+# Every request sent while it is applied reaches Azure and counts against the task's cap of
+# Azure-answered requests: 300 in the priority task, 80 in the answer task (scripts/clients-lib.sh,
+# azure_count).
 #@ replace           hostOverride: gb10-1:8000
           hostOverride: gb10-1:8009
 #@ replace           hostOverride: gb10-2:8000

@@ -1,0 +1,16 @@
+# Tempo (tempo/), the trace store, fed by the Collector and read by Grafana, both as `tempo` on the
+# project's network. It publishes no port. Its traces live in a named volume, which `gateway:down`
+# keeps and `gateway:reset` drops, and its blocks are kept 24 h (tempo/tempo.yaml).
+services:
+  tempo:
+    # No attestation, so an unchanged Dockerfile keeps its image id (postgres.yml).
+    build:
+      context: tempo
+      provenance: false
+      sbom: false
+    restart: unless-stopped
+    volumes:
+      - gateway-tempo:/var/tempo
+
+volumes:
+  gateway-tempo:

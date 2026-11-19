@@ -13,6 +13,8 @@ The architecture pages that apply, in the architecture repository:
 
 - A gateway's native feature comes first; no admin backend or plugin is authored for it.
 - No Python is authored, and a mise task runs one script or one command.
+- The Go retry test, `retry/`, is the spike's only authored Go: it imports go-ai read-only, at a
+  released tag from the module proxy, never a worktree or a replace.
 
 ## Scripts
 

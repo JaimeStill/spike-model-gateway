@@ -1,0 +1,15 @@
+# Grafana's one datasource: the gateway's Tempo, reached by its compose service name. Its uid is
+# explicit, as go-web-service's are, so a link to it doesn't name a generated one.
+
+apiVersion: 1
+
+datasources:
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    isDefault: true
+    jsonData:
+      nodeGraph:
+        enabled: true

@@ -6,9 +6,13 @@
 # purpose, as the bench tools' Python is, is reported like any other, and its comment says why it
 # is held. Each gateway's image pin is compared with its project's latest GitHub release:
 # agentgateway's in gateway/agentgateway/deploy.env. Each compose Dockerfile's FROM line,
-# gateway/<service>/Dockerfile, is compared with the highest semantic-version tag that carries the
-# pin's variant suffix (a pin of 18.7-alpine against the newest -alpine release), listed by crane.
-# Reads the network.
+# gateway/<service>/Dockerfile (Postgres's, the Collector's, Tempo's, and Grafana's), is compared
+# with the highest semantic-version tag that carries the pin's variant suffix (a pin of
+# 18.7-alpine against the newest -alpine release, a bare 3.1.1 against the newest bare release),
+# listed by crane.
+# The client helpers' go-ai release, CLIENTS_GOAI_TAG in scripts/clients-lib.sh, is compared with
+# the highest tools/infer/v* tag on go-ai's remote, and the retry test's go-ai requirement in
+# retry/go.mod with the module's latest release on the module proxy. Reads the network.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -43,6 +47,21 @@ for dockerfile in gateway/*/Dockerfile; do
   latest=$(latest_tag "$image" "$pin")
   [[ $pin == "$latest" ]] || report "$dockerfile: $image $pin -> $latest"
 done
+
+# The helpers' go-ai tag, read from its assignment, since clients-lib.sh is sourced only.
+goai_tag=$(sed -n 's/^CLIENTS_GOAI_TAG=//p' scripts/clients-lib.sh)
+latest=$(git ls-remote --tags --refs https://github.com/standards-lab/go-ai.git 'refs/tags/tools/infer/v*' |
+  sed 's|.*refs/tags/||' | sort -V | tail -n1)
+[[ -n $latest ]] || {
+  echo "currency: no tools/infer tag listed on go-ai's remote" >&2
+  exit 2
+}
+[[ $goai_tag == "$latest" ]] || report "scripts/clients-lib.sh: go-ai $goai_tag -> $latest"
+
+# The retry test's go-ai: `go list -m -u` names an update past the required version, or none.
+mod=$(cd retry && go list -m -u -f '{{.Version}} {{with .Update}}{{.Version}}{{end}}' github.com/standards-lab/go-ai)
+read -r pin update <<<"$mod"
+[[ -z $update ]] || report "retry/go.mod: go-ai $pin -> $update"
 
 if [[ -n $trailing ]]; then
   echo "$trailing"

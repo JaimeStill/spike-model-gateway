@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Runs `docker compose <argument>...` on the gateway's compose project, from its directory, on
 # gb10-2, where the deploy copies it to ~/gateway. It sets the values the compose files read at run
-# time, each looked up on gb10-2 so none is written down or printed: the deploying user, gb10-2's
-# tailnet address, each row host's tailnet address, and a hash of the deployed config's top-level
-# `config` section, which agentgateway reads only at start (agentgateway.yml). The rest come from
-# the project's .env, the deploy's copy of deploy.env. It also turns off buildx's default
-# attestation, so an unchanged Postgres build keeps its image id (postgres.yml). Run as
+# time, each looked up on gb10-2 so none is written down or printed: the deploying user; gb10-2's
+# tailnet address, where agentgateway's consumer port and the Collector's OTLP port are published;
+# each row host's tailnet address; and a hash of the deployed config's top-level `config` section,
+# which agentgateway reads only at start (agentgateway.yml). The rest come from the project's
+# .env, the deploy's copy of deploy.env. It also turns off buildx's default attestation, so an
+# unchanged build keeps its image id (postgres.yml). Run as
 # `gateway/compose.sh up --detach --wait --build`, or by `mise run gateway:up`, `gateway:down`,
 # or `gateway:reset` over SSH.
 set -euo pipefail

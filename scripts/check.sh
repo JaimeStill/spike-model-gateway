@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Shellchecks every tracked file whose first line is a sh or bash shebang, and checks that every
-# relative link in a tracked Markdown file resolves to a tracked or present file. Reads no network.
+# relative link in a tracked Markdown file resolves to a tracked or present file, then vets the
+# retry test's module (retry/) and runs its tests, every live case skipping. Reads no network but
+# the Go module proxy, once, while go-ai's release isn't yet in the module cache.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit
 
@@ -28,5 +30,8 @@ while IFS= read -r -d '' file; do
     fi
   done < <(grep -oP '\]\(\K(?![a-z][a-z0-9+.-]*:|#)[^)\s]+' "$file")
 done < <(git ls-files -z -- '*.md')
+
+# RETRY_CASE is cleared, so a case left live in the caller's shell can't reach the gateway here.
+(cd retry && go vet ./... && env -u RETRY_CASE go test -count=1 ./...) || fail=1
 
 exit "$fail"

@@ -119,7 +119,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
   ([`docs/findings/agentgateway.md`](findings/agentgateway.md), "The paper inventory"), and record
   what `llm` must gain for parity.
 - **State:** watching.
-- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: every line as recorded, at v1.7.0, the
+- **Last checked:** 2026-11-19T12:47Z, `mise run watch`: every line as recorded, at v1.7.0, the
   latest release.
 
 ## agentgateway `llm` serving several base URLs on one port
@@ -151,7 +151,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
   moving the gateway to it: the same `/<alias>/v1` base URLs, served by the `llm` section, against
   re-checking its body handling (the always-passthrough entry below).
 - **State:** watching.
-- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: as recorded, at v1.7.0.
+- **Last checked:** 2026-11-19T12:47Z, `mise run watch`: as recorded, at v1.7.0.
 
 ## agentgateway always-passthrough for `llm` models
 
@@ -183,7 +183,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
   each provider lists, whether streams still gain `include_usage`, and whether usage is still read for the access
   log and for `priority`'s budgets; then decide `passthrough` per model.
 - **State:** watching.
-- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: as recorded; v1.7.0, the latest
+- **Last checked:** 2026-11-19T12:47Z, `mise run watch`: as recorded; v1.7.0, the latest
   release, doesn't carry the merge.
 
 ## agentgateway UI links Logs and Analytics only with an `llm` section
@@ -209,10 +209,10 @@ and the project has acted on it; the finding or decision that acted keeps the re
     the sidebar's condition at the latest release; its absence is the change to read.
 - **Parity:** a release whose sidebar links Logs and Analytics on a config with a request log and
   no `llm` section.
-- **Action:** on that release, drop the by-URL note from the walkthrough's step 5 and from
-  `answer`'s gateway document.
+- **Action:** on that release, drop the by-URL note from the walkthrough's step 5 and from the
+  gateway document ([`gateway.md`](gateway.md), "Priority's gaps").
 - **State:** watching.
-- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: as recorded, at v1.7.0.
+- **Last checked:** 2026-11-19T12:47Z, `mise run watch`: as recorded, at v1.7.0.
 
 ## agentgateway budgets over a sliding window
 
@@ -226,15 +226,15 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Evidence:** the priority task's budget probes: bulk's Block answered `retry-after: 2609`, the
   seconds left in the clock hour, and the walkthrough's step 4 found bulk's count started again
   at the hour ([`docs/findings/priority.md`](findings/priority.md), "bulk's budget Block (behavior
-  15)" and "Results"). The architect decided at review that a sliding window is a want for
-  `answer`'s gateway document.
+  15)" and "Results"). The architect decided at review that a sliding window is a want, which
+  the gateway document records ([`gateway.md`](gateway.md), "Priority's gaps").
 - **Upstream:** no upstream item. A search of agentgateway's issues and pull requests at review
   found none asking for a sliding budget window; #3970 (merged) added budgets that never refresh,
   a different change.
 - **Parity:** a release whose budget takes a sliding window, read in its schema and notes.
-- **Action:** weigh moving the budgets to it, and update `answer`'s gateway document.
+- **Action:** weigh moving the budgets to it, and update [`gateway.md`](gateway.md).
 - **State:** watching.
-- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: the entry listed, with no line to read.
+- **Last checked:** 2026-11-19T12:47Z, `mise run watch`: the entry listed, with no line to read.
 
 ## agentgateway eviction growth without a cap
 
@@ -252,7 +252,7 @@ and the project has acted on it; the finding or decision that acted keeps the re
 - **Upstream:** no upstream item. A search at review found only fixes to the count (#1912, merged:
   an ejection is counted only when a new window starts), and no issue asking for a bound.
 - **Action:** if a release bounds it, set the bound on every row and Azure provider; until then, a
-  deploy (a reload) is how a row is returned at once, and `answer`'s gateway document records the
-  gap.
+  deploy (a reload) is how a row is returned at once, and [`gateway.md`](gateway.md), "Priority's
+  gaps", records the gap.
 - **State:** watching.
-- **Last checked:** 2026-11-17T11:57Z, `mise run watch`: the entry listed, with no line to read.
+- **Last checked:** 2026-11-19T12:47Z, `mise run watch`: the entry listed, with no line to read.
