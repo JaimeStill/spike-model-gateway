@@ -22,7 +22,8 @@
 // A recording transport under go-ai's client keeps every attempt: when it started and its reply
 // arrived, its status, the reply's headers, whether a refused reply's body holds the in-flight
 // marker, and its Retry-After. A case passes only if every refused attempt carries a marker only
-// the gateway gives (x-ratelimit-* on a 429, the body marker on a 503), the call's last attempt
+// the gateway gives (x-ratelimit-limit, -remaining, and -reset on a 429, which Azure doesn't
+// send, rather than any x-ratelimit-* name; the body marker on a 503), the call's last attempt
 // answers 200 (but bulk-rate-low's refused call), and each retry starts no sooner than the refused
 // attempt's Retry-After after its reply, when it gave one. The table, with no secret in it, is
 // for cross-checking each attempt against the gateway's access log.
@@ -71,15 +72,25 @@ type attempt struct {
 	err        string // the transport's failure
 }
 
-// rateLimited reports whether the reply carries any x-ratelimit-* header, which the gateway's
-// local rate limit adds and neither a row nor Azure does.
+// gatewayRateHeaders are the headers agentgateway's local rate limit adds to every reply on a
+// limited route, its 429s among them: x-ratelimit-limit, x-ratelimit-remaining, and
+// x-ratelimit-reset, by these exact names (the recorded tables under .state/answer/retry/). A row
+// sends none. Azure OpenAI sends x-ratelimit-* too, but only names with a -requests or -tokens
+// suffix (x-ratelimit-limit-requests, x-ratelimit-remaining-tokens, and the rest), and none of
+// these three (learn.microsoft.com, "Manage Azure OpenAI in Microsoft Foundry Models quota",
+// "Rate limit response headers", read 2026-11-19), so a prefix alone marks no reply as the
+// gateway's.
+var gatewayRateHeaders = []string{"X-Ratelimit-Limit", "X-Ratelimit-Remaining", "X-Ratelimit-Reset"}
+
+// rateLimited reports whether the reply carries every one of gatewayRateHeaders, by exact name:
+// the gateway's local rate limit, not a row's or Azure's.
 func (a *attempt) rateLimited() bool {
-	for name := range a.header {
-		if strings.HasPrefix(strings.ToLower(name), "x-ratelimit-") {
-			return true
+	for _, name := range gatewayRateHeaders {
+		if len(a.header.Values(name)) == 0 {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // attempts is the log every recorder of a case writes to, in the order the replies arrived.
@@ -274,8 +285,9 @@ func writeTable(t *testing.T, log *attempts) {
 }
 
 // checkCall checks one call's attempts: each refused attempt is the gateway's own, a 429 with
-// x-ratelimit-* or a 503 with the body marker; each retry waited at least the refused attempt's
-// Retry-After from its reply; and, when answered, the last attempt is a 200.
+// x-ratelimit-limit, -remaining, and -reset (rateLimited) or a 503 with the body marker; each
+// retry waited at least the refused attempt's Retry-After from its reply; and, when answered, the
+// last attempt is a 200.
 func checkCall(t *testing.T, call string, as []*attempt, answered bool) {
 	t.Helper()
 	if len(as) == 0 {
@@ -292,7 +304,8 @@ func checkCall(t *testing.T, call string, as []*attempt, answered bool) {
 		}
 		switch {
 		case a.status == http.StatusTooManyRequests && !a.rateLimited():
-			t.Errorf("%s: attempt %d's 429 has no x-ratelimit-* header: not the gateway's", call, a.n)
+			t.Errorf("%s: attempt %d's 429 lacks one of %s: not the gateway's", call, a.n,
+				strings.Join(gatewayRateHeaders, ", "))
 		case a.status == http.StatusServiceUnavailable && !a.marker:
 			t.Errorf("%s: attempt %d's 503 body lacks %q: not the gateway's", call, a.n, inFlightMarker)
 		case a.status != http.StatusTooManyRequests && a.status != http.StatusServiceUnavailable:

@@ -86,7 +86,7 @@ func TestEmbeddingBurst(t *testing.T) {
 		}
 	}
 	if !limited {
-		t.Errorf("none of %d embeddings was refused 429 with Retry-After 1 and x-ratelimit-*", n)
+		t.Errorf("none of %d embeddings was refused 429 with Retry-After 1 and the gateway's x-ratelimit-* headers", n)
 	}
 }
 
