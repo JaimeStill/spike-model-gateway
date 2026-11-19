@@ -1305,10 +1305,51 @@ The text deltas by arrival, as count@ms from the send:
 - send 3: 37@654–656, 24@1117–1119.
 
 The verdict was "streams" each time. The text arrives in bursts spread over the reply's second or
-so, never all at the end. Each reply carried `x-gateway-overflow: azure`, `server: istio-envoy`,
-and `azureai-fe-is-streaming: False`. Each `message_start` reported 0 input tokens, and its
-`message_delta` the real count: 83 here, 78 in the first try, and 72 in the 16-token case below,
-as on 2026-11-17.
+so, never all at the end. Each `message_start` reported 0 input tokens, and its `message_delta`
+the real count: 83 here, 78 in the first try, and 72 in the 16-token case below, as on 2026-11-17.
+
+The response headers of the three sends, as the gateway returned them, from each send's
+`headers.txt` under `.state/max-tokens-note/stream/agent-1024-20261119T0942*/`. Every send had
+`HTTP/1.1 200 OK` and these, in the order received:
+
+| Header | Value |
+| --- | --- |
+| `content-type` | `text/event-stream` |
+| `server` | `istio-envoy` |
+| `vary` | `Origin` |
+| `x-ms-rai-invoked` | `true` |
+| `azureai-requested-tier` | `default` |
+| `azureai-processed-tier` | `default` |
+| `x-ms-is-spilled-over` | `false` |
+| `x-ratelimit-remaining-requests` | `49` |
+| `x-ratelimit-reset-requests` | `1` |
+| `x-ratelimit-limit-requests` | `50` |
+| `x-ratelimit-renewalperiod-requests` | `60` |
+| `x-ratelimit-abusepenalty-active` | `False` |
+| `x-ratelimit-remaining-tokens` | `49943` |
+| `x-ratelimit-reset-tokens` | `0` |
+| `x-ratelimit-limit-tokens` | `50000` |
+| `x-ratelimit-renewalperiod-tokens` | `60` |
+| `azureai-fe-is-streaming` | `False` |
+| `azureai-fe-offer-type` | `paygo` |
+| `strict-transport-security` | `max-age=31536000; includeSubDomains; preload` |
+| `x-content-type-options` | `nosniff` |
+| `x-ms-region` | `East US 2` |
+| `x-ratelimit-limit` | `1200` |
+| `x-gateway-overflow` | `azure` |
+| `transfer-encoding` | `chunked` |
+
+And these differed:
+
+| Send | `date` | `x-ms-inference-retry-history` | `x-ratelimit-remaining` | `x-ratelimit-reset` |
+| --- | --- | --- | --- | --- |
+| 1 | `Thu, 19 Nov 2026 14:42:04 GMT` | `{"v":1,"entries":[{"service_id":"mir.frontdoor","layer":"regional","role":"direct","retries":2}]}` | `1199` | `59` |
+| 2 | `Thu, 19 Nov 2026 14:42:06 GMT` | `{"v":1,"entries":[{"service_id":"mir.frontdoor","layer":"regional","role":"direct","retries":1}]}` | `1198` | `58` |
+| 3 | `Thu, 19 Nov 2026 14:42:08 GMT` | `{"v":1,"entries":[{"service_id":"mir.frontdoor","layer":"regional","role":"direct","retries":0}]}` | `1197` | `57` |
+
+Left out, because each names one request, session, or stream, or the account, and stays in the
+untracked captures: `x-request-id`, `x-ms-client-request-id`, `apim-request-id`,
+`azureml-model-session`, `x-http2-stream-id`, and `x-ratelimit-key`.
 
 **The 16-token case** (lines 262–331). "Name a primary color.", `max_tokens` 16, 5 sends. Each
 summary shows no text deltas, so each verdict was "too short to tell". Totals 1.064, 0.665, 1.876,
@@ -1385,55 +1426,109 @@ Expected:
 Every command the session ran, as logged, from `.state/max-tokens-note/commands-2026-11-19.log`.
 The two direct requests are the Azure helper's, `az_curl`, logged as the curl it runs, and
 `azure_count` is logged as its read of the access log (lines 254, 332, 535, 543, 550, 784, 987,
-and 994). Each `mise run agentgateway-deploy` is followed in the log by the deploy's own `+`
-lines, and each `messages_stream` by its curl and its summary; those are left out here. The
-output stays in the log.
+and 994). Each `mise run agentgateway-deploy` is followed by the deploy's own `+` lines, the
+laptop's and gb10-2's, and each `messages_stream` by the curl it runs, which reads the key from
+its file, so the key isn't logged. The output stays in the log.
 
 ```text
 + 2026-11-19T09:38:18-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:38:18-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
 + 2026-11-19T09:38:18-05:00 laptop: messages_stream agent 64 'Count upward from 1, one number a line.'
++ 2026-11-19T09:38:18-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-64-20261119T093818/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"Count upward from 1, one number a line."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-64-20261119T093818/raw.tsv
 + 2026-11-19T09:38:53-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:38:53-05:00 laptop: printf 'header = "api-key: %s"\nurl = "https://%s.services.ai.azure.com/openai/v1/chat/completions"\n' "$(<.state/azure/key)" "$(sed -n 's/^AZURE_ACCOUNT=//p' .state/azure/account.env | tr -d \"\')" | curl -K - -s -o /dev/null -D .state/max-tokens-note/control/stream-true.headers.txt -H content-type: application/json -d {"model":"gpt-oss-120b","stream":true,"max_tokens":32,"messages":[{"role":"user","content":"Count upward from 1, one number a line."}]}
 + 2026-11-19T09:38:54-05:00 laptop: printf 'header = "api-key: %s"\nurl = "https://%s.services.ai.azure.com/openai/v1/chat/completions"\n' "$(<.state/azure/key)" "$(sed -n 's/^AZURE_ACCOUNT=//p' .state/azure/account.env | tr -d \"\')" | curl -K - -s -o /dev/null -D .state/max-tokens-note/control/stream-false.headers.txt -H content-type: application/json -d {"model":"gpt-oss-120b","stream":false,"max_tokens":32,"messages":[{"role":"user","content":"Count upward from 1, one number a line."}]}
 + 2026-11-19T09:38:56-05:00 laptop: grep -iH -e '^HTTP/' -e '^azureai-fe-is-streaming' .state/max-tokens-note/control/stream-true.headers.txt .state/max-tokens-note/control/stream-false.headers.txt
 + 2026-11-19T09:39:05-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:39:05-05:00 laptop: mise run agentgateway-deploy rows-down
++ 2026-11-19T09:39:05-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-19T09:39:05-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env otel-collector.yml otel-collector tempo.yml tempo grafana.yml grafana | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-19T09:39:06-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-19T09:39:06-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-19T09:39:06-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-19T09:39:06-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-19T09:39:06-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-19T09:39:06-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-19T09:39:06-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-19T09:39:08-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
 + 2026-11-19T09:39:08-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
 + 2026-11-19T09:39:12-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:39:12-05:00 laptop: messages_stream agent 1024 'Count upward from 1, one number a line.'
++ 2026-11-19T09:39:12-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-1024-20261119T093912/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"Count upward from 1, one number a line."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-1024-20261119T093912/raw.tsv
 + 2026-11-19T09:39:13-05:00 laptop: messages_stream agent 1024 'Count upward from 1, one number a line.'
++ 2026-11-19T09:39:13-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-1024-20261119T093913/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"Count upward from 1, one number a line."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-1024-20261119T093913/raw.tsv
 + 2026-11-19T09:39:14-05:00 laptop: messages_stream agent 1024 'Count upward from 1, one number a line.'
++ 2026-11-19T09:39:14-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-1024-20261119T093914/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"Count upward from 1, one number a line."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-1024-20261119T093914/raw.tsv
 + 2026-11-19T09:39:31-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:39:31-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:05 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 + 2026-11-19T09:39:35-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:39:35-05:00 laptop: messages_stream agent 16 'Name a primary color.'
++ 2026-11-19T09:39:35-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-16-20261119T093935/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"Name a primary color."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-16-20261119T093935/raw.tsv
 + 2026-11-19T09:39:36-05:00 laptop: messages_stream agent 16 'Name a primary color.'
++ 2026-11-19T09:39:36-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-16-20261119T093936/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"Name a primary color."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-16-20261119T093936/raw.tsv
 + 2026-11-19T09:39:37-05:00 laptop: messages_stream agent 16 'Name a primary color.'
++ 2026-11-19T09:39:37-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-16-20261119T093937/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"Name a primary color."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-16-20261119T093937/raw.tsv
 + 2026-11-19T09:39:39-05:00 laptop: messages_stream agent 16 'Name a primary color.'
++ 2026-11-19T09:39:39-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-16-20261119T093939/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"Name a primary color."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-16-20261119T093939/raw.tsv
 + 2026-11-19T09:39:39-05:00 laptop: messages_stream agent 16 'Name a primary color.'
++ 2026-11-19T09:39:39-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-16-20261119T093939/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"Name a primary color."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-16-20261119T093939/raw.tsv
 + 2026-11-19T09:39:40-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:31 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 + 2026-11-19T09:39:49-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:39:49-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-19T09:39:49-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-19T09:39:49-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env otel-collector.yml otel-collector tempo.yml tempo grafana.yml grafana | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-19T09:39:49-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-19T09:39:50-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-19T09:39:50-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-19T09:39:50-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-19T09:39:50-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-19T09:39:50-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-19T09:39:50-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-19T09:39:52-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
 + 2026-11-19T09:39:52-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
 + 2026-11-19T09:41:05-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:41:05-05:00 laptop: messages_stream agent 64 'Name a primary color.'
++ 2026-11-19T09:41:05-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-64-20261119T094105.202/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"Name a primary color."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-64-20261119T094105.202/raw.tsv
 + 2026-11-19T09:41:06-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:40 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 + 2026-11-19T09:41:10-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:41:10-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:05 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 + 2026-11-19T09:41:10-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:41 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 + 2026-11-19T09:42:02-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:42:02-05:00 laptop: mise run agentgateway-deploy rows-down
++ 2026-11-19T09:42:02-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-19T09:42:02-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env otel-collector.yml otel-collector tempo.yml tempo grafana.yml grafana | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-19T09:42:02-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-19T09:42:02-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-19T09:42:03-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-19T09:42:03-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-19T09:42:03-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-19T09:42:03-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-19T09:42:03-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-19T09:42:05-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
 + 2026-11-19T09:42:05-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
 + 2026-11-19T09:42:05-05:00 laptop: messages_stream agent 1024 'Count from 1 to 300, one number per line, nothing else.'
++ 2026-11-19T09:42:05-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-1024-20261119T094205.402/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"Count from 1 to 300, one number per line, nothing else."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-1024-20261119T094205.402/raw.tsv
 + 2026-11-19T09:42:06-05:00 laptop: messages_stream agent 1024 'Count from 1 to 300, one number per line, nothing else.'
++ 2026-11-19T09:42:06-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-1024-20261119T094206.798/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"Count from 1 to 300, one number per line, nothing else."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-1024-20261119T094206.798/raw.tsv
 + 2026-11-19T09:42:08-05:00 laptop: messages_stream agent 1024 'Count from 1 to 300, one number per line, nothing else.'
++ 2026-11-19T09:42:08-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-1024-20261119T094208.109/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"Count from 1 to 300, one number per line, nothing else."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-1024-20261119T094208.109/raw.tsv
 + 2026-11-19T09:42:09-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:41:41 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 + 2026-11-19T09:42:13-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:42:13-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-19T09:42:14-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-19T09:42:14-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env otel-collector.yml otel-collector tempo.yml tempo grafana.yml grafana | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-19T09:42:14-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-19T09:42:14-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-19T09:42:14-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-19T09:42:14-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-19T09:42:14-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-19T09:42:14-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-19T09:42:14-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-19T09:42:16-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
 + 2026-11-19T09:42:16-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
 + 2026-11-19T09:43:26-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:43:26-05:00 laptop: messages_stream agent 64 'Name a primary color.'
++ 2026-11-19T09:43:26-05:00 laptop: t0=$EPOCHREALTIME; printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -sN -D .state/max-tokens-note/stream/agent-64-20261119T094326.938/headers.txt -H 'content-type: application/json' -d '{"model":"agent","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"Name a primary color."}]}' http://gb10-2:3000/agent/v1/messages | while IFS= read -r line; do t=$EPOCHREALTIME; printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"; done > .state/max-tokens-note/stream/agent-64-20261119T094326.938/raw.tsv
 + 2026-11-19T09:43:28-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:05 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 + 2026-11-19T09:43:28-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:42:15 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 ```
