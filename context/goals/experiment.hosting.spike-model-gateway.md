@@ -287,7 +287,10 @@ Sync          coordinator:
 - slice 1 clients: done (33b1d34, 5e7c70b, 494fc50, 3bc100a, f8c028d). Rows-up tiers pass;
   every priority discrepancy revalidated as expected (the 16-token Messages stall no longer
   occurs); the four retry cases pass with cross-checks; Azure 48 of 80, no 429.
-- slice 2 traces: next
+- slice 2 traces: done (d1f58f2, spike-model-engines #20, 2bf8e69, 8efb871). The Collector,
+  Tempo, and Grafana run in gb10-2's stack; each alias's trace nests the row's span under the
+  gateway's; an overflowed trace has no row span; each row sends a startup trace; Azure 50 of 80.
+- slice 3 paper: next
 
 ## Decisions
 
