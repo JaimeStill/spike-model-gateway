@@ -625,8 +625,12 @@ the session to escalate.
 
 ### Results
 
-The session fills this from the architect's run: each step's time and result against its Expected
-line, and the walk's Azure count, 0, leaving the task's at 50 of 80.
+Not run. The architect waived the walkthrough on 2026-11-18, having followed each slice live: the
+post-update smoke check, the Collector's walk with the gateway-only and three-span traces read in
+Grafana, and each slice's results as they landed. The steps above stay as the way to repeat it.
+Each one's Expected line comes from a run already recorded in this finding: step 2 from slice 1's
+rows-up tiers, step 3 from the embedding-burst retry case, and step 4 from slice 2's traces. No
+request went to Azure for the walk, and the task's count stays at 50 of 80.
 
 ## Commands as run
 

@@ -291,7 +291,7 @@ Sync          coordinator:
   Tempo, and Grafana run in gb10-2's stack; each alias's trace nests the row's span under the
   gateway's; an overflowed trace has no row span; each row sends a startup trace; Azure 50 of 80.
 - slice 3 paper: done (b9efae9 comparison, 5a7d880 gateway document, README answer, answer section).
-- slice 4 walkthrough: next
+- slice 4 walkthrough: waived by the architect; reviews next.
 
 ## Decisions
 
@@ -580,12 +580,23 @@ Sync          coordinator:
   2026-11-18).
 - answer: every priority discrepancy is revalidated at v0.2.0 before the answer completes
   (architect, 2026-11-18).
+- answer: the walkthrough was waived; the architect followed every slice live (architect,
+  2026-11-18).
 - answer: the three Critical Dell firmware upgrades (BIOS 5.0.0, EC 0x02000d00, PD 0x00000519)
   were applied to both GB10s at session start, gb10-1 first (architect, 2026-11-18, escalation 1).
 - answer: rate-limit-agent's bucket moved into the agent route's own `conditional` rate limits,
   since the route's `localRateLimit` replaced the overlay's top-level policy (session, slice 1).
 
 ## Pending edits
+
+- coordinator · v1.ai.hosting: metrics and logs through the same Collector into the full LGTM stack
+  (architect, 2026-11-18). The Collector's `prometheus` receiver scrapes agentgateway's stats port
+  (15020) and each vLLM row's `/metrics` (queue depth, KV cache, latency histograms), and its
+  `filelog` receiver (or a per-host agent, for the rows off gb10-2) reads the containers' logs; each
+  exports OTLP to Mimir and Loki, keeping v1.observability's OTLP-only direction. Joining the
+  gateway's 503s and evictions to a row's queue and KV cache is the evidence the `/metrics`
+  admission gap needs. Unverified: whether agentgateway v1.7.0's access log carries the trace id,
+  and whether vLLM's histograms carry exemplars.
 
 - coordinator · ai-hosting.md, Answers · experiment.hosting: add the section below after "Answer ·
   experiment.hosting.spike-model-layout". It folds in priority's and answer's roadmap summaries.
