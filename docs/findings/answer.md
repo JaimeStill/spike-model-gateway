@@ -321,6 +321,36 @@ side. Only synthetic and test-fixture content was sent: the tiers' prompts and f
 (`shapes.png`, `phrase.wav`) and the helpers' prompts. The helper's printed cap read 300,
 priority's, until this slice set it to 80; each step's count is the same either way.
 
+### At v0.3.0
+
+go-ai's acceptance released go-ai v0.3.0 and `tools/infer/v0.3.0` during the task, on 2026-11-18,
+and the architect moved the helpers and `retry/` to them (review escalation 1). Both are additive:
+`ai.Model.Native` keeps each model list entry whole, and `infer models` writes vLLM's `root` after a
+tab beside the ID. Nothing in the helpers parses `infer models`' output, so none changed for the
+new column. Rerun 2026-11-19, 07:38:13–07:40:16, with the base config deployed (`# overlays: none`)
+and every row's `/v1/models` answering 200, from a worktree of its own at `tools/infer/v0.3.0`
+(`923796a`, `.state/answer/go-ai-v0.3.0`) and the released infer v0.3.0:
+
+| Tier | Result | Skipped |
+| --- | --- | --- |
+| go-ai, `a1-v030-up-goai`, all four aliases | 26 passed, 0 failed, 1 skipped (78 subtests passed) | `TestTranscribeRoute`: no transcription role |
+| infer, `a1-v030-up-infer`, all four aliases | 19 passed, 0 failed, 1 skipped | `TestTranscribeRoute`: no transcription role |
+
+The same as at v0.2.0 ("Step 2 · rows up"). `azure_count` from the start of the tiers, 07:38:42,
+read 0: no request reached Azure. Neither helper found the key in its log.
+
+`infer_at agent models` printed `agent` alone, with no tab and no root. The gateway answers each
+alias's `/v1/models` itself (`{"id":"agent","object":"model","owned_by":"gateway"}`), so the
+agent row's own `root`, `openai/gpt-oss-120b` in gb10-1's listing, isn't passed through: through
+the gateway, the root column is absent.
+
+`infer_install`'s first two tries failed as v0.2.0's first did: `go` found go-ai v0.3.0 but not
+the `tools/infer` module beside it. A `go list -m` of `tools/infer@v0.3.0` found it, and the third
+try printed `v0.3.0`: a cold module proxy lookup again.
+
+The retry cases and the rows-down revalidation stay proven at v0.2.0: v0.3.0 changes neither retry
+nor the formats, so they weren't rerun.
+
 ## Slice 2 · traces
 
 Behaviors 9–12, with 17 and 18: the Collector, Tempo, and Grafana beside the gateway, agentgateway's
@@ -1023,6 +1053,39 @@ arguments joined by spaces, so a JSON body shows without its shell quotes.
 + 2026-11-18T19:18:12-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-18T19:18:12-05:00 laptop: ssh -n gb10-2 'docker inspect -f "{{.Name}} {{.HostConfig.RestartPolicy.Name}}" $(docker ps -aq --filter label=com.docker.compose.project=gateway)'
 + 2026-11-18T19:18:12-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh cea3f3ad7550397f1ae06d12f6b8cbd4 ac004c2048f1f264e928ba6ea1cd8efe ad3599374da129f37ffebaf7533626dc bdfa6219b5a739635ab55dbd0c9a6dbd" | spans, parents, and attribute keys
+```
+
+### 2026-11-19 · slice 1 at v0.3.0
+
+From `.state/answer/commands-2026-11-19.log`.
+
+```text
++ 2026-11-19T07:38:13-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T07:38:13-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
++ 2026-11-19T07:38:17-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T07:38:17-05:00 laptop: for r in gb10-1:8000 gb10-2:8000 framework:8001 framework:8002; do printf '%s ' $r; curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 http://$r/v1/models; done
++ 2026-11-19T07:38:20-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T07:38:20-05:00 laptop: git -C ~/architecture/go-ai worktree add --detach .state/answer/go-ai-v0.3.0 tools/infer/v0.3.0
++ 2026-11-19T07:38:20-05:00 laptop: GOBIN=.state/answer/bin go install github.com/standards-lab/go-ai/tools/infer/cmd/infer@v0.3.0 && .state/answer/bin/infer version
++ 2026-11-19T07:38:25-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T07:38:25-05:00 laptop: GOBIN=.state/answer/bin go install github.com/standards-lab/go-ai/tools/infer/cmd/infer@v0.3.0 && .state/answer/bin/infer version
++ 2026-11-19T07:38:31-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T07:38:31-05:00 laptop: GOFLAGS=-mod=mod go list -m github.com/standards-lab/go-ai/tools/infer@v0.3.0
++ 2026-11-19T07:38:35-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T07:38:35-05:00 laptop: GOBIN=.state/answer/bin go install github.com/standards-lab/go-ai/tools/infer/cmd/infer@v0.3.0 && .state/answer/bin/infer version
++ 2026-11-19T07:38:42-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T07:38:42-05:00 laptop: CLIENTS_TARGET=rows-up goai_tier a1-v030-up-goai agent vision audio embedding
++ 2026-11-19T07:38:42-05:00 laptop: cd .state/answer/go-ai-v0.3.0/. && AI_AGENT_BASE_URL=http://gb10-2:3000/agent/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AGENT_PROFILE='{"completions":{"refused_efforts":["none","minimal","xhigh","max"],"no_allowed_tools":true},"responses":{"refused_efforts":["none","xhigh"],"no_allowed_tools":true,"resend_reasoning_text":true},"messages":{"refused_efforts":["none","xhigh","max"]}}' AI_VISION_BASE_URL=http://gb10-2:3000/vision/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3000/embedding/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/answer/clients/a1-v030-up-goai.log
++ 2026-11-19T07:39:41-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T07:39:41-05:00 laptop: CLIENTS_TARGET=rows-up infer_tier a1-v030-up-infer agent vision audio embedding
++ 2026-11-19T07:39:41-05:00 laptop: cd .state/answer/go-ai-v0.3.0/tools/infer && AI_AGENT_BASE_URL=http://gb10-2:3000/agent/v1 AI_AGENT_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AGENT_PROFILE='{"completions":{"refused_efforts":["none","minimal","xhigh","max"],"no_allowed_tools":true},"responses":{"refused_efforts":["none","xhigh"],"no_allowed_tools":true,"resend_reasoning_text":true},"messages":{"refused_efforts":["none","xhigh","max"]}}' AI_VISION_BASE_URL=http://gb10-2:3000/vision/v1 AI_VISION_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_AUDIO_BASE_URL=http://gb10-2:3000/audio/v1 AI_AUDIO_TOKEN=$(<.state/agentgateway/keys/go-ai) AI_EMBEDDING_BASE_URL=http://gb10-2:3000/embedding/v1 AI_EMBEDDING_TOKEN=$(<.state/agentgateway/keys/go-ai) GOWORK=off go test -race -tags integration -count=1 -v ./integration/... 2>&1 | tee .state/answer/clients/a1-v030-up-infer.log
++ 2026-11-19T07:40:09-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T07:40:09-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T07:38:42 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-19T07:40:13-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T07:40:13-05:00 laptop: INFER_TOKEN=$(<.state/agentgateway/keys/go-ai) INFER_BASE_URL=http://gb10-2:3000/agent/v1 .state/answer/bin/infer models
++ 2026-11-19T07:40:13-05:00 laptop: curl -s http://gb10-1:8000/v1/models | jq -c '.data[] | {id, root}'
++ 2026-11-19T07:40:16-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T07:40:16-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/go-ai)" | curl -K - -s http://gb10-2:3000/agent/v1/models
 ```
 
 ## For the goal record
