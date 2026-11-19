@@ -18,9 +18,9 @@ Each candidate is then scored against the spike's six question bullets
   the links are listed under "Sources", grouped by candidate.
 - **Gaps in the record.** Where a source was unavailable or a claim couldn't be confirmed, the text
   says so. "Unconfirmed" collects those cases.
-- **Nothing was tried live.** LiteLLM was dropped from a live trial (goal record, Decisions,
-  2026-11-13) because of:
-  - its supply-chain compromise and 2026 advisories;
+- **No other gateway was tried live.** LiteLLM was dropped from a live trial (goal record,
+  Decisions, 2026-11-13) because of:
+  - its 2026 supply-chain compromises (two, under "Candidates") and advisories;
   - a Python runtime whose Rust port isn't production-ready;
   - single-vendor governance.
 

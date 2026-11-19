@@ -2,9 +2,11 @@
 
 The spike's decision and its configuration, written as requirements for v1.ai.hosting (evidence 11
 of [`context/README.md`](../context/README.md#the-evidence)). Each requirement cites the finding
-that proved it, or says that it stands on paper. The configuration the requirements describe runs
-today in [`gateway/agentgateway/config.yaml`](../gateway/agentgateway/config.yaml), deployed by
-`mise run agentgateway-deploy`.
+that proved it, or says that it stands on paper. The spike's configuration,
+[`gateway/agentgateway/config.yaml`](../gateway/agentgateway/config.yaml), deployed by `mise run
+agentgateway-deploy`, runs these requirements with two differences, each named where it applies:
+it still overflows audio and embedding to Azure, which requirement 8 forbids, and it has no
+dot-segment hardening, which requirement 4 asks for.
 
 ## The decision
 

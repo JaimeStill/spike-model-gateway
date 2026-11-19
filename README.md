@@ -17,8 +17,8 @@ for agent and vision only; admission on vLLM's `/metrics` stays a gap.
 
 The decision and its configuration, as requirements for v1.ai.hosting, are in
 [`docs/gateway.md`](docs/gateway.md), and the gateway comparison behind it in
-[`docs/comparison.md`](docs/comparison.md). The evidence, numbered as
-[`context/README.md`](context/README.md#the-evidence) frames it, each item naming the finding that
+[`docs/comparison.md`](docs/comparison.md). The evidence follows, numbered as
+[`context/README.md`](context/README.md#the-evidence) frames it. Each item names the finding that
 proves it and the running demo or test that reproduces it. The helpers are
 [`scripts/clients-lib.sh`](scripts/clients-lib.sh)'s and, for the GuideLLM cells,
 [`scripts/measure-lib.sh`](scripts/measure-lib.sh)'s, run from the bench environment:
@@ -41,9 +41,9 @@ proves it and the running demo or test that reproduces it. The helpers are
    "Behavior 4" and "Behavior 5" (2026-11-13), and [`routing.md`](docs/findings/routing.md),
    "Realignment on route `ai`" (2026-11-16). Running demo: `mise run agentgateway-deploy`, whose
    deploy creates and revokes keys.
-3. **Caps.** Past each cap, vLLM queues and never refuses, so a client sees only a longer wait
-   (agent's ITL reached 108 ms at 16 sessions). Each row now refuses with 503 at twice its cap,
-   which evicts it. The gateway's own refusals are 429 with `Retry-After` and `x-ratelimit-*` (a
+3. **Caps.** Past each cap, vLLM queues, so a client sees only a longer wait (agent's ITL reached
+   108 ms at 16 sessions). Past its queue limit, twice its cap, each row refuses with 503, which
+   evicts it. The gateway's own refusals are 429 with `Retry-After` and `x-ratelimit-*` (a
    bucket) and 503 with no `Retry-After` (the in-flight limit, logged only in `requests_shed`).
    Proven by [`agentgateway.md`](docs/findings/agentgateway.md), "Behavior 8: the cap cells" and
    "Behavior 9: the probes" (2026-11-13), and [`priority.md`](docs/findings/priority.md), "The
@@ -102,9 +102,11 @@ proves it and the running demo or test that reproduces it. The helpers are
    revalidation.
 9. **Traces.** Each request through a row is one trace, the row's span the child of the gateway's;
    an overflowed request's trace has no row span; no span holds prompt or completion content; and
-   each row's startup trace gives its cold start by phase, 13.0–50.0 s. Proven by
-   [`answer.md`](docs/findings/answer.md), "Slice 2 · traces" (2026-11-18). Running demos: `mise
-   run gateway:grafana`, and the helpers' `traces`.
+   each row's startup trace gives its cold start by phase, 13.0–50.0 s. The stack, traces included,
+   came back from a reboot of gb10-2 with no one touching it. Proven by
+   [`answer.md`](docs/findings/answer.md), "Slice 2 · traces" (2026-11-18), with the reboot under
+   "The unattended restart (behavior 9)" (2026-11-19). Running demos: `mise run gateway:grafana`,
+   and the helpers' `traces`.
 10. **On paper.** The gateway comparison, LiteLLM as the feature reference beside Bifrost, Agent
     Router, Kong, Portkey, Helicone, and TensorZero (archived), with vLLM's production-stack
     router, Kubernetes portability, JWT/OIDC, production's Azure Container Apps routing, IL6, and a

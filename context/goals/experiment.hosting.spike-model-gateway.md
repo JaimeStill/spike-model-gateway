@@ -292,6 +292,15 @@ Sync          coordinator:
   gateway's; an overflowed trace has no row span; each row sends a startup trace; Azure 50 of 80.
 - slice 3 paper: done (b9efae9 comparison, 5a7d880 gateway document, README answer, answer section).
 - slice 4 walkthrough: waived by the architect; reviews next.
+- review escalation 1: clients at go-ai v0.3.0 (3e26eca). Rows-up tiers rerun at
+  `tools/infer/v0.3.0`: 26 and 19 passed, 0 failed; Azure 0.
+- standards review: the retry test's output and skips, and the retry policy as run (ada5a2b,
+  b3ea1a0).
+- spec review: the retry test's 429 marker names the gateway's three headers exactly (9ab26e4);
+  gaps closed in the answer, the finding, and the watch register (e7c919b).
+- gb10-2 reboot: every container came back unattended, each alias answered 200 through the
+  gateway with a whole 3-span trace, and the config still read `# overlays: none` (2026-11-19).
+- editor pass; brief next.
 
 ## Decisions
 
@@ -594,6 +603,8 @@ Sync          coordinator:
   were applied to both GB10s at session start, gb10-1 first (architect, 2026-11-18, escalation 1).
 - answer: rate-limit-agent's bucket moved into the agent route's own `conditional` rate limits,
   since the route's `localRateLimit` replaced the overlay's top-level policy (session, slice 1).
+- answer: gb10-2 was rebooted to show behavior 9 live, not accepted on restart policy (architect,
+  2026-11-19, spec review).
 
 ## Pending edits
 
@@ -663,9 +674,9 @@ Sync          coordinator:
      hardening is a requirement. Proven by measured runs: agentgateway, "Behavior 4" and
      "Behavior 5" (2026-11-13); routing, "Realignment on route `ai`" (2026-11-16). Running demo:
      `mise run agentgateway-deploy`, whose deploy creates and revokes keys.
-  3. Caps. Past each cap vLLM queues and never refuses, so a client sees a longer wait (agent ITL
-     108 ms at 16 sessions); each row now refuses with 503 at twice its cap (agent 24, vision 32,
-     audio 8), which evicts it. The gateway's own refusals are 429 with `Retry-After` and
+  3. Caps. Past each cap vLLM queues, so a client sees a longer wait (agent ITL 108 ms at 16
+     sessions). Past its queue limit, twice its cap (agent 24, vision 32, audio 8), each row
+     refuses with 503, which evicts it. The gateway's own refusals are 429 with `Retry-After` and
      `x-ratelimit-*`, and the in-flight limit's 503 with none, logged only in `requests_shed`.
      Proven by measured runs: agentgateway, "Behavior 8: the cap cells" and "Behavior 9: the
      probes" (2026-11-13);
@@ -722,9 +733,11 @@ Sync          coordinator:
      agentgateway-deploy rows-down` for the revalidation.
   9. Traces. Each request through a row is one trace, the row's span the child of the gateway's;
      an overflowed request's trace has no row span; no span holds prompt or completion content;
-     and each row's startup trace gives its cold start by phase, 13.0–50.0 s. Production needs
+     and each row's startup trace gives its cold start by phase, 13.0–50.0 s. The stack, traces
+     included, came back from a reboot of gb10-2 with no one touching it. Production needs
      authenticated OTLP ingress and sampling below 100%. Proven by measured runs: answer, "Slice 2
-     · traces" (2026-11-18). Running demos: `mise run gateway:grafana`, and the helpers' `traces`.
+     · traces" (2026-11-18), with the reboot under "The unattended restart (behavior 9)"
+     (2026-11-19). Running demos: `mise run gateway:grafana`, and the helpers' `traces`.
   10. On paper. LiteLLM as the feature reference, beside Bifrost, Agent Router, Kong, Portkey,
       Helicone, and TensorZero (archived), with vLLM's production-stack router, Kubernetes
       portability, JWT/OIDC, production's Container Apps routing, IL6, and a cheaper chat tier:
