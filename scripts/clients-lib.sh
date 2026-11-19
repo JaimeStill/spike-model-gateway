@@ -980,8 +980,9 @@ messages_stream() {
   body=$(jq -cn --arg m "$alias" --argjson n "$tokens" --arg p "$prompt" \
     '{model: $m, max_tokens: $n, stream: true, messages: [{role: "user", content: $p}]}') || return
   url=$(gw_base "$alias")/messages
-  dir=$CLIENTS_STATE/stream/$alias-$tokens-$(date +%Y%m%dT%H%M%S)
-  mkdir -p "$CLIENTS_ROOT/$dir"
+  # To the millisecond, and made with plain mkdir, so two sends in one second never share a folder.
+  dir=$CLIENTS_STATE/stream/$alias-$tokens-$(date +%Y%m%dT%H%M%S.%3N)
+  mkdir -p "$CLIENTS_ROOT/$CLIENTS_STATE/stream" && mkdir "$CLIENTS_ROOT/$dir" || return
   _clients_log laptop "messages_stream $alias $tokens '$prompt'"
   _clients_log laptop "t0=\$EPOCHREALTIME; printf 'header = \"$header%s\"\\n' \"\$(<$CLIENTS_KEYS/$key)\" | curl -K - -sN -D $dir/headers.txt -H 'content-type: application/json' -d '$body' $url | while IFS= read -r line; do t=\$EPOCHREALTIME; printf '%d\\t%s\\n' \$((\${t/./} - \${t0/./})) \"\${line%\$'\\r'}\"; done > $dir/raw.tsv"
   (
