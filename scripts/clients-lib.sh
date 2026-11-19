@@ -74,8 +74,8 @@
 #                     .state/agentgateway/postgres-password; a deploy then sends it (below)
 #   retry_case <case> the spike's Go retry test (retry/), one case: rate-limit-agent,
 #                     embedding-burst, in-flight-1, or bulk-rate-low; output in
-#                     .state/max-tokens-note/retry/<case>-<time>.log, and its per-attempt table beside it as
-#                     <case>-<time>.tsv (below)
+#                     .state/max-tokens-note/retry/<case>-<time>.log, and its per-attempt table
+#                     beside it as <case>-<time>.tsv (below)
 #   requests_shed     agentgateway's requests_shed metric, the in-flight limit's refusals, read
 #                     from its stats port on gb10-2's loopback over SSH, read-only (below)
 #   traces [-q <traceql>] [-n <count>] [<since>]
