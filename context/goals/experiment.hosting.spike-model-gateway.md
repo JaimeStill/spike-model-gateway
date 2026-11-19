@@ -586,6 +586,118 @@ Sync          coordinator:
 
 ## Pending edits
 
+- coordinator · ai-hosting.md, Answers · experiment.hosting: add the section below after "Answer ·
+  experiment.hosting.spike-model-layout". It folds in priority's and answer's roadmap summaries.
+
+  ```markdown
+  ### Answer · experiment.hosting.spike-model-gateway
+
+  **Question:** Which gateway fronts the self-hosted vLLM layout, and with what access control?
+
+  **Answer:** agentgateway v1.7.0 on its route `ai` form, one base URL per purpose alias, with
+  gateway-issued keys that reach the serving endpoints only, per-key priority, buckets, and
+  budgets, embedding held to 34 requests a second by 429 and `Retry-After`, and overflow to Azure
+  AI Foundry for agent and vision only; admission on vLLM's `/metrics` stays a gap.
+
+  The gateway runs on gb10-2 in one compose stack with Postgres (budgets and the request log) and
+  the OpenTelemetry Collector, Tempo, and Grafana (traces). Each alias (agent, vision, audio,
+  embedding) has its own `/<alias>/v1`, whose `/models` the gateway answers with that alias alone.
+  Making the gateway the only network path to the rows is production's concern, for the networking
+  and platform teams. The decision and its configuration, as requirements for v1.ai.hosting, are
+  in [docs/gateway.md](https://github.com/JaimeStill/spike-model-gateway/blob/main/docs/gateway.md).
+
+  1. Pass-through. Chat, streaming, Messages, Responses, vision, audio, and embeddings pass through
+     under purpose aliases with no answer crossed, each `/models` listing exactly its alias. The
+     gateway adds nothing beyond run noise to agent, vision, or audio, and at most 3.4 ms (median)
+     to an embedding request, the extra hop included, for under 3% of one core and under 35 MiB.
+     Proven by measured runs:
+     [agentgateway](https://github.com/JaimeStill/spike-model-gateway/blob/main/docs/findings/agentgateway.md),
+     "Behavior 3" and slice 2 (agentgateway v1.7.0, vLLM v0.33.0, 2026-11-13); route `ai` and the
+     `llm` form equal within noise in
+     [routing](https://github.com/JaimeStill/spike-model-gateway/blob/main/docs/findings/routing.md),
+     "Behavior 9: the overhead cells" (2026-11-16).
+  2. Keys and routes. The gateway issues the keys; a missing, unknown, or revoked key gets 401, and
+     a revoked key's running stream finishes. Only the eight serving paths are routed, so no vLLM
+     management route is open to a consumer key. agentgateway doesn't normalize dot segments, so
+     hardening is a requirement. Proven by a running demo, `mise run agentgateway-deploy`:
+     agentgateway, "Behavior 4" and "Behavior 5" (2026-11-13); routing, "Realignment on route
+     `ai`" (2026-11-16).
+  3. Caps. Past each cap vLLM queues and never refuses, so a client sees a longer wait (agent ITL
+     108 ms at 16 sessions); each row now refuses with 503 at twice its cap (agent 24, vision 32,
+     audio 8), which evicts it. The gateway's own refusals are 429 with `Retry-After` and
+     `x-ratelimit-*`, and the in-flight limit's 503 with none, logged only in `requests_shed`.
+     Proven by measured runs: agentgateway, "Behavior 8: the cap cells" and "Behavior 9: the
+     probes" (2026-11-13);
+     [priority](https://github.com/JaimeStill/spike-model-gateway/blob/main/docs/findings/priority.md),
+     "The rows' limits" (2026-11-16).
+  4. Admission. agentgateway reads no row's `/metrics` and queues nothing itself, and no candidate
+     does it natively: a gap, on paper. Proven on paper: agentgateway, "The paper inventory", and
+     [the comparison](https://github.com/JaimeStill/spike-model-gateway/blob/main/docs/comparison.md),
+     "Scoring".
+  5. Embedding limit. A global 34/1s bucket admitted 34 of a 40-request burst and 34.0 a second
+     under 160 in flight, refusing the rest with 429 and `Retry-After: 1`; audio beside it held
+     RTFx median 5.38 against its floor of 5. Past the limit the client waits, in place of the
+     layout's "queue or overflow". Proven by measured runs: priority, "Embedding's limit (behavior
+     17)" and benchmark A (vLLM v0.33.0, 2026-11-16).
+  6. Priority. Each key has a request-rate bucket and a token budget per UTC clock hour in
+     Postgres, charging streams and surviving a restart, and every request writes a metadata row
+     with no content. Chat held its floor beside bulk vision (agent ITL median 47.05 ms). Priority
+     by key cut interactive vision's median latency from 11.87 s to 10.47 s on a saturated row,
+     0.47 s short of 10 s, since vLLM's priority orders only the waiting queue. Proven by measured
+     runs: priority, slice 3 and benchmarks B and D (vLLM v0.33.0, 2026-11-16).
+  7. Overflow. With a row down, each alias was answered by its own Foundry deployment under the
+     alias, marked `x-gateway-overflow: azure`, and returned to its row after; nothing failed over
+     between hosts. Under saturation, a row's 503s with eviction sent nearly the whole load to
+     Azure (2,944 requests in 60 s), and eviction's growth has no cap. Through the Framework's
+     reboot, Azure answered its aliases until the LUKS unlock. The parity gaps decide which
+     workloads may leave: agent (`gpt-oss-120b`, within the data zone) and vision (`gpt-5-mini`,
+     processed globally) overflow; audio (`gpt-audio-mini`, global, refuses a text-only chat) and
+     embedding (`text-embedding-3-small`, another vector space) never do, and nothing overflows
+     under IL6. Proven by measured runs and a running demo, `mise run agentgateway-deploy
+     rows-down`: priority, "A row down", benchmark C-agent, "Per alias", and the walkthrough
+     (2026-11-16 and 2026-11-17).
+  8. Clients at go-ai v0.2.0. go-ai's and infer's whole tiers at `tools/infer/v0.2.0` passed
+     through the gateway on all four aliases (26 and 19 passed, 0 failed); on Azure every fix go-ai
+     claimed passed, and each declared gap skipped before sending. go-ai's live retry proof (its
+     design finding 17): it retries the gateway's 429 and 503 and honours `Retry-After`, and in the
+     rate-limit case needed one attempt more than the first `Retry-After` implied, which reads as
+     rounded down. Proven by tests, the retry test in `retry/`, and running demos:
+     [answer](https://github.com/JaimeStill/spike-model-gateway/blob/main/docs/findings/answer.md),
+     "Step 2 · rows up", "The revalidation", and "Step 5 · the retry proof" (vLLM v0.34.0,
+     2026-11-18).
+  9. Traces. Each request through a row is one trace, the row's span the child of the gateway's;
+     an overflowed request's trace has no row span; no span holds prompt or completion content;
+     and each row's startup trace gives its cold start by phase, 13.0–50.0 s. Production needs
+     authenticated OTLP ingress and sampling below 100%. Proven by a running demo, `mise run
+     gateway:grafana`: answer, "Slice 2 · traces" (2026-11-18).
+  10. On paper. LiteLLM as the feature reference, beside Bifrost, Agent Router, Kong, Portkey,
+      Helicone, and TensorZero (archived), with vLLM's production-stack router, Kubernetes
+      portability, JWT/OIDC, production's Container Apps routing, IL6, and a cheaper chat tier:
+      nothing on paper beats agentgateway for this layout. LiteLLM had two supply-chain
+      compromises in 2026; Container Apps is in audit scope for FedRAMP High and IL2, not IL6; and
+      keyless Foundry through agentgateway's `azure` provider with a managed identity is unproven
+      here. Every claim cited, read 2026-11-18, in the comparison.
+  11. The decision. agentgateway fronts the stack, with its configuration as requirements for
+      v1.ai.hosting, priority's gaps, and the intake's notes, in
+      [docs/gateway.md](https://github.com/JaimeStill/spike-model-gateway/blob/main/docs/gateway.md).
+
+  Gaps in the answer:
+
+  - Admission on `/metrics`, and queueing at the gateway: nothing reads a row's load.
+  - A sliding budget window is wanted: v1.7.0's `rolling: 1h` is a fixed UTC clock hour.
+  - Priority orders only vLLM's waiting queue; holding interactive latency under bulk load needs
+    more, such as a cap on bulk's concurrency.
+  - vLLM's queue limit counts every key alike, so a bulk flood also refuses interactive requests.
+  - Under saturation eviction sends nearly the whole load to Azure, and its growth has no cap.
+  - A body over 64 KiB isn't retried, and each attempt to a powered-down host costs about 11 s.
+  - The UI's Logs and Analytics are reached only by URL on route `ai`.
+  - Route `ai` may be deprecated: the watch register, `docs/watch.md`, guards it, and the `llm`
+    form, which passed its live trial, is the fallback.
+  - The gateway's `Retry-After` reads as rounded down, so a client allows one attempt more.
+
+  [The answer](https://github.com/JaimeStill/spike-model-gateway#the-answer) ·
+  [spike-model-gateway](https://github.com/JaimeStill/spike-model-gateway)
+  ```
 - coordinator · experiment.hosting intake: spike-model-engines' `docs/engines/vllm/api.md` is
   stale since its pull request #17. Its examples send the Hugging Face repository as `"model"`
   (`nvidia/Gemma-4-26B-A4B-NVFP4`, `openai/gpt-oss-120b`, `ibm-granite/granite-embedding-english-r2`)
@@ -599,70 +711,45 @@ Sync          coordinator:
   model form is called the recommended one (#4307); agentgateway has no deprecation policy (#2767,
   closed as premature), and it deprecated `binds` without parity (#3204). spike-model-gateway's
   watch register (`docs/watch.md`) tracks route `ai`, and the `llm` form, trialled in task
-  `routing` where it passed, is the fallback.
+  `routing` where it passed, is the fallback (`docs/gateway.md`, "Priority's gaps").
 - coordinator · experiment.hosting intake: propose the watch register as a shared feature for the
   infrastructure repositories (architect, 2026-11-16): one entry per dependency for anticipated
   capabilities, deprecations, and other changes that would affect the infrastructure we maintain,
   with a read-only `gh` check run at each PLAN beside currency.
-- coordinator · roadmap: priority's summary names what it built: on the route `ai` form, each
-  alias's `/<alias>/v1` (whose `/models` the gateway answers, listing only that alias) overflows to
-  its own Azure AI Foundry deployment when its row is down or full, with at most 300
-  Azure-answered requests; per-key priority on the agent and vision rows, request-rate buckets, and
-  token budgets per UTC clock hour in Postgres, counting streamed usage; the request log; and
-  embedding held to 34 requests a second, all in one compose stack with Postgres on gb10-2.
-- coordinator · roadmap: `answer`'s summary lists the gateway document's requirements and gaps
-  that priority adds to dot-segment hardening (spike-model-gateway `docs/findings/priority.md`,
-  "Answer for this task", and `docs/watch.md`):
-  - a sliding budget window, wanted: v1.7.0's `rolling: 1h` is a fixed UTC clock hour;
-  - the embedding overflow marker, which a client that stores vectors must honour;
-  - priority orders only vLLM's waiting queue (interactive vision missed 10 s by 0.47 s beside
-    bulk), so holding interactive latency under bulk load needs more, such as a cap on bulk's
-    concurrency;
-  - vLLM's queue limit counts every key alike, so a bulk flood also refuses interactive requests;
-  - under saturation a row's 503 with eviction sends nearly the whole load to Azure, and
-    eviction's growth has no cap;
-  - a body over 64 KiB isn't retried, and a powered-down host costs each attempt about 11 s;
-  - the UI's Logs and Analytics load only by URL on route `ai`;
-  - which workloads may leave the self-hosted machines, from the per-alias parity gaps: agent and
-    embedding are processed within the data zone, vision and audio globally.
 - coordinator · experiment.hosting intake: spike-model-layout's `docs/layout.md` requirement 3
   says traffic past embedding's 34 req/s limit "queues or overflows". agentgateway answers it with
-  429 and Retry-After instead, and the client waits. `answer`'s gateway document records this.
-- coordinator · v1.ai.hosting: cloud embedding replies carry an overflow marker
-  (`x-gateway-overflow: azure`) and come from another vector space (text-embedding-3-small at 768
-  dimensions). A client that stores vectors must refuse or re-route a marked reply. This is a
-  gateway-document requirement.
+  429 and `Retry-After: 1` instead, and the client waits; embedding never overflows. The gateway
+  document records this as its requirement 6 (`docs/gateway.md`).
+- coordinator · v1.ai.hosting: embedding gets no Azure group, since cloud embedding replies come
+  from another vector space (text-embedding-3-small at 768 dimensions). Every Azure-answered reply
+  carries an overflow marker (`x-gateway-overflow: azure`); should a deployment give embedding an
+  Azure group, a client that stores vectors must refuse or re-route a marked reply
+  (`docs/gateway.md`, requirements 8 and 9).
 - coordinator · v1.ai.hosting: vLLM's queue limit counts every key alike, so a bulk flood also
   refuses interactive requests, which then overflow. Under saturation a row's 503 with eviction
   sends nearly the whole load to Azure, and agentgateway's eviction multiplier has no cap, so after
-  a long outage or overload a row can stay out for minutes after it is back.
-- coordinator · v1.ai.client: acceptance can run once priority ships and the hotfix task below is
-  done. The gateway's form is settled: typed routes, `/models` answered by the gateway, overflow to
-  Foundry, and per-key priority, buckets, and budgets.
+  a long outage or overload a row can stay out for minutes after it is back (`docs/gateway.md`,
+  "Priority's gaps").
 - coordinator · experiment.hosting intake: the gateway's compose stack bind-mounts its config
   read-only, an exception to `~/architecture`'s convention, for the intake to weigh for the
   capstone's stack. Its `gateway/compose.sh` also exports `BUILDX_NO_DEFAULT_ATTESTATIONS=1`:
   Compose v5.2.0 ignores `provenance: false`, and on Docker's containerd image store each build's
   new attestation changes the image id, so compose recreates the built service on every `up
-  --build`. The convention may want the same.
-- coordinator · v1.ai.client: add a hotfix task, run ahead of v1.ai.client's remaining tasks,
-  which wait on it (architect, 2026-11-16: "always fix problems at their root and avoid hiding them
-  behind band aids"). It fixes go-ai, at `tools/infer/v0.1.0`, wherever go-ai is at fault in
-  reading Azure AI Foundry's streams, with no gateway workaround:
-  - its Chat Completions parser rejects a chunk with an empty reply id, which Azure's chat streams
-    start with: `format/completions/decode.go:365-369` fixes the reply id from the first chunk, and
-    Azure's first chunk has an empty id (likely its content-filter preamble, with no choices);
-  - its Responses parser rejects how Azure adds a reasoning item:
-    `format/responses/stream.go:308-321` rejects an output item added with content, and
-    `protocol/accumulator.go:222-232` has the same assumption.
-
-  The task first records a raw stream straight from Foundry and confirms each root cause against
-  it and the OpenAI spec. Three gaps are the gateway's, not go-ai's to fix (an upstream issue is
-  the architect's to file): `incomplete_details.reason` of `max_tokens`, 0 input tokens on a
-  translated Messages stream, and, on overflow, audio in a Responses request refused by
-  agentgateway's typed Responses parser (400, "untagged enum InputParam"). It also weighs the other
-  Foundry gaps, which are model differences rather than go-ai's faults: gpt-oss-120b refuses
-  `tool_choice: required` and ignores a named function; gpt-5-mini refuses `max_tokens` and
-  reasoning effort `none`; gpt-audio-mini refuses a text-only chat (spike-model-gateway
-  `docs/findings/priority.md`, "The tiers on Azure" and "Per alias"). This edit goes through a
-  coordinator `plan` session, since BUILD doesn't change the coordinator.
+  --build`. The convention may want the same (`docs/gateway.md`, "Operational notes for the
+  intake").
+- coordinator · v1.ai.client: the live retry proof (go-ai finding 17) moved from acceptance to this
+  spike and is proven (spike-model-gateway `docs/findings/answer.md`, "Step 5 · the retry proof
+  (behaviors 6–8)"). Acceptance's summary drops it, and go-ai's `context/design.md` finding 17 and
+  ai-strategy.md "go-ai's name map and requests" are reworded by v1.ai.client.
+- coordinator · experiment.hosting intake: the Foundry account and its four deployments are kept
+  until v1.ai.client's acceptance ships; the intake deletes them.
+- coordinator · v1.ai.hosting: authenticated OTLP ingress and sampling below 100% are production
+  requirements. The spike's Collector takes spans on gb10-2's tailnet address unauthenticated, and
+  the gateway and rows sample every request (spike-model-gateway `docs/findings/answer.md`, "For
+  production"; `docs/gateway.md`, requirement 10).
+- coordinator · v1.ai.hosting: a measured cold start. vLLM's startup traces give each row's cold
+  start by phase, read from its `Overall Loading` trace: weights' load, model preparation, KV cache
+  allocation, and warmup. The agent's 46.2 s is led by its 17.8 s weights' load, audio's 50.0 s by
+  its 20.5 s warmup; vision 31.3 s, embedding 13.0 s, one restart each with the weights cached
+  (spike-model-gateway `docs/findings/answer.md`, "The rows' startup traces and cold start"). A
+  candidate for v1.ai.hosting's restart and capacity notes, in place of an estimate.
