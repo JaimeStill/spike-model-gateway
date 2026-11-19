@@ -10,276 +10,146 @@
 2. [x] routing
 3. [x] priority
 4. [x] answer
-5. [ ] max-tokens-note
+5. [x] max-tokens-note
 
-## Task brief · answer
+## Task brief · max-tokens-note
 
 ```
-Goal          experiment.hosting.spike-model-gateway · task 4/4 · answer
-Branch        answer
-Repos         spike-model-gateway (root); spike-model-engines, host/ only,
-              through one pull request that cites this task's finding
-Problem       Priority settled the gateway's form, but the spike can't
-              answer yet:
-              - The step helpers pin go-ai's tools/infer/v0.1.0, and
-                currency doesn't see it. v1.ai.client released go-ai
-                v0.2.0 and tools/infer/v0.2.0 to fix the discrepancies
-                priority found, and nothing has checked those fixes
-                through the gateway.
-              - v1.ai.client's acceptance handed this spike go-ai's live
-                retry proof (its design finding 17): retry proven against
-                the gateway's 429, 503, and Retry-After. Today only unit
-                tests prove it.
-              - The gateway exports no traces, so nobody can see a
-                request's path through the gateway to its row.
-              - The paper sections, the gateway document, README's
-                answer, and the answer section don't exist yet.
-              This is the spike's last task, so its merge syncs the
-              answer into the coordinator.
-
-              New tool: the OpenTelemetry Collector, the vendor-neutral
-              agent that receives telemetry over OTLP, processes it, and
-              exports it to backends. It runs as one service in the
-              gateway's compose stack on gb10-2. agentgateway and the four
-              vLLM rows send it spans over OTLP gRPC, and it forwards them
-              to Tempo, which stores them; you search them in Grafana.
-              Tempo and Grafana are pinned as go-web-service's
-              observability profile pins them, so they count as known
-              tools. In slice 2 the session walks you through the
-              Collector: what its receivers, processors, exporters, and
-              pipelines do, and what one trace looks like from the
-              gateway down to a row.
+Goal          experiment.hosting.spike-model-gateway · task 5/5 · max-tokens-note
+Branch        max-tokens-note
+Repos         spike-model-gateway (root) only
+Problem       The priority finding records that a streamed Messages request
+              at a 16-token limit, overflowed to Azure on alias agent, "did
+              not exit within 15s" (2026-11-16). Since then:
+              - go-ai's rerun on 2026-11-17 ended in message_stop within
+                1.3 s, and go-ai ended on it, so the stall wasn't go-ai's.
+                It also saw `azureai-fe-is-streaming: False` on Azure's
+                reply, and a translated stream whose message_start reports
+                0 input tokens while message_delta reports the real count.
+                Only go-ai's git history keeps this (commit 0eb0842).
+              - task answer's rerun on 2026-11-18 passed in 0.26 s and
+                0.24 s.
+              go-ai read the header as the gateway sending Azure an
+              unstreamed request, so a long reply would arrive whole.
+              agentgateway v1.7.0's source says the opposite: it keeps the
+              request's stream flag, asks for usage in the stream, and
+              translates chunk by chunk. That accounts for the 0 input
+              tokens. It also holds message_stop back until both a finish
+              reason and the usage chunk arrive, or [DONE], which is one
+              candidate cause of the stall. Whether an overflowed agent
+              Messages stream streams decides production's overflow
+              parity for agent, and nothing has measured it.
+              This is the goal's last task, so its SHIP syncs the goal
+              into the coordinator.
+              New tool: none. The timed stream is curl and bash.
 Behaviors
-  Clients at go-ai v0.2.0 (evidence 8)
-  1. The step helpers run go-ai's and infer's tiers from a worktree at
-     tools/infer/v0.2.0, and install the released infer at v0.2.0. Each
-     tier run clears every role's MODEL and PROFILE beside its base URL
-     and credentials. It also sets each alias's profile for what answers
-     it:
-     - rows up: the agent row's documented vLLM 0.34.0 profile;
-     - rows down, agent: {"completions":{"no_tool_choice_required":true}};
-     - rows down, vision: {"completions":{"refused_efforts":["none",
-       "xhigh","max"]},"responses":{"refused_efforts":["none","xhigh"]}}.
-     infer called by hand clears INFER_PROFILE. A probe that needs a
-     single send passes --retries 1, since infer now retries by default.
-     State and the command log go under this task's own state directory.
-  2. `mise run currency` reports the helpers' go-ai tag when a newer
-     tools/infer tag exists, and reports nothing for it at v0.2.0.
-  3. With the rows up, go-ai's and infer's whole tiers pass through the
-     gateway on all four aliases. Any failure is a finding, and no Azure
-     request is sent.
-  4. With the rows-down overlay, the tests that failed in priority rerun
-     as a -run selection, then the audio rerun runs. The finding records
-     each priority discrepancy beside the go-ai or infer change that
-     claims it, the expected result, and the result:
-     Expected to pass (go-ai's fixes):
-     - Azure's chat stream whose first chunk has an empty id (v0.1.1);
-     - a Responses reasoning item added with content (v0.1.1);
-     - reasoning_tokens at the usage's top level (v0.1.1);
-     - TestStreamText/messages: a translated Messages stream's input
-       tokens, read from message_delta (v0.2.0).
-     Expected as a declared skip (UnsupportedError, Declared true):
-     - tool_choice required on agent completions: the function-call,
-       reasoning round-trip, and allowed_tools-required tests;
-     - effort none on vision.
-     Expected as the provider's or the gateway's error passed through:
-     - tool_choice required on agent Messages and Responses, which the
-       gateway translates for Azure;
-     - a named function ignored;
-     - an unknown model accepted;
-     - Responses' incomplete reason max_tokens;
-     - audio in a Responses request, refused by the gateway;
-     - the 16-token Messages stall;
-     - gpt-audio-mini's refusal of a text-only chat.
-     TestTranscribeChat passes after the audio rerun's warm-up.
-  5. A change that claims a fix but still fails is recorded in the
-     finding, and a pending edit for v1.ai.client names it. It doesn't
-     stop the task unless a tier can't run at all.
-  Retry proof (go-ai's finding 17)
-  6. A Go test in the spike imports go-ai v0.2.0 from the module proxy,
-     read-only, and builds its client with ai.New over an *http.Client
-     that records every attempt: status, headers, body marker, and time.
-     The policy is infer's default: 3 attempts, 500 ms base, 30 s most.
-     The key comes from its file and never appears in argv or output. A
-     case passes only if:
-     - every refused attempt carries a marker only the gateway sends;
-     - a later attempt of the same call answers 200;
-     - the wait before it is at least the refusal's Retry-After, if any.
-     `mise run check` vets it.
-  7. The four cases, each with the rows up and no request to Azure:
-     a. the rate-limit-agent overlay: a 429 with Retry-After and
-        x-ratelimit-*, retried, then 200 from the agent row;
-     b. embedding's global 34/s limit, hit with a 40-request burst:
-        each 429 (Retry-After 1, x-ratelimit-*) is retried, then 200;
-     c. the in-flight-1 overlay, with the test holding one request
-        open: a 503 "request limit exceeded" with no Retry-After,
-        retried after backoff, then 200;
-     d. the bulk-rate-low overlay: a Retry-After past the 30 s maximum
-        is returned at once, not retried.
-     A header timeout or an idle-close seen in a run is recorded. A
-     case that fails follows behavior 5's rule.
-  8. Each case is cross-checked against the gateway: the access log's
-     retry_after lines for the 429s, and requests_shed for the 503s.
-     The stats port, 15020, is published on gb10-2's loopback and read
-     over SSH.
-  Traces (evidence 9)
-  9. The gateway's compose stack adds three service groups, each built
-     from its own Dockerfile whose FROM line is its pin, all at
-     go-web-service's pins:
-     - the Collector, 0.165.0: its OTLP gRPC port published on gb10-2's
-       tailnet address, with its health check unpublished;
-     - Tempo, 3.1.1: unpublished, with a named volume;
-     - Grafana, 13.3.1: on 127.0.0.1:3002, with Tempo provisioned as
-       its datasource.
-     A mise task tunnels Grafana to the laptop's localhost:3002.
-     `mise run currency` reads the three pins, the stack restarts with
-     the host unattended, and every earlier check still passes.
-  10. agentgateway exports traces to the Collector, with random sampling
-      on. A request through each alias appears in Grafana as a trace.
-  11. The host/ pull request adds optional per-row tracing: the
-      Collector's endpoint on gb10-2, gb10-2 resolved at run time, and
-      a service name per alias. Detailed traces stay off. Once it is
-      merged, the four standing rows restart with tracing on (the
-      Framework by container restart, no reboot), and each serves again
-      with /health 200.
-  12. A request through a row shows the row's span as a child of the
-      gateway's span, carried by traceparent. An overflowed request has
-      no row span. No span holds prompt or completion content; the
-      finding records the attributes read.
-  Paper and answer (evidence 10, 11)
-  13. The gateway comparison takes LiteLLM as the feature reference,
-      beside Bifrost, Agent Router, Kong, Portkey, Helicone, and
-      TensorZero (archived). It also covers vLLM's production-stack
-      router, Kubernetes portability, JWT/OIDC, production's Azure
-      Container Apps routing, IL6, and a cheaper chat tier. The session
-      researches each on the web; every claim cites its source with the
-      date read, and nothing is tried live. Each candidate is weighed
-      against the spike's six question bullets.
-  14. The gateway document gives the decision and its configuration as
-      requirements for v1.ai.hosting:
-      - overflow only for agent and vision, none for audio or embedding,
-        and none under IL6;
-      - dot-segment hardening;
-      - authenticated OTLP ingress, and trace sampling below 100%;
-      - the embedding overflow marker;
-      - embedding's 429 with Retry-After in place of "queues or
-        overflows";
-      - admission on /metrics, a gap on paper.
-      It also lists priority's gaps:
-      - a sliding budget window wanted;
-      - priority orders only the waiting queue;
-      - the queue limit counts every key alike;
-      - eviction sends nearly the whole load to Azure under saturation,
-        and its growth has no cap;
-      - no retry of a body over 64 KiB, and about 11 s per attempt to a
-        powered-down host;
-      - the UI's Logs and Analytics reached only by URL;
-      - the route `ai` deprecation risk, with the watch register as its
-        guard.
-  15. README's "The answer" states the question, the one-line answer,
-      and evidence 1–11, each with where it is proven.
-  16. The goal record's pending edits:
-      - add the answer section for ai-hosting.md, in the answer-section
-        format;
-      - drop the two v1.ai.client edits that have landed;
-      - fold the two roadmap summary edits into the gateway document and
-        the answer section, then drop them;
-      - add an edit moving the live retry proof from v1.ai.client's
-        acceptance to this spike, with go-ai's finding 17 left for
-        v1.ai.client to update;
-      - add an edit keeping the Foundry account and its four deployments
-        until v1.ai.client's acceptance ships, with experiment.hosting's
-        intake deleting them;
-      - add an edit for the OTLP authentication and sampling
-        requirements.
-  Records
-  17. Azure answers at most 80 requests in the task, counted from the
-      access log after each step that can overflow and recorded in the
-      finding.
-  18. The task's finding records versions, each host's stack, the
-      laptop's path to each host, and every command quoted from the
-      logs as run. It holds no address, key, Azure resource name, or
-      secret, and raw output stays untracked.
-  19. Both repositories' `mise run currency` report only held items,
-      and both checks pass. The watch register is read and updated at
-      the start and end of the task.
-Test seams    each alias's base URL on the gateway as the laptop reaches it
-              (go-ai's and infer's tiers and the retry test, through the
-              step helpers); the access log, requests_shed, and Grafana's
-              trace search; `mise run check` and `mise run currency`
+  The rerun (slice 1)
+  1. The step helpers keep their state and command log in a folder of
+     this task's own. The answer task's state is left as it is.
+  2. A step helper sends one streamed Messages request to an alias
+     through the gateway, given a max_tokens and a prompt. It records:
+     - each SSE event's name and its arrival time from the send, to the
+       microsecond;
+     - the reply's status and response headers;
+     - the total time.
+     The gateway key is never in a process's argv, printed, or logged.
+     The command is logged as the other helpers' are.
+  3. Control: two Chat Completions requests straight to the Foundry
+     gpt-oss-120b deployment, past the gateway, one with stream true and
+     one with stream false, keeping only their response headers. The
+     finding gives `azureai-fe-is-streaming` for each, and so what the
+     header reports for a streamed request.
+  4. Long case: with the rows-down overlay deployed, the helper sends 3
+     requests on agent (count upward, max_tokens 1024). Each reply
+     carries `x-gateway-overflow: azure`. For each send the finding
+     gives:
+     - the time to the first text delta, the span of the text deltas,
+       and the time to message_stop;
+     - the Azure response headers;
+     - the verdict: "streams" when the text deltas are spread over the
+       reply's duration, "arrives whole" when every event lands together
+       at the end.
+  5. Sixteen-token case: in the same deployment, the helper sends 5
+     requests on agent at max_tokens 16. For each send the finding gives
+     the gap from the last text delta to message_delta and to
+     message_stop, and the total. A send longer than 15 s is a
+     recurrence. The finding says whether message_stop was held after
+     the text ended.
+  6. The overlay is reverted. Afterwards an agent request is answered by
+     its row with no overflow marker. azure_count is read after each
+     rows-down step, and the control's 2 requests are counted by hand.
+  7. Every command appears in the finding exactly as run, quoted from
+     the task's log.
+  The note (slice 2)
+  8. The priority finding's note on the --max-tokens 16 hang gains a
+     dated addendum, and its agent parity row points to it. The addendum
+     gives:
+     - the 2026-11-17 rerun (go-ai commit 0eb0842) and the 2026-11-18
+       pass (the answer finding);
+     - this task's measurements;
+     - agentgateway v1.7.0's translation as read in its source, the held
+       message_stop among them.
+     It states the stall's cause as open unless behavior 5 shows a held
+     message_stop. No other document changes.
+  9. The goal record gains a v1.ai.hosting pending edit: whether an
+     overflowed agent Messages stream streams, with its timings, citing
+     the priority finding. The ai-hosting.md answer section stays as
+     approved in task answer.
+  10. The record's Decisions hold the walkthrough's waiver: it departs
+      from the experiment's rule that the last slice is a walkthrough
+      the architect runs (ai-hosting.md:90-92), and the architect
+      followed both slices live. The addendum keeps the long case's steps
+      (deploy rows-down, one send through the helper, revert) as the way
+      to repeat it.
+  11. `mise run check` passes. `mise run currency` reports only the held
+      python.
+Test seams    the timed-stream helper's record of events and headers; the
+              gateway's Azure count
 Slices
-  1 Clients: behaviors 1–8. All the session's: the helpers' move, the
-    rows-up tiers, the rows-down selection and the audio rerun, the
-    overlay deploys, and the retry test. Yours: the host updates at
-    session start (root).
-    Demo:
-    - the rows-up tiers pass at v0.2.0;
-    - the revalidation table, each discrepancy with its expected and
-      actual result;
-    - the four retry cases, with their access-log and requests_shed
-      cross-checks.
-  2 Traces: behaviors 9–12. The session walks you through the
-    Collector; its first walk is yours. The session runs the compose
-    deploy, the host/ pull request and its merge, the row restarts, and
-    the reads.
-    Demo:
-    - a trace in Grafana from the gateway's span down to the agent row's
-      span;
-    - an overflowed trace with no row span.
-  3 Paper and answer: behaviors 13–16. All the session's.
-    Demo: the comparison, the gateway document, README's answer, and the
-    answer section.
-  4 Walkthrough: you run it from the finding:
-    - one rows-up tier run at v0.2.0;
-    - one retry case;
-    - a trace in Grafana over the tunnel;
-    - a read of the gateway document and README's answer.
-    Behaviors 17–19 hold throughout.
+  1 The rerun: the task's state folder, the helper, the direct control,
+    then the long and sixteen-token cases through rows-down, and the
+    revert (behaviors 1-7).
+    Demo: the per-event timings and the verdict for each case.
+  2 The note: priority's addendum and parity row, the v1.ai.hosting
+    pending edit, and the waiver in Decisions (behaviors 8-11).
+    Demo: the addendum and the pending edit.
+  No upgrade slice: the only trailing item is held. Walkthrough: waived
+  (behavior 10).
 Benchmarks    none. A new benchmark is an escalation.
-Azure cap     At most 80 Azure-answered requests in the whole task: 2xx and
-              non-429 4xx, with 429s reported apart. Only the rows-down
-              selection, the audio rerun, and the walkthrough send to
-              Azure. The session stops and escalates when:
-              - a step would take the count past 80;
-              - Azure answers 429 for its own capacity (never retried
-                around);
+Azure cap     At most 20 Azure-answered requests in the task: 2xx and
+              non-429 4xx, with 429s reported apart. The planned sends are
+              10 (3 long, 5 short, 2 control); the control is counted by
+              hand. The session reverts rows-down and escalates when:
+              - a step would take the count past 20;
+              - Azure answers 429 (never retried around);
               - a row stays evicted outside an overflow step;
-              - any content other than synthetic or test-fixture data
-                would be sent to Azure.
-Guided        Yours:
-              - the session-start host updates (root);
-              - the Collector's first walk in slice 2;
-              - slice 4's walkthrough.
+              - anything other than synthetic prompts would be sent to
+                Azure.
+Guided        Yours: the session-start host updates (root).
               The session's, over Tailscale SSH with no root, each step in
-              your view and logged through the helpers: compose deploys
-              and overlays, the host/ pull request, row restarts, tiers,
-              the retry test, trace reads, and web research.
-Out of scope  any change to go-ai (finding 17's edit is v1.ai.client's);
-              vLLM's detailed traces; metrics and logs through the
-              Collector; tracing from go-ai or infer clients (the
-              cross-service-tracing goal's); a connection-failure retry
-              case; an agentgateway upgrade; spike-model-engines outside
-              host/; deleting the Foundry account; any benchmark; a live
-              trial of another gateway; ~/docs content to Azure
-Door          two-way, except what reached Azure:
-              - the helpers, the retry test, the overlays, and the compose
-                services are in git;
-              - the host/ pull request can be reverted, and the rows
-                restarted without tracing;
-              - Tempo's and Grafana's volumes can be dropped;
-              - the sync's coordinator pull request can be reverted.
-              One-way: the Azure spend, and the test content sent to Azure
-              under its data-processing terms.
+              your view and logged through the helpers: overlay deploys
+              and the revert, the helper's sends, the direct control,
+              azure_count.
+Out of scope  any change to go-ai; changes to the answer finding, the
+              gateway document, README's answer, or the answer section;
+              a watch register entry or an upstream issue for the held
+              message_stop; an agentgateway upgrade; spike-model-engines;
+              other aliases' streams; deleting the Foundry account
+Door          two-way, except what reached Azure: the helper and the
+              documents are in git, the overlay is reverted by a plain
+              deploy, and the sync's coordinator pull request can be
+              reverted. One-way: the Azure spend, and the synthetic
+              prompts sent to Azure under its data-processing terms.
 Sync          coordinator:
               - ai-hosting.md: the answer section for spike-model-gateway
-                under "Answers · experiment.hosting", and the intake
-                notes from the pending edits;
+                under "Answers · experiment.hosting", and the intake notes
+                from the pending edits;
               - roadmap.toml: remove experiment.hosting.spike-model-gateway
-                from active and delete its table; update v1.ai.client's
-                acceptance summary for the retry proof moved here; add
-                the v1.ai.hosting notes.
-              go-ai: locked by v1.ai.client, so finding 17's update joins
-              that goal as a task in the coordinator commit.
+                from active and delete its table (both its tasks, answer
+                and max-tokens-note, included); add the v1.ai.hosting
+                notes, this task's included.
+              go-ai: nothing. v1.ai.client has synced, and the retry-proof
+              edit was dropped (record decision :581-584).
               next: none — run `marathon intake experiment.hosting`
 ```
 
@@ -590,6 +460,36 @@ Sync          coordinator:
   since the route's `localRateLimit` replaced the overlay's top-level policy (session, slice 1).
 - answer: gb10-2 was rebooted to show behavior 9 live, not accepted on restart policy (architect,
   2026-11-19, spec review).
+- max-tokens-note: the note goes in the priority finding alone; the answer finding, the gateway
+  document, and README stay unchanged (architect, 2026-11-19, plan).
+- max-tokens-note: the note records the observations beside agentgateway v1.7.0's source, which
+  keeps the stream flag, and leaves the stall's cause open (architect, 2026-11-19, plan).
+- max-tokens-note: go-ai's reading, that the gateway sends Azure an unstreamed request, is checked
+  live through the rows-down overlay rather than on paper (architect, 2026-11-19, plan).
+- max-tokens-note: the long case is a streamed Messages request on agent at `max_tokens` 1024, sent
+  3 times, with every event timed and Azure's response headers kept (architect, 2026-11-19, plan).
+- max-tokens-note: a new step helper, `messages_stream`, times the stream with curl and bash's
+  `$EPOCHREALTIME`, passing the key as `gw_curl` does; curl's `--trace-time` is rejected because
+  its trace prints the key (architect, 2026-11-19, plan).
+- max-tokens-note: the 16-token case is rerun 5 times to test for a held `message_stop`
+  (architect, 2026-11-19, plan).
+- max-tokens-note: two Chat Completions requests straight to the Foundry deployment, one streamed
+  and one not, show what `azureai-fe-is-streaming` reports (architect, 2026-11-19, plan).
+- max-tokens-note: the Azure cap is 20, rows-down is reverted at the first 429 or at the cap, and
+  the direct requests are counted by hand (architect, 2026-11-19, plan).
+- max-tokens-note: the step helpers' state and command log move to `.state/max-tokens-note`, and
+  the answer task's `.state/answer` is left as it is (architect, 2026-11-19, plan).
+- max-tokens-note: the held `message_stop` is recorded in the note only, with no watch register
+  entry (architect, 2026-11-19, plan).
+- max-tokens-note: the result reaches the coordinator as a new v1.ai.hosting pending edit, and the
+  answer section stays as approved (architect, 2026-11-19, plan).
+- max-tokens-note: the walkthrough was waived, departing from the experiment's rule that a task's
+  last slice is a walkthrough the architect runs (standards-lab `context/ai-hosting.md`:90-92). The
+  architect followed both slices live, and the priority addendum's "To repeat it" keeps the long
+  case's steps (architect, 2026-11-19).
+- max-tokens-note: the "count upward" prompt gave replies too short to decide behavior 4, so the one
+  repeat the cap left room for ran in a second rows-down deployment with "Count from 1 to 300"; the
+  16-token case ran in the first. Azure answered 13 of the 20 allowed (session, slice 1).
 
 ## Pending edits
 
@@ -810,3 +710,13 @@ Sync          coordinator:
   its 20.5 s warmup; vision 31.3 s, embedding 13.0 s, one restart each with the weights cached
   (spike-model-gateway `docs/findings/answer.md`, "The rows' startup traces and cold start"). A
   candidate for v1.ai.hosting's restart and capacity notes, in place of an estimate.
+- coordinator · v1.ai.hosting: an agent Messages stream that overflows to Azure streams. Through
+  the rows-down overlay (agentgateway v1.7.0, Foundry `gpt-oss-120b`), three sends counting to 300
+  at `max_tokens` 1024 each gave 61 text deltas in bursts spread over the reply, never all at the
+  end: the first at 0.57–0.66 s, and the last with `message_stop` at 1.12–1.36 s. The translated
+  stream's `message_start` reports 0 input tokens, because agentgateway builds it from the first
+  chunk, before any usage; only `message_delta` carries the real count, so a consumer must read
+  input usage there. Azure's `azureai-fe-is-streaming` header doesn't show streaming: it reads
+  `False` on a request streamed directly to Azure too. The cause of the 2026-11-16 stall at
+  `--max-tokens 16` stays open; it hasn't recurred in three reruns (spike-model-gateway
+  `docs/findings/priority.md`, "Addendum 2026-11-19 · the 16-token Messages stall").
