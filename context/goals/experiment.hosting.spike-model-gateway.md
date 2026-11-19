@@ -290,7 +290,8 @@ Sync          coordinator:
 - slice 2 traces: done (d1f58f2, spike-model-engines #20, 2bf8e69, 8efb871). The Collector,
   Tempo, and Grafana run in gb10-2's stack; each alias's trace nests the row's span under the
   gateway's; an overflowed trace has no row span; each row sends a startup trace; Azure 50 of 80.
-- slice 3 paper: next
+- slice 3 paper: done (b9efae9 comparison, 5a7d880 gateway document, README answer, answer section).
+- slice 4 walkthrough: next
 
 ## Decisions
 
