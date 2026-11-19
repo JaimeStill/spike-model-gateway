@@ -1283,7 +1283,10 @@ So the header doesn't show whether a request was streamed. It reads `False` eith
 **A long reply, first try** (lines 211–253). "Count upward from 1, one number a line.",
 `max_tokens` 1024, 3 sends. The model kept each reply short: it stopped at 20, asked how many, or
 stopped at 100. Totals 1.054, 0.748, and 1.330 s; text deltas 6, 9, and 21; the verdict "mixed"
-each time. Inconclusive: too little text to tell a stream from a whole reply.
+each time. The thinking deltas spread over each reply, and the text came in bursts: each of the
+first two sends' text deltas arrived within 1 ms of one another and of `message_stop`, and the
+third's in four bursts from 0.913 to 1.328 s. Inconclusive: too little text to tell a stream from
+a whole reply.
 
 **A long reply, to a fixed target** (lines 742–783). "Count from 1 to 300, one number per line,
 nothing else.", `max_tokens` 1024, 3 sends, each counting to 300 and ending `end_turn`. Times in
@@ -1307,13 +1310,15 @@ and `azureai-fe-is-streaming: False`. Each `message_start` reported 0 input toke
 `message_delta` the real count: 83 here, 78 in the first try, and 72 in the 16-token case below,
 as on 2026-11-17.
 
-**The 16-token case** (lines 262–331). "Name a primary color.", `max_tokens` 16, 5 sends. Every
-one ended `stop_reason` `max_tokens` with 16 output tokens, all of them reasoning: thinking deltas
-and no text deltas, so each verdict was "too short to tell". Totals 1.064, 0.665, 1.876, 0.486,
-and 0.448 s. `message_delta` and `message_stop` arrived within 1 ms of the last delta every time.
-Nothing was held, and the stall didn't recur. The fourth and fifth sends started in the same
+**The 16-token case** (lines 262–331). "Name a primary color.", `max_tokens` 16, 5 sends. Each
+summary shows no text deltas, so each verdict was "too short to tell". Totals 1.064, 0.665, 1.876,
+0.486, and 0.448 s. `message_delta` and `message_stop` arrived within 1 ms of the last delta every
+time. Nothing was held, and the stall didn't recur. The fourth and fifth sends started in the same
 second and so share a folder, where the fifth's captures replaced the fourth's. The log keeps the
-fourth's summary, and the helper's folder names carry milliseconds since (`07da3da`).
+fourth's summary, and the helper's folder names carry milliseconds since (`07da3da`). The four
+sends whose captures remain each ended `stop_reason` `max_tokens` with 16 output tokens, all of
+them reasoning: thinking deltas only. The summary doesn't print the stop reason, so the fourth's
+isn't known.
 
 **Back to the rows.** Each overlay was removed by a plain deploy (lines 340 and 792 onward), and
 one `messages_stream agent 64` after each was answered by the row, `overflow: none` (lines 521–534
@@ -1377,35 +1382,60 @@ Expected:
 
 ### Commands as run, 2026-11-19
 
-The commands that matter, as logged, from `.state/max-tokens-note/commands-2026-11-19.log`: the
-control, each deploy, the first `messages_stream` of each case, and each `azure_count`. The two
-direct requests are the Azure helper's, `az_curl`, logged as the curl it runs, and `azure_count`
-is logged as its read of the access log (lines 254, 332, 784, and 987). Each
-`mise run agentgateway-deploy` is followed in the log by the deploy's own `+` lines, and each
-`messages_stream` by its curl and its summary. The output stays in the log.
+Every command the session ran, as logged, from `.state/max-tokens-note/commands-2026-11-19.log`.
+The two direct requests are the Azure helper's, `az_curl`, logged as the curl it runs, and
+`azure_count` is logged as its read of the access log (lines 254, 332, 535, 543, 550, 784, 987,
+and 994). Each `mise run agentgateway-deploy` is followed in the log by the deploy's own `+`
+lines, and each `messages_stream` by its curl and its summary; those are left out here. The
+output stays in the log.
 
 ```text
++ 2026-11-19T09:38:18-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T09:38:18-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
++ 2026-11-19T09:38:18-05:00 laptop: messages_stream agent 64 'Count upward from 1, one number a line.'
 + 2026-11-19T09:38:53-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:38:53-05:00 laptop: printf 'header = "api-key: %s"\nurl = "https://%s.services.ai.azure.com/openai/v1/chat/completions"\n' "$(<.state/azure/key)" "$(sed -n 's/^AZURE_ACCOUNT=//p' .state/azure/account.env | tr -d \"\')" | curl -K - -s -o /dev/null -D .state/max-tokens-note/control/stream-true.headers.txt -H content-type: application/json -d {"model":"gpt-oss-120b","stream":true,"max_tokens":32,"messages":[{"role":"user","content":"Count upward from 1, one number a line."}]}
 + 2026-11-19T09:38:54-05:00 laptop: printf 'header = "api-key: %s"\nurl = "https://%s.services.ai.azure.com/openai/v1/chat/completions"\n' "$(<.state/azure/key)" "$(sed -n 's/^AZURE_ACCOUNT=//p' .state/azure/account.env | tr -d \"\')" | curl -K - -s -o /dev/null -D .state/max-tokens-note/control/stream-false.headers.txt -H content-type: application/json -d {"model":"gpt-oss-120b","stream":false,"max_tokens":32,"messages":[{"role":"user","content":"Count upward from 1, one number a line."}]}
 + 2026-11-19T09:38:56-05:00 laptop: grep -iH -e '^HTTP/' -e '^azureai-fe-is-streaming' .state/max-tokens-note/control/stream-true.headers.txt .state/max-tokens-note/control/stream-false.headers.txt
 + 2026-11-19T09:39:05-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:39:05-05:00 laptop: mise run agentgateway-deploy rows-down
++ 2026-11-19T09:39:08-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
++ 2026-11-19T09:39:12-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:39:12-05:00 laptop: messages_stream agent 1024 'Count upward from 1, one number a line.'
++ 2026-11-19T09:39:13-05:00 laptop: messages_stream agent 1024 'Count upward from 1, one number a line.'
++ 2026-11-19T09:39:14-05:00 laptop: messages_stream agent 1024 'Count upward from 1, one number a line.'
 + 2026-11-19T09:39:31-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:39:31-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:05 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 + 2026-11-19T09:39:35-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:39:35-05:00 laptop: messages_stream agent 16 'Name a primary color.'
++ 2026-11-19T09:39:36-05:00 laptop: messages_stream agent 16 'Name a primary color.'
++ 2026-11-19T09:39:37-05:00 laptop: messages_stream agent 16 'Name a primary color.'
++ 2026-11-19T09:39:39-05:00 laptop: messages_stream agent 16 'Name a primary color.'
++ 2026-11-19T09:39:39-05:00 laptop: messages_stream agent 16 'Name a primary color.'
 + 2026-11-19T09:39:40-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:31 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 + 2026-11-19T09:39:49-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:39:49-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-19T09:39:52-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
++ 2026-11-19T09:41:05-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T09:41:05-05:00 laptop: messages_stream agent 64 'Name a primary color.'
++ 2026-11-19T09:41:06-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:40 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-19T09:41:10-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T09:41:10-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:05 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-19T09:41:10-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:41 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 + 2026-11-19T09:42:02-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:42:02-05:00 laptop: mise run agentgateway-deploy rows-down
++ 2026-11-19T09:42:05-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
 + 2026-11-19T09:42:05-05:00 laptop: messages_stream agent 1024 'Count from 1 to 300, one number per line, nothing else.'
++ 2026-11-19T09:42:06-05:00 laptop: messages_stream agent 1024 'Count from 1 to 300, one number per line, nothing else.'
++ 2026-11-19T09:42:08-05:00 laptop: messages_stream agent 1024 'Count from 1 to 300, one number per line, nothing else.'
 + 2026-11-19T09:42:09-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:41:41 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 + 2026-11-19T09:42:13-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T09:42:13-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-19T09:42:16-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
++ 2026-11-19T09:43:26-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T09:43:26-05:00 laptop: messages_stream agent 64 'Name a primary color.'
 + 2026-11-19T09:43:28-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:05 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-19T09:43:28-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:42:15 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
 ```
 
 ## Commands as run
