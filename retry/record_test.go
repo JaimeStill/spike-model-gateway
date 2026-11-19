@@ -8,9 +8,12 @@
 // skips, so `go test` in the check skips them all. scripts/clients-lib.sh's retry_case runs one
 // case with the environment it needs:
 //
-//   - RETRY_CASE: the live case, rate-limit-agent, embedding-burst, in-flight-1, or bulk-rate-low.
+//   - RETRY_CASE: the live case, rate-limit-agent, embedding-burst, in-flight-1, or bulk-rate-low;
+//     any other value fails the run (TestMain), rather than skipping every test.
 //   - RETRY_KEY_FILE: the path of the gateway key's file, .state/agentgateway/keys/<name>, read by
-//     the test itself, so the key is never in a process's argv; nothing here prints it.
+//     the test itself, so the key is never in a process's argv; nothing here prints it. Nor an
+//     address: an error's text, which a transport failure fills with the gateway's tailnet
+//     address, is printed and tabled with each IP address as <addr> (scrub).
 //   - RETRY_KEY_IN: bearer, the default, sends the key as the bearer token; header sends it as
 //     `x-api-key: <key>`, for the key-header overlay, as clients-lib.sh's CLIENTS_KEY_IN does.
 //   - RETRY_AGENT_BASE_URL and RETRY_EMBEDDING_BASE_URL: each alias's base URL on the gateway.
@@ -33,6 +36,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -131,7 +135,7 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := r.base.RoundTrip(req)
 	a.reply = time.Now()
 	if err != nil {
-		a.err = err.Error()
+		a.err = scrub(err)
 	} else {
 		a.status = resp.StatusCode
 		a.header = resp.Header.Clone()
@@ -144,7 +148,7 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 			a.marker = bytes.Contains(body, []byte(inFlightMarker))
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			if rerr != nil {
-				a.err = rerr.Error()
+				a.err = scrub(rerr)
 			}
 		}
 	}
@@ -153,6 +157,27 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 		r.onReply(a)
 	}
 	return resp, err
+}
+
+// address is an IPv4 address, or an IPv6 one in brackets, as a dial error names the host it
+// reached: gb10-2's tailnet address, which nothing here prints.
+var address = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}\b|\[[0-9A-Fa-f]*:[0-9A-Fa-f:.]*(%[\w.-]+)?\]`)
+
+// scrub is err's text with each IP address replaced by <addr>, for t.Log and the table.
+func scrub(err error) string {
+	return address.ReplaceAllString(err.Error(), "<addr>")
+}
+
+// cases is every live case, by RETRY_CASE's value.
+var cases = []string{"rate-limit-agent", "embedding-burst", "in-flight-1", "bulk-rate-low"}
+
+// TestMain refuses a RETRY_CASE that names no case, which would otherwise skip every test and pass.
+func TestMain(m *testing.M) {
+	if c := os.Getenv("RETRY_CASE"); c != "" && !slices.Contains(cases, c) {
+		fmt.Fprintf(os.Stderr, "RETRY_CASE is %q, not a case: %s\n", c, strings.Join(cases, ", "))
+		os.Exit(2)
+	}
+	os.Exit(m.Run())
 }
 
 // live skips the test unless RETRY_CASE names its case, and returns the base URL variable's value

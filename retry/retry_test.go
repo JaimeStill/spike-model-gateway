@@ -31,7 +31,7 @@ func TestRateLimitAgent(t *testing.T) {
 		_, err := client.Generate(ctx, chat("agent", "Reply with the word ready.", 64))
 		cancel()
 		if err != nil {
-			t.Errorf("%s: %v", call, err)
+			t.Errorf("%s: %s", call, scrub(err))
 		}
 		as := log.calls()[call]
 		checkCall(t, call, as, true)
@@ -82,7 +82,7 @@ func TestEmbeddingBurst(t *testing.T) {
 	}
 	for i, err := range errs {
 		if err != nil {
-			t.Errorf("embed-%02d: %v", i, err)
+			t.Errorf("embed-%02d: %s", i, scrub(err))
 		}
 	}
 	if !limited {
@@ -149,12 +149,12 @@ func TestInFlight1(t *testing.T) {
 		}
 	}()
 	if err := <-admitted; err != nil {
-		t.Fatalf("held: %v", err)
+		t.Fatalf("held: %s", scrub(err))
 	}
 
 	_, err := client.Generate(withCall(ctx, "second"), chat("agent", "Reply with the word ready.", 64))
 	if err != nil {
-		t.Errorf("second: %v", err)
+		t.Errorf("second: %s", scrub(err))
 	}
 	once.Do(func() { close(release) })
 	<-done
@@ -201,7 +201,7 @@ func TestBulkRateLow(t *testing.T) {
 		apiErr, ok := errors.AsType[*ai.APIError](err)
 		switch {
 		case !ok || apiErr.Status != http.StatusTooManyRequests:
-			t.Errorf("%s: want the 429's APIError, got %v", call, err)
+			t.Errorf("%s: want the 429's APIError, got %s", call, scrub(err))
 		case apiErr.RetryAfter <= inferDefault.MaxDelay:
 			t.Errorf("%s: returned with Retry-After %v, within the %v it would wait", call, apiErr.RetryAfter, inferDefault.MaxDelay)
 		}
