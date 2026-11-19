@@ -1,15 +1,15 @@
 # goal · experiment.hosting.spike-model-gateway
 
-- **State:** brief ready
-- **Task:** answer
-- **Branch:** answer
+- **State:** idle
+- **Task:** none
+- **Branch:** none
 
 ## Tasks
 
 1. [x] agentgateway
 2. [x] routing
 3. [x] priority
-4. [ ] answer
+4. [x] answer
 5. [ ] max-tokens-note
 
 ## Task brief · answer
@@ -282,26 +282,6 @@ Sync          coordinator:
               that goal as a task in the coordinator commit.
               next: none — run `marathon intake experiment.hosting`
 ```
-
-## Progress
-
-- slice 1 clients: done (33b1d34, 5e7c70b, 494fc50, 3bc100a, f8c028d). Rows-up tiers pass;
-  every priority discrepancy revalidated as expected (the 16-token Messages stall no longer
-  occurs); the four retry cases pass with cross-checks; Azure 48 of 80, no 429.
-- slice 2 traces: done (d1f58f2, spike-model-engines #20, 2bf8e69, 8efb871). The Collector,
-  Tempo, and Grafana run in gb10-2's stack; each alias's trace nests the row's span under the
-  gateway's; an overflowed trace has no row span; each row sends a startup trace; Azure 50 of 80.
-- slice 3 paper: done (b9efae9 comparison, 5a7d880 gateway document, README answer, answer section).
-- slice 4 walkthrough: waived by the architect. Reviews, editor pass, and brief done.
-- review escalation 1: clients at go-ai v0.3.0 (3e26eca). Rows-up tiers rerun at
-  `tools/infer/v0.3.0`: 26 and 19 passed, 0 failed; Azure 0.
-- standards review: the retry test's output and skips, and the retry policy as run (ada5a2b,
-  b3ea1a0).
-- spec review: the retry test's 429 marker names the gateway's three headers exactly (9ab26e4);
-  gaps closed in the answer, the finding, and the watch register (e7c919b).
-- gb10-2 reboot: every container came back unattended, each alias answered 200 through the
-  gateway with a whole 3-span trace, and the config still read `# overlays: none` (2026-11-19).
-- editor pass; brief next.
 
 ## Decisions
 
