@@ -23,7 +23,8 @@ purpose alias.**
   (agent, vision, audio, embedding), whose `/models` lists that alias alone. go-ai and the infer
   CLI work through it with only the base URL and key changed
   ([`agentgateway.md`](findings/agentgateway.md), "Behavior 3"; [`answer.md`](findings/answer.md),
-  "Step 2 · rows up (behavior 3)", and at the clients' pin, go-ai v0.3.0, "At v0.3.0").
+  "Step 2 · rows up (behavior 3)", and at the clients' pin, go-ai v0.3.0, "At v0.3.0"). One thing
+  doesn't come through: the served model's `root` (requirement 1, "`root` through the gateway").
 - **Access control without the tailnet.** Gateway-issued keys that reach the serving endpoints
   only. Making the gateway the only network path to the rows is production's concern, for the
   networking and platform teams; in dev the rows stay reachable directly on the tailnet.
@@ -43,6 +44,14 @@ purpose alias.**
    [`agentgateway.md`](findings/agentgateway.md), "Behavior 3";
    [`routing.md`](findings/routing.md), "Realignment on route `ai`";
    [`priority.md`](findings/priority.md), "Answer for this task".
+
+   **`root` through the gateway.** The clients work unchanged through the gateway (above, "The
+   base URLs"), but each alias's `/models` is the gateway's own answer,
+   `{"id":"<alias>","object":"model","owned_by":"gateway"}`, so go-ai v0.3.0's `Model.Native` and
+   `infer models`' root column carry no served model, while the row's own listing gives `root`
+   (`openai/gpt-oss-120b` on gb10-1). Whether to pass `root` through or keep it hidden is
+   v1.ai.hosting's call, and v1.ai.client should know that `Native` carries no `root` through the
+   gateway. Proven: [`answer.md`](findings/answer.md), "At v0.3.0".
 2. **Gateway-issued keys, by hash.** The committed config names each key; the deploy creates a
    missing key, keeps it untracked, and fills its hash into the copy it sends. Removing a name and
    deploying revokes the key: new requests on it get 401, and a running stream finishes. A

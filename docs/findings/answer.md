@@ -78,7 +78,8 @@ before each of go-ai's two audio tests, and runs the test alone.
 is infer's default: 3 attempts, 500 ms base, 30 s most; in-flight-1's second call alone allows 5
 attempts, since full jitter can make a retry beat the held stream's release (the test's comment),
 and it used 2. A case passes only if every refused attempt carries a marker only the gateway gives
-(`x-ratelimit-*` on a 429, the body marker on a 503), the call's last attempt is 200 (but
+(`x-ratelimit-limit`, `x-ratelimit-remaining`, and `x-ratelimit-reset` on a 429, the body marker
+on a 503; "The 429 marker", below), the call's last attempt is 200 (but
 bulk-rate-low's refused call), and each retry starts no sooner than the refused attempt's
 Retry-After after its reply. `retry_case <case>` runs one case, after checking that the deployed
 copy's first line names its overlay, and writes its per-attempt table beside its log under
@@ -217,8 +218,9 @@ One failure has moved, not changed. infer's `TestChatReasoningEffort` runs on vi
 where priority's ran on agent. On vision through Messages, effort `low` gave 0 reasoning items
 (both stream modes), where priority's agent gave the same through Messages: the gateway translates
 a Messages request into Chat Completions for both deployments. The rows-down vision profile
-declares no Messages efforts, so `none` ran there and passed; a `messages` member declaring the gap
-would be the helper's, not go-ai's, and is left for the session.
+declares no Messages efforts, so `none` ran there and passed. Session decision (spec review,
+2026-11-19): vision through Messages at effort `none` passed rows down, so there is no gap to
+declare, and the rows-down vision profile stays without a `messages` member.
 
 No claimed fix still fails, so no pending edit for v1.ai.client comes of the revalidation (below).
 
@@ -301,6 +303,35 @@ from `gb10-1:8000` and `http.status=429 retry_after="58"`. `requests_shed` read 
 
 No run's log shows a header timeout or an idle close. Each run's helper found no key in its log or
 its table. A plain deploy at 18:45:00 left the base config live (`# overlays: none`).
+
+**The 429 marker** (spec review, 2026-11-19). The cases above ran with a looser rule: a 429 was the
+gateway's if it carried any header starting `x-ratelimit-`. That prefix marks nothing as the
+gateway's alone, since Azure OpenAI sends `x-ratelimit-*` headers on its replies too. The names
+differ:
+
+- **The gateway** sent `x-ratelimit-limit`, `x-ratelimit-remaining`, and `x-ratelimit-reset`, by
+  these exact names, on every reply of a limited route, its 429s among them: the recorded tables'
+  columns under `.state/answer/retry/`, and the probes' replies in
+  [`agentgateway.md`](agentgateway.md), "Behavior 9: the probes".
+- **Azure OpenAI** documents six, each with a `-requests` or `-tokens` suffix:
+  `x-ratelimit-limit-requests`, `x-ratelimit-limit-tokens`, `x-ratelimit-remaining-requests`,
+  `x-ratelimit-remaining-tokens`, `x-ratelimit-reset-requests`, and `x-ratelimit-reset-tokens`,
+  with `retry-after-ms` on a 429 ([Manage Azure OpenAI in Microsoft Foundry Models
+  quota](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/quota), "Rate limit
+  response headers", updated 2026-05-07, read 2026-11-19). None of the gateway's three is among
+  them.
+
+So the rule now names the gateway's three exactly: a 429 is the gateway's only if it carries all
+three ([`retry/record_test.go`](../../retry/record_test.go), `rateLimited`). Since names the
+gateway sends and Azure doesn't exist, the rule needs no access-log cross-check to stand; the
+cross-checks above stay as the cases' second witness.
+
+Re-verified offline against the recorded tables, whose `x-ratelimit-limit`, `-remaining`, and
+`-reset` columns are those exact headers' values: every 429 carries all three. That is 2 of 2 in
+rate-limit-agent's passing run (`rate-limit-agent-20261118T184403.tsv`), 6 of 6 in embedding-burst,
+and 1 of 1 in bulk-rate-low; in-flight-1 and rate-limit-agent's two failed runs hold no 429. Each
+case passes under the new rule as it did under the old. `go vet` and `go test` pass, every live
+case skipping without its `RETRY_CASE`.
 
 ### The Azure count (behavior 17)
 
@@ -539,10 +570,11 @@ the session to escalate.
 
    Expected: one line, `+ <time> laptop: source scripts/clients-lib.sh`.
 
-2. **The rows-up tier at v0.2.0.** infer's integration tier, the shorter of the two (about 25 s,
-   against go-ai's minute), from the worktree at `tools/infer/v0.2.0`, through the gateway on all
-   four aliases, with each alias's rows-up profile. A tier names each run once, so a second try
-   takes a new name. If `.state/answer/go-ai` is gone, `goai_checkout` makes it first.
+2. **The rows-up tier at v0.3.0.** infer's integration tier, the shorter of the two (about 25 s,
+   against go-ai's minute), from the worktree at `tools/infer/v0.3.0`, the helpers' pin, through
+   the gateway on all four aliases, with each alias's rows-up profile. A tier names each run once,
+   so a second try takes a new name. If `.state/answer/go-ai-v0.3.0` is gone, `goai_checkout`
+   makes it first.
 
    ```sh
    CLIENTS_TARGET=rows-up infer_tier walk-up-infer agent vision audio embedding
@@ -552,17 +584,19 @@ the session to escalate.
    Expected:
    - the tier's `go test -v` output, then its three summary lines: `walk-up-infer: exit 0`,
      `walk-up-infer: the key is not in .state/answer/clients/walk-up-infer.log`, and
-     `walk-up-infer: 19 passed, 0 failed, 1 skipped (top-level tests)`, as in slice 1's step 2;
+     `walk-up-infer: 19 passed, 0 failed, 1 skipped (top-level tests)`, as in "At v0.3.0";
    - the one skip is `TestTranscribeRoute`: transcription's own route, which no row serves
      (`grep -- '--- SKIP' .state/answer/clients/walk-up-infer.log` shows it, with the subtests'
      skips);
    - `azure_count`: `Azure answered 0 requests`, each alias 0, and `toward the cap of 80: 0`, 429
      0.
 
-3. **One retry case: embedding-burst.** go-ai v0.2.0, at infer's default policy, sends 40
-   embeddings at once against the embedding route's own bucket, 34 a second. The case needs no
-   overlay: the bucket is the base config's, and the helper refuses to run unless the deployed
-   copy's first line reads `# overlays: none`. Every request goes to the embedding row.
+3. **One retry case: embedding-burst.** go-ai v0.3.0, the retry module's pin
+   ([`retry/go.mod`](../../retry/go.mod)), at infer's default policy, sends 40 embeddings at once
+   against the embedding route's own bucket, 34 a second. The case needs no overlay: the bucket is
+   the base config's, and the helper refuses to run unless the deployed copy's first line reads
+   `# overlays: none`. Every request goes to the embedding row. The Expected lines are the case's
+   run at v0.2.0; v0.3.0 changes neither retry nor the formats ("At v0.3.0").
 
    ```sh
    W3=$(date -Iseconds)
@@ -663,6 +697,20 @@ Grafana, and each slice's results as they landed. The steps above stay as the wa
 Each one's Expected line comes from a run already recorded in this finding: step 2 from slice 1's
 rows-up tiers, step 3 from the embedding-burst retry case, and step 4 from slice 2's traces. No
 request went to Azure for the walk, and the task's count stays at 50 of 80.
+
+## The watch register (behavior 19)
+
+The register ([`docs/watch.md`](../watch.md)) is read at the start and end of the task. The
+start-of-task read wasn't recorded: no run of `mise run watch` is in the task's command logs or
+in this finding, so the register's last-checked lines stayed at task priority's read,
+2026-11-17T11:57Z.
+
+The end-of-task read, `mise run watch` through `logged`, read-only, at 2026-11-19T12:47Z, found
+every entry as recorded and exited 0: route `ai`'s five issues and pull requests and its two
+release lines at v1.7.0, still the latest release; `llm`'s several base URLs, its pull request and
+`pathPrefix`; always-passthrough, merged and absent from v1.7.0; the UI's links, open and present;
+and the two entries with no line to read, listed. Each entry's last-checked line now reads
+2026-11-19T12:47Z.
 
 ## Commands as run
 
@@ -1053,6 +1101,8 @@ arguments joined by spaces, so a JSON body shows without its shell quotes.
 + 2026-11-18T19:18:12-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-18T19:18:12-05:00 laptop: ssh -n gb10-2 'docker inspect -f "{{.Name}} {{.HostConfig.RestartPolicy.Name}}" $(docker ps -aq --filter label=com.docker.compose.project=gateway)'
 + 2026-11-18T19:18:12-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh cea3f3ad7550397f1ae06d12f6b8cbd4 ac004c2048f1f264e928ba6ea1cd8efe ad3599374da129f37ffebaf7533626dc bdfa6219b5a739635ab55dbd0c9a6dbd" | spans, parents, and attribute keys
++ 2026-11-18T19:20:10-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:20:10-05:00 laptop: ssh -n gb10-2 head -1 '~/gateway/agentgateway/config.yaml'
 ```
 
 ### 2026-11-19 · slice 1 at v0.3.0
@@ -1086,6 +1136,15 @@ From `.state/answer/commands-2026-11-19.log`.
 + 2026-11-19T07:40:13-05:00 laptop: curl -s http://gb10-1:8000/v1/models | jq -c '.data[] | {id, root}'
 + 2026-11-19T07:40:16-05:00 laptop: source scripts/clients-lib.sh
 + 2026-11-19T07:40:16-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/go-ai)" | curl -K - -s http://gb10-2:3000/agent/v1/models
+```
+
+### 2026-11-19 · the watch register
+
+From `.state/answer/commands-2026-11-19.log`.
+
+```text
++ 2026-11-19T07:47:40-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T07:47:40-05:00 laptop: mise run watch
 ```
 
 ## For the goal record
