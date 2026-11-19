@@ -10,6 +10,7 @@
 2. [x] routing
 3. [x] priority
 4. [ ] answer
+5. [ ] max-tokens-note
 
 ## Task brief · answer
 
@@ -597,6 +598,10 @@ Sync          coordinator:
   its run needed 2 (architect, 2026-11-18, review escalation 2). Amends behavior 6.
 - answer: the tracing command goes into spike-model-engines' vLLM guide through the intake, not here
   (architect, 2026-11-18, review escalation 3).
+- answer: go-ai's sync (standards-lab 00c1ef5, 2026-11-18) added task `max-tokens-note` after
+  `answer` and already moved the live retry proof here in go-ai's finding 17 and ai-strategy.md, so
+  `answer` doesn't sync, its retry-proof pending edit is dropped, and the `root` edit goes to
+  v1.ai.hosting alone, v1.ai.client having synced (session, 2026-11-19).
 - answer: the walkthrough was waived; the architect followed every slice live (architect,
   2026-11-18).
 - answer: the three Critical Dell firmware upgrades (BIOS 5.0.0, EC 0x02000d00, PD 0x00000519)
@@ -805,22 +810,19 @@ Sync          coordinator:
   new attestation changes the image id, so compose recreates the built service on every `up
   --build`. The convention may want the same (`docs/gateway.md`, "Operational notes for the
   intake").
-- coordinator · v1.ai.client: the live retry proof (go-ai finding 17) moved from acceptance to this
-  spike and is proven (spike-model-gateway `docs/findings/answer.md`, "Step 5 · the retry proof
-  (behaviors 6–8)"). Acceptance's summary drops it, and go-ai's `context/design.md` finding 17 and
-  ai-strategy.md "go-ai's name map and requests" are reworded by v1.ai.client.
 - coordinator · experiment.hosting intake: the Foundry account and its four deployments are kept
-  until v1.ai.client's acceptance ships; the intake deletes them.
+  for the intake, which deletes them; v1.ai.client's acceptance, the reason they were kept, has
+  shipped (standards-lab 00c1ef5).
 - coordinator · v1.ai.hosting: authenticated OTLP ingress and sampling below 100% are production
   requirements. The spike's Collector takes spans on gb10-2's tailnet address unauthenticated, and
   the gateway and rows sample every request (spike-model-gateway `docs/findings/answer.md`, "For
   production"; `docs/gateway.md`, requirement 10).
-- coordinator · v1.ai.hosting and v1.ai.client: through the gateway, each alias's `/models` is the
+- coordinator · v1.ai.hosting: through the gateway, each alias's `/models` is the
   gateway's own answer, `{"id":"<alias>","object":"model","owned_by":"gateway"}`, so go-ai
   v0.3.0's `Model.Native` and `infer models`' root column carry no served model, while the row's
   own listing gives `root` (`openai/gpt-oss-120b` on gb10-1). Whether to pass `root` through or
-  keep it hidden is v1.ai.hosting's call; v1.ai.client should know that `Native` carries no `root`
-  through the gateway (spike-model-gateway `docs/findings/answer.md`, "At v0.3.0";
+  keep it hidden is v1.ai.hosting's call, and a consumer reading `Native` through the gateway gets
+  no `root` (spike-model-gateway `docs/findings/answer.md`, "At v0.3.0";
   `docs/gateway.md`, requirement 1).
 - coordinator · v1.ai.hosting: a measured cold start. vLLM's startup traces give each row's cold
   start by phase, read from its `Overall Loading` trace: weights' load, model preparation, KV cache
