@@ -142,7 +142,7 @@ The experiment's rules, in `ai-hosting.md`, govern every session. In short:
   `.state/priority/`. measure-lib.sh's `overflow_read` and `rtfx` read a cell's overflow and
   audio's real-time factor. [`scripts/clients-lib.sh`](../scripts/clients-lib.sh) runs the client
   steps through the gateway, each with a key read from its file, keeping its state and command log
-  under `.state/answer/`:
+  under `.state/max-tokens-note/`:
   - `goai_checkout` makes a worktree of go-ai at `tools/infer/v0.3.0`, and `infer_install`
     installs the released infer v0.3.0.
   - `goai_tier` and `infer_tier` run go-ai's and infer's integration tiers, with each alias's
@@ -157,6 +157,9 @@ The experiment's rules, in `ai-hosting.md`, govern every session. In short:
     a burst straight to a row. `azure_count` counts the requests Azure answered, from the
     gateway's access log; `budget_status` reads each key's token budget; `request_log` reads the
     request log in Postgres; and `traces` reads the traces in Tempo.
+  - `messages_stream <alias> <max tokens> <prompt>` sends one streamed Messages request through
+    the gateway and times each event from the send, to show whether the stream arrives as it is
+    generated or whole.
   - `pg_password_rotate` rotates Postgres's password, and `logged <command>` runs and logs a step
     that prints no key.
 - **Watch register:** [`docs/watch.md`](../docs/watch.md) tracks each dependency's anticipated

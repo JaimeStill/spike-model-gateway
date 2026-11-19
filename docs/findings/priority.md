@@ -1242,13 +1242,13 @@ go-ai's azure-streams task reran the case through `rows-down` (go-ai `0eb0842`, 
 v1.ai.client, azure-streams slice 5 classified", in its goal record,
 `context/goals/v1.ai.client.md`). `gpt-oss-120b` answered a streamed Messages request at
 `max_tokens` 16 in 1.3 s, ending in `message_stop` (`stop_reason` `max_tokens`) and closing the
-connection, and infer ended on it, as incomplete. Replayed offline with the connection held open
-30 s after `message_stop`, infer, at the branch and at `tools/infer/v0.1.0`, ended at
-`message_stop` within 5 ms. So the stall wasn't go-ai's; the record left it to "the gateway's or
-Azure's". The record also saw `azureai-fe-is-streaming: False` on Azure's reply, and read it as
+connection, and infer ended on it, as incomplete. In an offline replay that held the connection
+open 30 s after `message_stop`, infer, at the branch and at `tools/infer/v0.1.0`, ended at
+`message_stop` within 5 ms. So the stall wasn't go-ai's, and the record left it to "the gateway's
+or Azure's". The record also saw `azureai-fe-is-streaming: False` on Azure's reply, and read it as
 the gateway sending Azure an unstreamed Chat Completions request and building the Messages stream
-from the whole reply, so that a longer reply would stall until Azure finished. And it found the
-translated stream's `message_start` reporting 0 input tokens, and its `message_delta` the real
+from the whole reply, so that a longer reply would stall until Azure finished. It also found that
+the translated stream's `message_start` reports 0 input tokens and its `message_delta` the real
 count.
 
 ### 2026-11-18: the answer task's pass
@@ -1263,34 +1263,35 @@ From the laptop, 09:38–09:43 local time: agentgateway v1.7.0 on gb10-2 with th
 overlay, so agent is answered by its Foundry deployment, `gpt-oss-120b`, in eastus2. Each send is
 one `messages_stream <alias> <max tokens> <prompt>`
 ([`scripts/clients-lib.sh`](../../scripts/clients-lib.sh)): one streamed Messages request through
-the gateway on the alias, each line of the stream stamped with its arrival. Its verdict, from its
-header comment: "streams" when the text deltas cover at least half of the reply's span, from the
-first event to `message_stop`; "arrives whole" when every event lands within the last tenth of the
-total; otherwise "mixed"; and "too short to tell" with fewer than two text deltas. The raw
-captures are under `.state/max-tokens-note/`, untracked. The line numbers below are of the
-task's command log, `.state/max-tokens-note/commands-2026-11-19.log`.
+the gateway on the alias, each line of the stream stamped with its arrival. The helper's header
+comment defines its verdict: "streams" when the text deltas cover at least half of the reply's
+span, from the first event to `message_stop`; "arrives whole" when every event lands within the
+last tenth of the total; otherwise "mixed"; and "too short to tell" with fewer than two text
+deltas. The raw captures are under `.state/max-tokens-note/`, untracked. The line numbers below
+are those of the task's command log, `.state/max-tokens-note/commands-2026-11-19.log`.
 
-**The header, direct to Azure** (lines 17–24). Two chat requests to the deployment past the
-gateway, "Count upward from 1, one number a line.", `max_tokens` 32 each:
+**The header, direct to Azure** (lines 17–24). Two Chat Completions requests went straight to the
+deployment, past the gateway, each with "Count upward from 1, one number a line." at `max_tokens`
+32:
 
 | `stream` | Status | `content-type` | `azureai-fe-is-streaming` |
 | --- | --- | --- | --- |
 | `true` | HTTP/2 200 | `text/event-stream; charset=utf-8` | `False` |
 | `false` | HTTP/2 200 | `application/json` | `False` |
 
-So the header doesn't show whether a request was streamed. It reads `False` either way.
+The header reads `False` either way, so it doesn't show whether a request was streamed.
 
-**A long reply, first try** (lines 211–253). "Count upward from 1, one number a line.",
-`max_tokens` 1024, 3 sends. The model kept each reply short: it stopped at 20, asked how many, or
-stopped at 100. Totals 1.054, 0.748, and 1.330 s; text deltas 6, 9, and 21; the verdict "mixed"
-each time. The thinking deltas spread over each reply, and the text came in bursts: each of the
-first two sends' text deltas arrived within 1 ms of one another and of `message_stop`, and the
-third's in four bursts from 0.913 to 1.328 s. Inconclusive: too little text to tell a stream from
-a whole reply.
+**A long reply, first try** (lines 211–253). This try was inconclusive: the replies held too
+little text to tell a stream from a whole reply. The helper sent "Count upward from 1, one number a
+line." 3 times at `max_tokens` 1024, and the model kept each reply short: it stopped at 20, asked
+how many, or stopped at 100. The totals were 1.054, 0.748, and 1.330 s, the text deltas 6, 9, and
+21, and the verdict "mixed" each time. The thinking deltas spread over each reply, and the text
+came in bursts: each of the first two sends' text deltas arrived within 1 ms of one another and of
+`message_stop`, and the third's in four bursts from 0.913 to 1.328 s.
 
-**A long reply, to a fixed target** (lines 742–783). "Count from 1 to 300, one number per line,
-nothing else.", `max_tokens` 1024, 3 sends, each counting to 300 and ending `end_turn`. Times in
-seconds from the send:
+**A long reply, to a fixed target** (lines 742–783). The helper sent "Count from 1 to 300, one
+number per line, nothing else." 3 times at `max_tokens` 1024, and each reply counted to 300 and
+ended `end_turn`. Times are in seconds from the send:
 
 | Send | First event | First text delta | Last text delta | Text span | `message_stop` | Text deltas, of all deltas | Output tokens |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -1298,7 +1299,7 @@ seconds from the send:
 | 2 | 0.222 | 0.658 | 1.279 | 0.621 | 1.279 | 61 of 76 | 661 |
 | 3 | 0.200 | 0.654 | 1.120 | 0.466 | 1.120 | 61 of 92 | 703 |
 
-The text deltas by arrival, as count@ms from the send:
+Each send's text deltas, by arrival, as count@ms from the send:
 
 - send 1: 1@573, 1@666, 10@667, 10@757, 8@841, 8@887, 3@906, 5@954, 8@1033, 7@1361;
 - send 2: 27@657–659, 8@757–758, 8@832–833, 2@857–858, 6@926–927, 10@1278;
@@ -1306,11 +1307,12 @@ The text deltas by arrival, as count@ms from the send:
 
 The verdict was "streams" each time. The text arrives in bursts spread over the reply's second or
 so, never all at the end. Each `message_start` reported 0 input tokens, and its `message_delta`
-the real count: 83 here, 78 in the first try, and 72 in the 16-token case below, as on 2026-11-17.
+reported the real count: 83 here, 78 in the first try, and 72 in the 16-token case below, as on
+2026-11-17.
 
-The response headers of the three sends, as the gateway returned them, from each send's
-`headers.txt` under `.state/max-tokens-note/stream/agent-1024-20261119T0942*/`. Every send had
-`HTTP/1.1 200 OK` and these, in the order received:
+Each send's `headers.txt`, under `.state/max-tokens-note/stream/agent-1024-20261119T0942*/`,
+holds the response headers as the gateway returned them. Every send had `HTTP/1.1 200 OK` and these
+headers, in the order received:
 
 | Header | Value |
 | --- | --- |
@@ -1339,7 +1341,7 @@ The response headers of the three sends, as the gateway returned them, from each
 | `x-gateway-overflow` | `azure` |
 | `transfer-encoding` | `chunked` |
 
-And these differed:
+These differed from send to send:
 
 | Send | `date` | `x-ms-inference-retry-history` | `x-ratelimit-remaining` | `x-ratelimit-reset` |
 | --- | --- | --- | --- | --- |
@@ -1347,27 +1349,27 @@ And these differed:
 | 2 | `Thu, 19 Nov 2026 14:42:06 GMT` | `{"v":1,"entries":[{"service_id":"mir.frontdoor","layer":"regional","role":"direct","retries":1}]}` | `1198` | `58` |
 | 3 | `Thu, 19 Nov 2026 14:42:08 GMT` | `{"v":1,"entries":[{"service_id":"mir.frontdoor","layer":"regional","role":"direct","retries":0}]}` | `1197` | `57` |
 
-Left out, because each names one request, session, or stream, or the account, and stays in the
-untracked captures: `x-request-id`, `x-ms-client-request-id`, `apim-request-id`,
-`azureml-model-session`, `x-http2-stream-id`, and `x-ratelimit-key`.
+The tables leave out `x-request-id`, `x-ms-client-request-id`, `apim-request-id`,
+`azureml-model-session`, `x-http2-stream-id`, and `x-ratelimit-key`, because each names one
+request, session, or stream, or the account. They stay in the untracked captures.
 
-**The 16-token case** (lines 262–331). "Name a primary color.", `max_tokens` 16, 5 sends. Each
-summary shows no text deltas, so each verdict was "too short to tell". Totals 1.064, 0.665, 1.876,
-0.486, and 0.448 s. `message_delta` and `message_stop` arrived within 1 ms of the last delta every
-time. Nothing was held, and the stall didn't recur. The fourth and fifth sends started in the same
-second and so share a folder, where the fifth's captures replaced the fourth's. The log keeps the
-fourth's summary, and the helper's folder names carry milliseconds since (`07da3da`). The four
-sends whose captures remain each ended `stop_reason` `max_tokens` with 16 output tokens, all of
-them reasoning: thinking deltas only. The summary doesn't print the stop reason, so the fourth's
-isn't known.
+**The 16-token case** (lines 262–331). Nothing was held, and the stall didn't recur. The helper
+sent "Name a primary color." 5 times at `max_tokens` 16, and `message_delta` and `message_stop`
+arrived within 1 ms of the last delta every time. The totals were 1.064, 0.665, 1.876, 0.486, and
+0.448 s. Each summary shows no text deltas, so each verdict was "too short to tell". The fourth and
+fifth sends started in the same second and so share a folder, where the fifth's captures replaced
+the fourth's. The log keeps the fourth's summary, and since `07da3da` the helper's folder names
+carry milliseconds. The four sends whose captures remain each ended `stop_reason` `max_tokens` with
+16 output tokens, all of them reasoning: thinking deltas only. The summary doesn't print the stop
+reason, so the fourth's isn't known.
 
 **Back to the rows.** Each overlay was removed by a plain deploy (lines 340 and 792 onward), and
 one `messages_stream agent 64` after each was answered by the row, `overflow: none` (lines 521–534
 and 973–986).
 
-**The Azure count.** 13 of the task's cap of 20: 11 through the gateway, agent's, all 200
-(`azure_count` since the first deploy, lines 987–1000), and the 2 direct requests above, counted
-by hand. No 429.
+**The Azure count.** Azure answered 13 requests of the task's cap of 20: 11 through the gateway
+on agent, all 200 (`azure_count` since the first deploy, lines 987–1000), and the 2 direct
+requests above, counted by hand. None was a 429.
 
 ### The translation, read in the source
 
@@ -1386,8 +1388,8 @@ request into Chat Completions and the reply's chunks back into Messages events, 
   the input tokens from the usage, and `message_stop` go out once both have arrived (745–747), or
   at `[DONE]`, which forces them (597–598). `flush_message_end` builds the two (483–555).
 
-So the translated stream is a stream. The one place it holds events back is its end: until a
-finish reason and a usage chunk have both arrived, or `[DONE]`.
+So the translated stream streams. It holds events back only at its end, until a finish reason
+and a usage chunk have both arrived, or `[DONE]`.
 
 ### What it leaves
 
@@ -1396,15 +1398,14 @@ finish reason and a usage chunk have both arrived, or `[DONE]`.
   stream.
 - A held `message_stop` stays a candidate: had Azure sent its finish reason and then been slow
   with its usage chunk or `[DONE]`, the gateway would hold `message_delta` and `message_stop` until
-  one came. It wasn't seen. In 5 sends at 16 tokens both came within 1 ms of the last delta.
+  one came. It wasn't seen: in 5 sends at 16 tokens, both came within 1 ms of the last delta.
 - The 2026-11-16 stall's cause stays open. It hasn't recurred in three reruns: 2026-11-17,
   2026-11-18, and 2026-11-19.
 
 ### To repeat it
 
-The walkthrough was waived, so these steps stand in for it. From the repository root on the
-laptop, through the helpers, so each command lands in the day's command log. It sends 1 request to
-Azure.
+These steps stand in for the waived walkthrough. Run them from the repository root on the laptop,
+through the helpers, so each command lands in the day's command log. They send 1 request to Azure.
 
 ```sh
 source scripts/clients-lib.sh
@@ -1423,12 +1424,12 @@ Expected:
 
 ### Commands as run, 2026-11-19
 
-Every command the session ran, as logged, from `.state/max-tokens-note/commands-2026-11-19.log`.
-The two direct requests are the Azure helper's, `az_curl`, logged as the curl it runs, and
-`azure_count` is logged as its read of the access log (lines 254, 332, 535, 543, 550, 784, 987,
-and 994). Each `mise run agentgateway-deploy` is followed by the deploy's own `+` lines, the
-laptop's and gb10-2's, and each `messages_stream` by the curl it runs, which reads the key from
-its file, so the key isn't logged. The output stays in the log.
+The block below holds every command the session ran, as logged in
+`.state/max-tokens-note/commands-2026-11-19.log`. The two direct requests are the Azure helper's,
+`az_curl`, logged as the curl it runs, and `azure_count` is logged as its read of the access log
+(lines 254, 332, 535, 543, 550, 784, 987, and 994). Each `mise run agentgateway-deploy` is followed
+by the deploy's own `+` lines, the laptop's and gb10-2's, and each `messages_stream` by the curl it
+runs, which reads the key from its file, so the key isn't logged. The output stays in the log.
 
 ```text
 + 2026-11-19T09:38:18-05:00 laptop: source scripts/clients-lib.sh
