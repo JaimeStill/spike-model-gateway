@@ -151,7 +151,8 @@ purpose alias.**
     30 s most), retries the gateway's 429 and 503 and honours `Retry-After`: a rate limit's 429s
     retried after their `Retry-After`, then 200; embedding's 429s, `Retry-After: 1`, each retried
     once, then 200; the in-flight limit's 503, with no `Retry-After`, retried after go-ai's
-    backoff, then 200; and a `Retry-After` past the 30 s most returned at once. Proven:
+    backoff, then 200 (its test allows 5 attempts, for the jitter, and used 2); and a
+    `Retry-After` past the 30 s most returned at once. Proven:
     [`answer.md`](findings/answer.md), "Step 5 · the retry proof (behaviors 6–8)", by the retry
     test in [`retry/`](../retry/retry_test.go), cross-checked against the access log and
     `requests_shed`. This is go-ai's design finding 17, handed to this spike by v1.ai.client's

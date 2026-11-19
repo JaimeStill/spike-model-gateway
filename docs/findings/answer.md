@@ -75,12 +75,14 @@ before each of go-ai's two audio tests, and runs the test alone.
 **The retry test.** [`retry/`](../../retry/retry_test.go) builds go-ai's client with `ai.New` over an
 `*http.Client` whose transport records every attempt: its start, its reply's time, status,
 `Retry-After`, `x-ratelimit-*`, and whether a refused body holds `request limit exceeded`. The policy
-is infer's default: 3 attempts, 500 ms base, 30 s most. A case passes only if every refused attempt
-carries a marker only the gateway gives (`x-ratelimit-*` on a 429, the body marker on a 503), the
-call's last attempt is 200 (but bulk-rate-low's refused call), and each retry starts no sooner than
-the refused attempt's Retry-After after its reply. `retry_case <case>` runs one case, after checking
-that the deployed copy's first line names its overlay, and writes its per-attempt table beside its
-log under `.state/answer/retry/`. The key is read by the test from its file.
+is infer's default: 3 attempts, 500 ms base, 30 s most; in-flight-1's second call alone allows 5
+attempts, since full jitter can make a retry beat the held stream's release (the test's comment),
+and it used 2. A case passes only if every refused attempt carries a marker only the gateway gives
+(`x-ratelimit-*` on a 429, the body marker on a 503), the call's last attempt is 200 (but
+bulk-rate-low's refused call), and each retry starts no sooner than the refused attempt's
+Retry-After after its reply. `retry_case <case>` runs one case, after checking that the deployed
+copy's first line names its overlay, and writes its per-attempt table beside its log under
+`.state/answer/retry/`. The key is read by the test from its file.
 
 **The cross-checks.** A 429 is the gateway's own: it leaves an access log line with
 `http.status=429`, `retry_after`, and no `endpoint`. The in-flight limit's 503 leaves no line at all,
