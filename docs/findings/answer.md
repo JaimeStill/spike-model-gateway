@@ -3,9 +3,10 @@
 The spike's last task: the clients at go-ai v0.2.0 through the gateway, go-ai's live retry proof
 against the gateway's own refusals, traces from the gateway down to each row, and the paper and the
 answer (evidence 8–11 of [`context/README.md`](../../context/README.md#the-evidence)). This finding
-holds slice 1, "Clients": behaviors 1–8, with 17 and 18 throughout.
+holds slice 1, "Clients": behaviors 1–8, and slice 2, "Traces": behaviors 9–12, with 17 and 18
+throughout.
 
-In short, after slice 1:
+In short, after slices 1 and 2:
 
 - **Rows up (behavior 3):** go-ai's and infer's whole tiers at `tools/infer/v0.2.0` passed through
   the gateway on all four aliases: go-ai 26 passed, 0 failed, 1 skipped; infer 19 passed, 0 failed,
@@ -22,13 +23,20 @@ In short, after slice 1:
   Azure, each cross-checked against the access log or `requests_shed`. rate-limit-agent passed only
   after its overlay was fixed: since priority, the agent route's own `localRateLimit` takes the
   place of the overlay's attached policy, so the overlay's bucket never applied ("Case a").
-- **Azure:** 48 of the task's 80 requests, all in step 3: 2xx ×34, 400 ×14, no 429.
+- **Traces (behaviors 9–12):** every request through a row is one trace of 3 spans, the row's
+  `llm_request` the child of the gateway's client span; an overflowed request's trace has no row
+  span, its retried attempts and Azure's each a client span. No span holds prompt or completion
+  content. Each row's startup trace gives its cold start by phase: 13.0–50.0 s. The trace services
+  came back from a restart, and every gateway container restarts unless stopped.
+- **Azure:** 50 of the task's 80 requests: 48 in slice 1's step 3 (2xx ×34, 400 ×14) and 2 for the
+  overflow trace (2xx ×2), no 429.
 
 - **Measured:** from the laptop, 2026-11-18, local time. The architect's host updates ran
   18:11–18:35, and the session's smoke check at 18:36. Step 1, the stack's deploy, ran
   18:37:58–18:38:16; step 2, the rows-up tiers, 18:38:21–18:39:49; step 3, rows down,
   18:40:15–18:41:39; step 5, the retry cases, 18:42:37–18:45:06; and the firmware history and the
-  path were read 18:45:32–18:45:43. Every command the helpers logged is under "Commands as run".
+  path were read 18:45:32–18:45:43. Slice 2, traces, ran 19:10:59–19:18:12. Every command the
+  helpers logged is under "Commands as run".
 - **Path:** direct to every host over Tailscale, 1 ms, at 18:11:00 and 18:45:43.
 - **Gateway:** agentgateway v1.7.0, `cr.agentgateway.dev/agentgateway:v1.7.0`, on gb10-2, with its
   Postgres (`postgres:18.7-alpine`) in one compose project
@@ -311,6 +319,174 @@ side. Only synthetic and test-fixture content was sent: the tiers' prompts and f
 (`shapes.png`, `phrase.wav`) and the helpers' prompts. The helper's printed cap read 300,
 priority's, until this slice set it to 80; each step's count is the same either way.
 
+## Slice 2 · traces
+
+Behaviors 9–12, with 17 and 18: the Collector, Tempo, and Grafana beside the gateway, agentgateway's
+spans, the rows' spans through spike-model-engines' `host/`, and the overflow's trace. Measured
+19:10:59–19:18:12, every command under "Commands as run". The `traces` helper prints each span's
+service, name, kind, ids, parent, and duration, and its attribute keys, never their values; a span
+named for a host under `azure.com` shows it as `<azure host>`.
+
+### The deploy (behaviors 9, 10)
+
+`mise run agentgateway-deploy` at 19:10:59 copied the three new service groups and the config with
+`config.tracing`, and brought the stack up by 19:11:30: `gateway-otel-collector-1`,
+`gateway-tempo-1`, and `gateway-grafana-1` (healthy) added, agentgateway recreated with tracing,
+Postgres left running. The Collector and Tempo have no health check (their images have no shell),
+so their state is `running`. Grafana is reached through `mise run gateway:grafana`, which tunnels
+localhost:3002 ([`mise.toml`](../../mise.toml)); the architect has used it.
+
+### The gateway's spans (behavior 10)
+
+One keyed request per alias at 19:11:35–19:11:36, each 200. Each alias's trace had 2 spans, both
+agentgateway's: its server span `POST /<alias>/v1/*`, and beneath it its client span
+`POST <row host>:<port>` to the row. The agent's was `5a45e7cc054294179cc163ff451ab24d`.
+
+### The rows' spans (behavior 11)
+
+spike-model-engines' pull request #20, merged as `6ce3210`, adds the rows' optional tracing:
+`VLLM_TRACE=on` points the row at the Collector on gb10-2, resolved at run time, with service name
+`vllm-<alias>`, detailed traces off. At 19:13:08 the session pulled `6ce3210` on each host and ran
+`host/engines vllm update` with `VLLM_TRACE=on` for each of the four rows, the Framework's two in
+turn; no host was rebooted. Each update returned in under 3 s, and all four rows answered `/health`
+200 by 19:14:32 (`gb10-1:8000`, `gb10-2:8000`, `framework:8001`, `framework:8002`). Each
+update's output is in `.state/answer/restart-<host>.log`, untracked.
+
+### Traces through each row (behavior 12)
+
+One keyed request per alias at 19:14:38–19:14:41, each 200. Each trace had 3 spans, the row's span
+the child of the gateway's client span, carried by traceparent:
+
+```text
+agentgateway "POST /<alias>/v1/*"          server, root
+  agentgateway "POST <row host>:<port>"    client
+    vllm-<alias> "llm_request"             server, parent the gateway's client span
+```
+
+| Alias | Trace | Gateway server span | Row's `llm_request` |
+| --- | --- | --- | --- |
+| agent | `926cce9c743b3282b84dd00843be70b0` | 1251.6 ms | 1022.7 ms |
+| vision | `debc01ce0bf1314b751d2c83b03c54ba` | 120.9 ms | 116.0 ms |
+| audio | `34e23b7c861e7d4ede07d7acb9844be8` | 2264.2 ms | 2257.0 ms |
+| embedding | `266b7f194bec460e8f26e6c1ae390bf1` | 34.2 ms | 26.6 ms |
+
+The Framework's two row spans start a few ms before their parent client span by the hosts' clocks,
+so the helper, which orders by start time, prints them first; their parent is still the gateway's
+client span. The skew is between the Framework's clock and gb10-2's, not in the link.
+
+**The attribute keys.** Read from the four traces, keys only:
+
+- **The row's `llm_request`:** `gen_ai.latency.time_to_first_token`, `gen_ai.latency.e2e`,
+  `gen_ai.latency.time_in_queue`, `gen_ai.latency.time_in_model_prefill`,
+  `gen_ai.latency.time_in_model_decode`, `gen_ai.latency.time_in_model_inference`,
+  `gen_ai.usage.prompt_tokens`, `gen_ai.usage.completion_tokens`, `gen_ai.request.id`, and on a chat
+  `gen_ai.request.top_p`, `gen_ai.request.max_tokens`, `gen_ai.request.temperature`,
+  `gen_ai.request.n` (the embedding's has none of the four).
+- **The gateway's server span:** `gateway`, `listener`, `route`, `endpoint`, `client.address`,
+  `network.protocol.version`, `trace.id`, `span.id`, `protocol`, `gen_ai.operation.name`,
+  `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`,
+  `gen_ai.usage.input_tokens`, on a chat `gen_ai.usage.output_tokens`,
+  `gen_ai.usage.reasoning_tokens`, `gen_ai.request.max_tokens`, then `duration`, `url.scheme`,
+  `http.request.method`, `http.response.status_code`, `url.path`, `server.address`, `server.port`.
+- **The gateway's client span:** `agentgateway.outbound.kind`, `agentgateway.outbound.subtype`,
+  `http.host`, `http.path`, `http.status`, `http.method`.
+
+No span holds a prompt or completion key: no `gen_ai.prompt`, `gen_ai.completion`,
+`gen_ai.input.messages`, `gen_ai.output.messages`, or any other content key, on the gateway's spans
+or the rows'. The values aren't printed: `client.address` holds the caller's address, and on an
+overflow `endpoint` and `http.host` name the Azure account's host.
+
+### The rows' startup traces and cold start
+
+Each row's restart also sent a startup trace, rooted at `Overall Loading`, with its engine's init
+beneath it: `AsyncMPClient init`, `EngineCoreProc init`, `Executor init` (`Worker init`,
+`Init device`, `Load model` with `Initialize model` and `Load weights`), and `Prepare model`
+(`Allocate KV cache`, `Warmup (GPU)`). Read at 19:16:19–19:16:20 with
+`traces -q '{ resource.service.name = "vllm-<alias>" && name = "Overall Loading" }'`, each span's
+duration its end less its start:
+
+| Row | Trace | Overall Loading | Load model | Load weights | Prepare model | Allocate KV cache | Warmup (GPU) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| agent, gb10-1 | `6ae3ac2b23a72439228f84730f0670c8` | 46.2 s | 27.5 s | 17.8 s | 11.9 s | 1.4 s | 8.7 s |
+| vision, gb10-2 | `ff0f8fd83322cd4c40df6d45da3e1ae3` | 31.3 s | 4.9 s | 2.8 s | 19.6 s | 0.0 s | 4.1 s |
+| audio, Framework | `2f83559cd51522a751d109859480ca18` | 50.0 s | 2.7 s | 1.3 s | 37.4 s | 0.0 s | 20.5 s |
+| embedding, Framework | `886b292c21953dc3860e0fd8bf45db64` | 13.0 s | 1.2 s | 0.3 s | 3.1 s | 0.0 s | 3.1 s |
+
+Every row's weights were cached: `Download weights - HF` took 0.1–0.2 s. The agent's cold start is led by
+its weights' load; vision's and audio's are mostly `Prepare model` outside the spans beneath it
+(15.6 s and 16.9 s that neither KV cache allocation nor warmup accounts for). `Overall Loading`
+covers the engine's startup from its client's init, not the container's start before it. One
+restart each, so one sample per row.
+
+### The overflow trace (behaviors 12, 17)
+
+With the base config's baseline read (Azure: 0 since 19:00), `mise run agentgateway-deploy rows-down`
+at 19:16:47, then exactly one keyed agent chat ("Say OK.", `max_tokens` 32) at 19:16:49 and one
+embedding ("hello") at 19:16:50, then `mise run agentgateway-deploy` at 19:16:51 removed the
+overlay. Both answered 200 with `x-gateway-overflow: azure`. At 19:17:10–19:17:12 one request per
+alias answered 200 with no overflow header, and the access log named each row as its endpoint (the
+first read's pattern, at 19:17:12, matched no line; the second, at 19:17:30, is the one quoted):
+`gb10-1:8000`, `gb10-2:8000`, `framework:8001`, `framework:8002`. No row stayed evicted.
+
+Each overflow trace had 4 spans, all agentgateway's, and no `vllm-*` span:
+
+```text
+trace 2a8fd3f06a9ab9e3e1f8d32c877edf19 (agent)
+  agentgateway "POST /agent/v1/*"         server, root      753.2 ms
+    agentgateway "POST gb10-1:8009"       client, error.type  1.7 ms
+    agentgateway "POST gb10-1:8009"       client, error.type  2.0 ms
+    agentgateway "POST <azure host>:443"  client, http.status 706.0 ms
+trace 5b24fe0838f97333fc467f8189785d40 (embedding)
+  agentgateway "POST /embedding/v1/*"     server, root      278.1 ms
+    agentgateway "POST framework:8009"    client, error.type  1.2 ms
+    agentgateway "POST framework:8009"    client, error.type  1.9 ms
+    agentgateway "POST <azure host>:443"  client, http.status 232.4 ms
+```
+
+Each retried attempt is its own client span under the one server span: two refused connections to
+the overlay's closed port, 8009, carrying `error.type` in place of `http.status`, then Azure's. The
+server span adds `retry.attempt` to the keys above; the embedding's also carries
+`gen_ai.embeddings.dimension.count` and agentgateway's cost keys, `agw.ai.usage.cost.*` (`total`,
+`input`, `output`, `cache_read`, `cache_write`, `reasoning`, `input_audio`, `output_audio`, `pages`,
+`audio_duration`). No content key, here either.
+
+### The unattended restart (behavior 9)
+
+At 19:17:44, `docker restart gateway-otel-collector-1 gateway-tempo-1 gateway-grafana-1` on gb10-2,
+no root. By 19:17:59 the Collector and Tempo were `running` and Grafana `running healthy`. At
+19:18:07–19:18:08 one request per alias answered 200 from its row, and each trace was whole, 3 spans
+with the row's `llm_request` under the gateway's client span: agent
+`cea3f3ad7550397f1ae06d12f6b8cbd4`, vision `ac004c2048f1f264e928ba6ea1cd8efe`, audio
+`ad3599374da129f37ffebaf7533626dc`, embedding `bdfa6219b5a739635ab55dbd0c9a6dbd`.
+
+Every container of the gateway's compose project restarts unless stopped (`docker inspect`,
+19:18:12): `agentgateway`, `gateway-postgres-1`, `gateway-otel-collector-1`, `gateway-tempo-1`, and
+`gateway-grafana-1`, each `unless-stopped`. gb10-2 wasn't rebooted after these three services were
+added: the evidence that the stack comes back with the host unattended is their restart policy,
+the same as agentgateway's and Postgres's; agentgateway came back by itself after gb10-2's firmware
+reboot, answering the 18:36 smoke check before any deploy ("The hosts").
+
+### The Azure count, slice 2
+
+| Step | Azure-answered | Toward the cap |
+| --- | --- | --- |
+| before the overflow, 19:00:00–19:16:37 | 0 | 0 |
+| the overflow trace, from 19:16:47 (read 19:17:00 and again at 19:17:40) | 2 (agent: 200 ×1; embedding: 200 ×1) | 2 |
+| the task's total, slices 1 and 2 | 50 (2xx ×36, 400 ×14) | 50 of 80 |
+
+Azure answered no 429. The second read, after the rows' check, still counted 2: no check request
+overflowed.
+
+### For production
+
+- **The OTLP port takes unauthenticated spans from the tailnet.** The Collector's 4317 is published
+  on gb10-2's tailnet address with no authentication, so any tailnet host can send it spans. A
+  production deployment needs the receiver authenticated (mTLS or a bearer token), or bound where
+  only the gateway and the rows reach it.
+- **Sampling is at 100%.** agentgateway's `randomSampling` is `"true"`, every request, and every
+  row traces every request. Right for a spike's few requests; production lowers it to a ratio, or
+  samples at the Collector by tail.
+
 ## Commands as run
 
 Every command the log holds, as logged, with its time, from `.state/answer/commands-2026-11-18.log`.
@@ -583,9 +759,133 @@ arguments joined by spaces, so a JSON body shows without its shell quotes.
 + 2026-11-18T18:45:43-05:00 laptop: for h in gb10-1 gb10-2 framework; do tailscale ping -c 1 $h | sed -E "s/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?/<addr>/g"; done
 ```
 
+### 2026-11-18 · slice 2: the deploy, the gateway's traces, the rows' restart with tracing, and their traces
+
+```text
++ 2026-11-18T19:10:59-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:10:59-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-18T19:10:59-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-18T19:11:00-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env otel-collector.yml otel-collector tempo.yml tempo grafana.yml grafana | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-18T19:11:00-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-18T19:11:00-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-18T19:11:00-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-18T19:11:00-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-18T19:11:00-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-18T19:11:00-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-18T19:11:00-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-18T19:11:30-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-18T19:11:35-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:11:35-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -o /dev/null -w agent %{http_code}\n http://gb10-2:3000/agent/v1/chat/completions -H content-type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32}
++ 2026-11-18T19:11:36-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -o /dev/null -w vision %{http_code}\n http://gb10-2:3000/vision/v1/chat/completions -H content-type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32}
++ 2026-11-18T19:11:36-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -o /dev/null -w audio %{http_code}\n http://gb10-2:3000/audio/v1/chat/completions -H content-type: application/json -d {"model":"audio","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32}
++ 2026-11-18T19:11:36-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 30 -o /dev/null -w embedding %{http_code}\n http://gb10-2:3000/embedding/v1/embeddings -H content-type: application/json -d {"model":"embedding","input":"hello"}
++ 2026-11-18T19:12:16-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode q=\{\} --data-urlencode limit=6 --data-urlencode start=1795046236 --data-urlencode end=1795047136" | jq -r '.traces[].traceID'
++ 2026-11-18T19:12:17-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh 3b48450499728072612a820326e18f1f a024b16c41f96a51b8ea9df635c85733 32ebe0f9e2529540b033c4eda491ea59 5a45e7cc054294179cc163ff451ab24d" | spans, parents, and attribute keys
++ 2026-11-18T19:12:57-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:13:08-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:13:08-05:00 laptop: ssh -n gb10-1 "cd ~/repos/spike-model-engines && git pull -q --ff-only && git log --oneline -1 && time VLLM_TRACE=on VLLM_MODEL=gpt-oss-120b-agent-fp8 host/engines vllm update" > .state/answer/restart-gb10-1.log 2>&1 & ssh -n gb10-2 "cd ~/repos/spike-model-engines && git pull -q --ff-only && git log --oneline -1 && time VLLM_TRACE=on VLLM_MODEL=gemma-4-26B-A4B-NVFP4-vision-gb10 host/engines vllm update" > .state/answer/restart-gb10-2.log 2>&1 & ssh -n framework "cd ~/repos/spike-model-engines && git pull -q --ff-only && git log --oneline -1 && time VLLM_TRACE=on VLLM_MODEL=gemma-4-E4B-it-audio-framework host/engines vllm update && time VLLM_TRACE=on VLLM_MODEL=granite-embedding-english-r2-framework host/engines vllm update" > .state/answer/restart-framework.log 2>&1 & wait; for h in gb10-1 gb10-2 framework; do echo "== $h"; tail -6 .state/answer/restart-$h.log; done
++ 2026-11-18T19:14:38-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:14:38-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -o /dev/null -w agent %{http_code}\n http://gb10-2:3000/agent/v1/chat/completions -H content-type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32}
++ 2026-11-18T19:14:39-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -o /dev/null -w vision %{http_code}\n http://gb10-2:3000/vision/v1/chat/completions -H content-type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32}
++ 2026-11-18T19:14:39-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -o /dev/null -w audio %{http_code}\n http://gb10-2:3000/audio/v1/chat/completions -H content-type: application/json -d {"model":"audio","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32}
++ 2026-11-18T19:14:41-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 30 -o /dev/null -w embedding %{http_code}\n http://gb10-2:3000/embedding/v1/embeddings -H content-type: application/json -d {"model":"embedding","input":"hello"}
++ 2026-11-18T19:15:26-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode q=\{\} --data-urlencode limit=4 --data-urlencode start=1795046426 --data-urlencode end=1795047326" | jq -r '.traces[].traceID'
++ 2026-11-18T19:15:27-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh 266b7f194bec460e8f26e6c1ae390bf1 926cce9c743b3282b84dd00843be70b0 2f83559cd51522a751d109859480ca18 6ae3ac2b23a72439228f84730f0670c8" | spans, parents, and attribute keys
++ 2026-11-18T19:15:33-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:15:33-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode q=\{\ resource.service.name\ =\ \"vllm-vision\"\ \&\&\ name\ =\ \"llm_request\"\ \} --data-urlencode limit=1 --data-urlencode start=1795046433 --data-urlencode end=1795047333" | jq -r '.traces[].traceID'
++ 2026-11-18T19:15:33-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh debc01ce0bf1314b751d2c83b03c54ba" | spans, parents, and attribute keys
++ 2026-11-18T19:15:33-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode q=\{\ resource.service.name\ =\ \"vllm-audio\"\ \&\&\ name\ =\ \"llm_request\"\ \} --data-urlencode limit=1 --data-urlencode start=1795046433 --data-urlencode end=1795047333" | jq -r '.traces[].traceID'
++ 2026-11-18T19:15:34-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh 34e23b7c861e7d4ede07d7acb9844be8" | spans, parents, and attribute keys
+```
+
+### 2026-11-18 · slice 2: the startup traces
+
+```text
++ 2026-11-18T19:16:19-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:16:19-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode q=\{\ resource.service.name\ =\ \"vllm-agent\"\ \&\&\ name\ =\ \"Overall\ Loading\"\ \} --data-urlencode limit=2 --data-urlencode start=1795036579 --data-urlencode end=1795047379" | jq -r '.traces[].traceID'
++ 2026-11-18T19:16:19-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh 6ae3ac2b23a72439228f84730f0670c8" | spans, parents, and attribute keys
++ 2026-11-18T19:16:19-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode q=\{\ resource.service.name\ =\ \"vllm-vision\"\ \&\&\ name\ =\ \"Overall\ Loading\"\ \} --data-urlencode limit=2 --data-urlencode start=1795036579 --data-urlencode end=1795047379" | jq -r '.traces[].traceID'
++ 2026-11-18T19:16:19-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh ff0f8fd83322cd4c40df6d45da3e1ae3" | spans, parents, and attribute keys
++ 2026-11-18T19:16:19-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode q=\{\ resource.service.name\ =\ \"vllm-audio\"\ \&\&\ name\ =\ \"Overall\ Loading\"\ \} --data-urlencode limit=2 --data-urlencode start=1795036579 --data-urlencode end=1795047379" | jq -r '.traces[].traceID'
++ 2026-11-18T19:16:19-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh 2f83559cd51522a751d109859480ca18" | spans, parents, and attribute keys
++ 2026-11-18T19:16:20-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode q=\{\ resource.service.name\ =\ \"vllm-embedding\"\ \&\&\ name\ =\ \"Overall\ Loading\"\ \} --data-urlencode limit=2 --data-urlencode start=1795036580 --data-urlencode end=1795047380" | jq -r '.traces[].traceID'
++ 2026-11-18T19:16:20-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh 886b292c21953dc3860e0fd8bf45db64" | spans, parents, and attribute keys
+```
+
+### 2026-11-18 · slice 2: the overflow trace, back to the rows, and the Azure count
+
+```text
++ 2026-11-18T19:16:37-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:16:37-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-18T19:00:00 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-18T19:16:47-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:16:47-05:00 laptop: mise run agentgateway-deploy rows-down
++ 2026-11-18T19:16:47-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-18T19:16:47-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env otel-collector.yml otel-collector tempo.yml tempo grafana.yml grafana | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-18T19:16:47-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-18T19:16:47-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-18T19:16:47-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-18T19:16:47-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-18T19:16:47-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-18T19:16:47-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-18T19:16:47-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-18T19:16:49-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-18T19:16:49-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -D - -o .state/answer/overflow-agent.json -H content-type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-18T19:16:50-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -D - -o .state/answer/overflow-embedding.json -H content-type: application/json -d {"model":"embedding","input":"hello"} http://gb10-2:3000/embedding/v1/embeddings
++ 2026-11-18T19:16:51-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-18T19:16:51-05:00 gb10-2: mkdir -p ~/gateway/agentgateway
++ 2026-11-18T19:16:51-05:00 laptop: tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env otel-collector.yml otel-collector tempo.yml tempo grafana.yml grafana | ssh gb10-2 'tar -C ~/gateway -xf -'
++ 2026-11-18T19:16:51-05:00 laptop: ssh gb10-2 'umask 077 && cat > ~/gateway/postgres.env' < .state/agentgateway/postgres.<tmp>.env
++ 2026-11-18T19:16:51-05:00 laptop: ssh gb10-2 'cat > ~/gateway/agentgateway/config.yaml.next' < .state/agentgateway/config.rendered.<tmp>.yaml
++ 2026-11-18T19:16:51-05:00 gb10-2: docker image inspect cr.agentgateway.dev/agentgateway:v1.7.0 >/dev/null 2>&1 || docker pull cr.agentgateway.dev/agentgateway:v1.7.0
++ 2026-11-18T19:16:51-05:00 gb10-2: docker run --rm --user "$(id -u):$(id -g)" --volume "$HOME/gateway/agentgateway:/config:ro" cr.agentgateway.dev/agentgateway:v1.7.0 -f /config/config.yaml.next --validate-only
++ 2026-11-18T19:16:51-05:00 gb10-2: mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml
++ 2026-11-18T19:16:51-05:00 gb10-2: docker container inspect agentgateway --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo absent
++ 2026-11-18T19:16:51-05:00 gb10-2: gateway/compose.sh up --detach --wait --build
++ 2026-11-18T19:16:53-05:00 gb10-2: gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"
++ 2026-11-18T19:17:00-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:17:00-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-18T19:16:47 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-18T19:17:00-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode q=\{\ resource.service.name\ =\ \"agentgateway\"\ \} --data-urlencode limit=10 --data-urlencode start=1795047240 --data-urlencode end=1795047420" | jq -r '.traces[].traceID'
++ 2026-11-18T19:17:00-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh 266b7f194bec460e8f26e6c1ae390bf1 34e23b7c861e7d4ede07d7acb9844be8 debc01ce0bf1314b751d2c83b03c54ba 926cce9c743b3282b84dd00843be70b0" | spans, parents, and attribute keys
++ 2026-11-18T19:17:10-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:17:10-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -D - -o /dev/null -H content-type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-18T19:17:11-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -D - -o /dev/null -H content-type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-18T19:17:11-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -D - -o /dev/null -H content-type: application/json -d {"model":"audio","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32} http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-18T19:17:12-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -D - -o /dev/null -H content-type: application/json -d {"model":"embedding","input":"hello"} http://gb10-2:3000/embedding/v1/embeddings
++ 2026-11-18T19:17:12-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-18T19:17:10 agentgateway 2>&1' | grep -o ' route=default/[a-z]* .* endpoint=[^ ]*' | grep -o 'route=[^ ]*\|endpoint=[^ ]*' | grep -v azure.com | paste - -
++ 2026-11-18T19:17:30-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:17:30-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-18T19:17:10 agentgateway 2>&1' | grep -oE ' route=default/[a-z]+ endpoint=[^ ]+' | grep -v azure.com
++ 2026-11-18T19:17:35-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:17:35-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode q=\{\ span.gen_ai.provider.name\ =\ \"azure\"\ \} --data-urlencode limit=10 --data-urlencode start=1795047155 --data-urlencode end=1795047455" | jq -r '.traces[].traceID'
++ 2026-11-18T19:17:35-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh 5b24fe0838f97333fc467f8189785d40 2a8fd3f06a9ab9e3e1f8d32c877edf19" | spans, parents, and attribute keys
++ 2026-11-18T19:17:40-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:17:40-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-18T19:16:47 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
+```
+
+### 2026-11-18 · slice 2: the unattended restart and the restart policies
+
+```text
++ 2026-11-18T19:17:44-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:17:44-05:00 laptop: ssh -n gb10-2 'docker restart gateway-otel-collector-1 gateway-tempo-1 gateway-grafana-1'
++ 2026-11-18T19:17:59-05:00 laptop: ssh -n gb10-2 'for i in $(seq 30); do s=$(docker inspect -f "{{.Name}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}" gateway-otel-collector-1 gateway-tempo-1 gateway-grafana-1); echo "$s" | grep -q starting || break; sleep 2; done; echo "$s"'
++ 2026-11-18T19:18:07-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:18:07-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -D - -o /dev/null -H content-type: application/json -d {"model":"agent","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32} http://gb10-2:3000/agent/v1/chat/completions
++ 2026-11-18T19:18:08-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -D - -o /dev/null -H content-type: application/json -d {"model":"vision","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32} http://gb10-2:3000/vision/v1/chat/completions
++ 2026-11-18T19:18:08-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -D - -o /dev/null -H content-type: application/json -d {"model":"audio","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32} http://gb10-2:3000/audio/v1/chat/completions
++ 2026-11-18T19:18:08-05:00 laptop: printf 'header = "Authorization: Bearer %s"\n' "$(<.state/agentgateway/keys/architect)" | curl -K - -s -m 120 -D - -o /dev/null -H content-type: application/json -d {"model":"embedding","input":"hello"} http://gb10-2:3000/embedding/v1/embeddings
++ 2026-11-18T19:18:08-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-18T19:18:07 agentgateway 2>&1' | grep -oE ' route=default/[a-z]+ endpoint=[^ ]+ .* trace\.id=[0-9a-f]+' | grep -v azure.com | sed -E 's/ src.addr=.* (trace.id=)/ \1/'
++ 2026-11-18T19:18:12-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-18T19:18:12-05:00 laptop: ssh -n gb10-2 'docker inspect -f "{{.Name}} {{.HostConfig.RestartPolicy.Name}}" $(docker ps -aq --filter label=com.docker.compose.project=gateway)'
++ 2026-11-18T19:18:12-05:00 laptop: ssh -n gb10-2 "docker exec gateway-grafana-1 sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/$id && echo || exit; done' sh cea3f3ad7550397f1ae06d12f6b8cbd4 ac004c2048f1f264e928ba6ea1cd8efe ad3599374da129f37ffebaf7533626dc bdfa6219b5a739635ab55dbd0c9a6dbd" | spans, parents, and attribute keys
+```
+
 ## For the goal record
 
-Pending edits from this slice, for the session to move into the goal record:
+Pending edits from these slices, for the session to move into the goal record:
 
 - **v1.ai.client, claimed fixes still failing:** none. Each of go-ai's four claimed fixes passed on
   Azure through the gateway ("The revalidation").
+- **v1.ai.hosting, a measured cold start:** vLLM's startup traces give each row's cold start
+  broken down by phase, read from its `Overall Loading` trace: weights' load, model preparation,
+  KV cache allocation, and warmup, per row ("The rows' startup traces and cold start"). The agent's
+  46.2 s is led by its 17.8 s weights' load; audio's 50.0 s by its 20.5 s warmup. A candidate for
+  v1.ai.hosting's restart and capacity notes, in place of an estimate.
