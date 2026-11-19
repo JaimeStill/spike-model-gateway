@@ -1,6 +1,6 @@
 # goal · experiment.hosting.spike-model-gateway
 
-- **State:** building
+- **State:** brief ready
 - **Task:** answer
 - **Branch:** answer
 
@@ -292,7 +292,7 @@ Sync          coordinator:
   Tempo, and Grafana run in gb10-2's stack; each alias's trace nests the row's span under the
   gateway's; an overflowed trace has no row span; each row sends a startup trace; Azure 50 of 80.
 - slice 3 paper: done (b9efae9 comparison, 5a7d880 gateway document, README answer, answer section).
-- slice 4 walkthrough: waived by the architect; reviews next.
+- slice 4 walkthrough: waived by the architect. Reviews, editor pass, and brief done.
 - review escalation 1: clients at go-ai v0.3.0 (3e26eca). Rows-up tiers rerun at
   `tools/infer/v0.3.0`: 26 and 19 passed, 0 failed; Azure 0.
 - standards review: the retry test's output and skips, and the retry policy as run (ada5a2b,
