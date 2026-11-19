@@ -552,7 +552,8 @@ of the source.
 - `gpt-oss-120b` gives no reasoning item at `--reasoning low` through Messages: "reasoning items =
   0 at --reasoning low".
 - A Messages stream at `--max-tokens 16` on agent "did not exit within 15s"
-  (`TestChatIncompleteAtMaxTokens/messages`).
+  (`TestChatIncompleteAtMaxTokens/messages`). It hasn't recurred in three reruns since, and its
+  cause is open ("Addendum 2026-11-19 · the 16-token Messages stall", below).
 - `TestTranscribeChat` gets the large-audio 503, as in go-ai's tier.
 
 The released infer CLI, setting no model, picked each alias on Azure: each base URL's `infer
@@ -601,7 +602,7 @@ stopped and escalated (escalation 2, below). C-vision did not run.
 
 | Alias | Cloud model | SKU, processing scope | Parity gaps seen |
 | --- | --- | --- | --- |
-| agent | `gpt-oss-120b` | DataZoneStandard: within the data zone | refuses `tool_choice: required` and ignores a named function; an unknown model name succeeds; Responses is translated to Chat Completions, and a reply cut off at its limit reports `max_tokens`; a translated Messages stream reports 0 input tokens, and one at a 16-token limit didn't end within 15 s; no reasoning item at low effort through Messages; Azure's chat stream opens with an empty reply id and Responses adds its reasoning item in a form go-ai rejects (go-ai's to fix) |
+| agent | `gpt-oss-120b` | DataZoneStandard: within the data zone | refuses `tool_choice: required` and ignores a named function; an unknown model name succeeds; Responses is translated to Chat Completions, and a reply cut off at its limit reports `max_tokens`; a translated Messages stream reports 0 input tokens, and one at a 16-token limit didn't end within 15 s on 2026-11-16, not seen since ("Addendum 2026-11-19 · the 16-token Messages stall"); no reasoning item at low effort through Messages; Azure's chat stream opens with an empty reply id and Responses adds its reasoning item in a form go-ai rejects (go-ai's to fix) |
 | vision | `gpt-5-mini` 2025-08-07 | GlobalStandard: processed globally | refuses `max_tokens` (wants `max_completion_tokens`) and reasoning effort `none`; an unknown model name succeeds; the stream gaps above; called a red PNG "pink" where the row said "Red" |
 | audio | `gpt-audio-mini` 2025-12-15 | GlobalStandard: processed globally | refuses a text-only chat; serves Chat Completions only; audio in a Responses request is refused by the gateway itself on overflow (400, "failed to parse Responses request"), where the row refuses it with its own message (the audio rerun); an audio body over 64 KiB isn't retried, so it gets the row's 503 until 2 failures evict the row, each after about 11 s when the Framework is powered down (walkthrough) |
 | embedding | `text-embedding-3-small` | DataZoneStandard: within the data zone | another vector space at the same 768 dimensions; every reply is marked as overflow; with the Framework powered down, the first overflowed request took about 23 s (walkthrough) |
@@ -1226,6 +1227,186 @@ those under slice 1 (the hosts, the Azure deployments, and the engines' upgrade)
   1, since [`scripts/currency.sh`](../../scripts/currency.sh) exits 1 for any line it prints, held
   or not. agentgateway's image pin and the compose FROM pin print nothing, so they are current.
   `mise run check` exits 0.
+
+## Addendum 2026-11-19 · the 16-token Messages stall
+
+On 2026-11-16, infer's `TestChatIncompleteAtMaxTokens/messages` sent a Messages stream at
+`--max-tokens 16` to agent through the `rows-down` overlay, and it "did not exit within 15s" ("The
+tiers on Azure", slice 2). It hasn't recurred in three reruns since: go-ai's on 2026-11-17, the
+answer task's on 2026-11-18, and this one on 2026-11-19. Its cause stays open. One reading of it is
+ruled out: that the gateway sends Azure an unstreamed request.
+
+### 2026-11-17: go-ai's rerun
+
+go-ai's azure-streams task reran the case through `rows-down` (go-ai `0eb0842`, "record:
+v1.ai.client, azure-streams slice 5 classified", in its goal record,
+`context/goals/v1.ai.client.md`). `gpt-oss-120b` answered a streamed Messages request at
+`max_tokens` 16 in 1.3 s, ending in `message_stop` (`stop_reason` `max_tokens`) and closing the
+connection, and infer ended on it, as incomplete. Replayed offline with the connection held open
+30 s after `message_stop`, infer, at the branch and at `tools/infer/v0.1.0`, ended at
+`message_stop` within 5 ms. So the stall wasn't go-ai's; the record left it to "the gateway's or
+Azure's". The record also saw `azureai-fe-is-streaming: False` on Azure's reply, and read it as
+the gateway sending Azure an unstreamed Chat Completions request and building the Messages stream
+from the whole reply, so that a longer reply would stall until Azure finished. And it found the
+translated stream's `message_start` reporting 0 input tokens, and its `message_delta` the real
+count.
+
+### 2026-11-18: the answer task's pass
+
+With `rows-down` deployed, infer's `TestChatIncompleteAtMaxTokens/messages` passed in both stream
+modes, in 0.26 s and 0.24 s ([`docs/findings/answer.md`](answer.md), line 216, the row "the
+16-token Messages stall on agent").
+
+### 2026-11-19: a timed stream
+
+From the laptop, 09:38–09:43 local time: agentgateway v1.7.0 on gb10-2 with the `rows-down`
+overlay, so agent is answered by its Foundry deployment, `gpt-oss-120b`, in eastus2. Each send is
+one `messages_stream <alias> <max tokens> <prompt>`
+([`scripts/clients-lib.sh`](../../scripts/clients-lib.sh)): one streamed Messages request through
+the gateway on the alias, each line of the stream stamped with its arrival. Its verdict, from its
+header comment: "streams" when the text deltas cover at least half of the reply's span, from the
+first event to `message_stop`; "arrives whole" when every event lands within the last tenth of the
+total; otherwise "mixed"; and "too short to tell" with fewer than two text deltas. The raw
+captures are under `.state/max-tokens-note/`, untracked. The line numbers below are of the
+task's command log, `.state/max-tokens-note/commands-2026-11-19.log`.
+
+**The header, direct to Azure** (lines 17–24). Two chat requests to the deployment past the
+gateway, "Count upward from 1, one number a line.", `max_tokens` 32 each:
+
+| `stream` | Status | `content-type` | `azureai-fe-is-streaming` |
+| --- | --- | --- | --- |
+| `true` | HTTP/2 200 | `text/event-stream; charset=utf-8` | `False` |
+| `false` | HTTP/2 200 | `application/json` | `False` |
+
+So the header doesn't show whether a request was streamed. It reads `False` either way.
+
+**A long reply, first try** (lines 211–253). "Count upward from 1, one number a line.",
+`max_tokens` 1024, 3 sends. The model kept each reply short: it stopped at 20, asked how many, or
+stopped at 100. Totals 1.054, 0.748, and 1.330 s; text deltas 6, 9, and 21; the verdict "mixed"
+each time. Inconclusive: too little text to tell a stream from a whole reply.
+
+**A long reply, to a fixed target** (lines 742–783). "Count from 1 to 300, one number per line,
+nothing else.", `max_tokens` 1024, 3 sends, each counting to 300 and ending `end_turn`. Times in
+seconds from the send:
+
+| Send | First event | First text delta | Last text delta | Text span | `message_stop` | Text deltas, of all deltas | Output tokens |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 0.372 | 0.574 | 1.362 | 0.788 | 1.362 | 61 of 84 | 676 |
+| 2 | 0.222 | 0.658 | 1.279 | 0.621 | 1.279 | 61 of 76 | 661 |
+| 3 | 0.200 | 0.654 | 1.120 | 0.466 | 1.120 | 61 of 92 | 703 |
+
+The text deltas by arrival, as count@ms from the send:
+
+- send 1: 1@573, 1@666, 10@667, 10@757, 8@841, 8@887, 3@906, 5@954, 8@1033, 7@1361;
+- send 2: 27@657–659, 8@757–758, 8@832–833, 2@857–858, 6@926–927, 10@1278;
+- send 3: 37@654–656, 24@1117–1119.
+
+The verdict was "streams" each time. The text arrives in bursts spread over the reply's second or
+so, never all at the end. Each reply carried `x-gateway-overflow: azure`, `server: istio-envoy`,
+and `azureai-fe-is-streaming: False`. Each `message_start` reported 0 input tokens, and its
+`message_delta` the real count: 83 here, 78 in the first try, and 72 in the 16-token case below,
+as on 2026-11-17.
+
+**The 16-token case** (lines 262–331). "Name a primary color.", `max_tokens` 16, 5 sends. Every
+one ended `stop_reason` `max_tokens` with 16 output tokens, all of them reasoning: thinking deltas
+and no text deltas, so each verdict was "too short to tell". Totals 1.064, 0.665, 1.876, 0.486,
+and 0.448 s. `message_delta` and `message_stop` arrived within 1 ms of the last delta every time.
+Nothing was held, and the stall didn't recur. The fourth and fifth sends started in the same
+second and so share a folder, where the fifth's captures replaced the fourth's. The log keeps the
+fourth's summary, and the helper's folder names carry milliseconds since (`07da3da`).
+
+**Back to the rows.** Each overlay was removed by a plain deploy (lines 340 and 792 onward), and
+one `messages_stream agent 64` after each was answered by the row, `overflow: none` (lines 521–534
+and 973–986).
+
+**The Azure count.** 13 of the task's cap of 20: 11 through the gateway, agent's, all 200
+(`azure_count` since the first deploy, lines 987–1000), and the 2 direct requests above, counted
+by hand. No 429.
+
+### The translation, read in the source
+
+For the Azure provider, which lists only `completions`, agentgateway v1.7.0 translates a Messages
+request into Chat Completions and the reply's chunks back into Messages events, in module
+`from_messages` of `crates/llm/src/conversion/completions.rs`
+([at the `v1.7.0` tag](https://github.com/agentgateway/agentgateway/blob/v1.7.0/crates/llm/src/conversion/completions.rs))
+[src]:
+
+- The request keeps the client's `stream` (line 1264) and, when streaming, asks for usage with
+  `stream_options.include_usage` (1276–1283).
+- `translate_stream` (286 onward) turns each chunk into Messages events as it arrives.
+  `message_start` goes out on the first chunk, built from the chunk's id and model, with no usage
+  (608–615): hence its 0 input tokens.
+- A usage chunk is kept (621–623), and so is a finish reason (741). `message_delta`, which carries
+  the input tokens from the usage, and `message_stop` go out once both have arrived (745–747), or
+  at `[DONE]`, which forces them (597–598). `flush_message_end` builds the two (483–555).
+
+So the translated stream is a stream. The one place it holds events back is its end: until a
+finish reason and a usage chunk have both arrived, or `[DONE]`.
+
+### What it leaves
+
+- The unstreamed-request reading is ruled out. The header reads `False` on a request streamed
+  directly to Azure too, the source keeps the client's `stream`, and the overflowed long replies
+  stream.
+- A held `message_stop` stays a candidate: had Azure sent its finish reason and then been slow
+  with its usage chunk or `[DONE]`, the gateway would hold `message_delta` and `message_stop` until
+  one came. It wasn't seen. In 5 sends at 16 tokens both came within 1 ms of the last delta.
+- The 2026-11-16 stall's cause stays open. It hasn't recurred in three reruns: 2026-11-17,
+  2026-11-18, and 2026-11-19.
+
+### To repeat it
+
+The walkthrough was waived, so these steps stand in for it. From the repository root on the
+laptop, through the helpers, so each command lands in the day's command log. It sends 1 request to
+Azure.
+
+```sh
+source scripts/clients-lib.sh
+logged "mise run agentgateway-deploy rows-down"
+messages_stream agent 1024 "Count from 1 to 300, one number per line, nothing else."
+logged "mise run agentgateway-deploy"
+```
+
+Expected:
+
+- the first deploy prints `overlay rows-down: applied` and `Configuration is valid!`;
+- `messages_stream` prints `status: HTTP/1.1 200 OK; overflow: x-gateway-overflow: azure`, about
+  61 text deltas from about 0.6 s to 1.4 s, `message_stop` with the last of them, and
+  `verdict: streams`;
+- the second deploy applies no overlay, and agent is answered by its row again.
+
+### Commands as run, 2026-11-19
+
+The commands that matter, as logged, from `.state/max-tokens-note/commands-2026-11-19.log`: the
+control, each deploy, the first `messages_stream` of each case, and each `azure_count`. The two
+direct requests are the Azure helper's, `az_curl`, logged as the curl it runs, and `azure_count`
+is logged as its read of the access log (lines 254, 332, 784, and 987). Each
+`mise run agentgateway-deploy` is followed in the log by the deploy's own `+` lines, and each
+`messages_stream` by its curl and its summary. The output stays in the log.
+
+```text
++ 2026-11-19T09:38:53-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T09:38:53-05:00 laptop: printf 'header = "api-key: %s"\nurl = "https://%s.services.ai.azure.com/openai/v1/chat/completions"\n' "$(<.state/azure/key)" "$(sed -n 's/^AZURE_ACCOUNT=//p' .state/azure/account.env | tr -d \"\')" | curl -K - -s -o /dev/null -D .state/max-tokens-note/control/stream-true.headers.txt -H content-type: application/json -d {"model":"gpt-oss-120b","stream":true,"max_tokens":32,"messages":[{"role":"user","content":"Count upward from 1, one number a line."}]}
++ 2026-11-19T09:38:54-05:00 laptop: printf 'header = "api-key: %s"\nurl = "https://%s.services.ai.azure.com/openai/v1/chat/completions"\n' "$(<.state/azure/key)" "$(sed -n 's/^AZURE_ACCOUNT=//p' .state/azure/account.env | tr -d \"\')" | curl -K - -s -o /dev/null -D .state/max-tokens-note/control/stream-false.headers.txt -H content-type: application/json -d {"model":"gpt-oss-120b","stream":false,"max_tokens":32,"messages":[{"role":"user","content":"Count upward from 1, one number a line."}]}
++ 2026-11-19T09:38:56-05:00 laptop: grep -iH -e '^HTTP/' -e '^azureai-fe-is-streaming' .state/max-tokens-note/control/stream-true.headers.txt .state/max-tokens-note/control/stream-false.headers.txt
++ 2026-11-19T09:39:05-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T09:39:05-05:00 laptop: mise run agentgateway-deploy rows-down
++ 2026-11-19T09:39:12-05:00 laptop: messages_stream agent 1024 'Count upward from 1, one number a line.'
++ 2026-11-19T09:39:31-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T09:39:31-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:05 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-19T09:39:35-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T09:39:35-05:00 laptop: messages_stream agent 16 'Name a primary color.'
++ 2026-11-19T09:39:40-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:31 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-19T09:39:49-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T09:39:49-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-19T09:42:02-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T09:42:02-05:00 laptop: mise run agentgateway-deploy rows-down
++ 2026-11-19T09:42:05-05:00 laptop: messages_stream agent 1024 'Count from 1 to 300, one number per line, nothing else.'
++ 2026-11-19T09:42:09-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:41:41 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
++ 2026-11-19T09:42:13-05:00 laptop: source scripts/clients-lib.sh
++ 2026-11-19T09:42:13-05:00 laptop: mise run agentgateway-deploy
++ 2026-11-19T09:43:28-05:00 laptop: ssh -n gb10-2 'docker logs --since 2026-11-19T09:39:05 agentgateway 2>&1' | the request lines with overflow="azure" or gen_ai.provider.name=azure, counted per route and status
+```
 
 ## Commands as run
 
