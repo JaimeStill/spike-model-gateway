@@ -82,8 +82,9 @@
 #                     the TraceQL query selects ({} by default, every trace) since <since>, any
 #                     time `date -d` reads, such as '10 min ago' (15 minutes by default); or, with
 #                     -t, the traces named. For each, its id, then each span in start order,
-#                     indented under its parent: the service, the span's name, kind, id, and
-#                     parent, then its attribute keys, never their values; read-only (below)
+#                     indented under its parent: the service, the span's name, kind, id,
+#                     parent, and duration in ms (its end less its start, to 0.1 ms), then its
+#                     attribute keys, never their values; read-only (below)
 #   logged <command>  any other step, given as one string: run with bash from the root, logged as
 #                     written, and its output, stdout and stderr, appended to the log as printed;
 #                     for a command that prints no key, such as `mise run agentgateway-deploy`, a
@@ -844,7 +845,8 @@ _clients_traces_print() {
       | {svc: $svc, id: (.spanId | b64hex), parent: ((.parentSpanId // "") | b64hex),
          trace: (.traceId | b64hex), name: (.name | safe),
          kind: ((.kind // "") | sub("^SPAN_KIND_"; "") | ascii_downcase),
-         start: (.startTimeUnixNano | tonumber), keys: [.attributes[]?.key]}]
+         start: (.startTimeUnixNano | tonumber), end: (.endTimeUnixNano | tonumber),
+         keys: [.attributes[]?.key]}]
     | sort_by(.start) as $spans
     | ($spans | map({key: .id, value: .parent}) | from_entries) as $up
     | ($spans | map({key: .id, value: .svc}) | from_entries) as $svcs
@@ -856,7 +858,7 @@ _clients_traces_print() {
             if .parent == "" then "none (root)"
             elif $up[.parent] == null then "\(.parent) (not in trace)"
             elif $svcs[.parent] != .svc then "\(.parent) (\($svcs[.parent]))"
-            else .parent end)",
+            else .parent end), \((.end - .start) / 1e5 | round / 10) ms",
           "\($in)  keys: \(.keys | join(", "))")
     end'
 }
