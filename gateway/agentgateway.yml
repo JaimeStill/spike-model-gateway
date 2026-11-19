@@ -43,6 +43,10 @@ services:
       - "framework:${FRAMEWORK_ADDR:?}"
     labels:
       spike.config-section: ${AGW_CONFIG_SECTION:?}
+    # The Collector it exports its spans to (config.tracing) has no health check
+    # (otel-collector/Dockerfile), so agentgateway waits on its start only.
     depends_on:
       postgres:
         condition: service_healthy
+      otel-collector:
+        condition: service_started

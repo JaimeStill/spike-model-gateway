@@ -76,6 +76,14 @@
 #                     <case>-<time>.tsv (below)
 #   requests_shed     agentgateway's requests_shed metric, the in-flight limit's refusals, read
 #                     from its stats port on gb10-2's loopback over SSH, read-only (below)
+#   traces [-q <traceql>] [-n <count>] [<since>]
+#   traces -t <trace id>...
+#                     the traces Tempo holds on gb10-2: the newest <count> (20 by default) that
+#                     the TraceQL query selects ({} by default, every trace) since <since>, any
+#                     time `date -d` reads, such as '10 min ago' (15 minutes by default); or, with
+#                     -t, the traces named. For each, its id, then each span in start order,
+#                     indented under its parent: the service, the span's name, kind, id, and
+#                     parent, then its attribute keys, never their values; read-only (below)
 #   logged <command>  any other step, given as one string: run with bash from the root, logged as
 #                     written, and its output, stdout and stderr, appended to the log as printed;
 #                     for a command that prints no key, such as `mise run agentgateway-deploy`, a
@@ -171,6 +179,18 @@
 # requests_shed. agentgateway's stats port, 15020, serves its Prometheus metrics, published on
 # gb10-2's loopback only (gateway/agentgateway.yml); requests_shed counts the requests the
 # in-flight limit refused, which leave no access log line (probes/in-flight-1.yaml).
+#
+# The traces (the answer task's behaviors 10 to 12). Tempo publishes no port (gateway/tempo.yml),
+# so traces reads its HTTP API from inside the compose network: `docker exec` of curl in the
+# Grafana container, which has it, against tempo:3200, over SSH. A search is /api/search with a
+# TraceQL query and a time range in Unix seconds; each trace is /api/v2/traces/<id>, whose span
+# and parent ids Tempo gives in base64, printed in hex as a traceparent carries them. A span whose
+# parent is in another service is the check that a row's span is the gateway's child; a parent the
+# trace doesn't hold, a caller's own traceparent, is marked "(not in trace)". Only keys are printed,
+# since a span's values may name the caller's address or an overflow's endpoint, the Azure
+# account's host, as the access log does; a span name that names a host under azure.com has it
+# replaced, since an outbound span is named for its host. Search finds a trace only once Tempo has
+# made it searchable, tens of seconds after it arrives; -t reads one at once.
 #
 # The Postgres password's rotation. The value is created like the deploy creates it (openssl rand
 # -hex 32, 0600), and reaches psql only on its stdin, in `ALTER USER ... WITH PASSWORD` written by
@@ -797,6 +817,108 @@ requests_shed() {
   _clients_log laptop "ssh -n $CLIENTS_HOST '$remote' | grep requests_shed"
   ssh -n "$CLIENTS_HOST" "$remote" | grep -E '^(# (HELP|TYPE) )?[a-z_]*requests_shed' |
     _clients_say requests_shed
+  local st=("${PIPESTATUS[@]}")
+  return $((st[0] ? st[0] : st[1]))
+}
+
+# A trace's spans, one JSON value from /api/v2/traces/<id> a line on stdin, printed as the header
+# describes. b64hex reads Tempo's base64 id as hex, and keeps an id already in hex.
+_clients_traces_print() {
+  jq -r '
+    def b64hex:
+      if test("^[0-9a-f]+$") then . else
+        [explode[] | select(. != 61)
+          | if . >= 97 then . - 71 elif . >= 65 then . - 65 elif . >= 48 then . + 4
+            elif . == 43 then 62 else 63 end]
+        | [range(0; length; 4) as $i | .[$i:$i + 4]]
+        | map(. as $g | (reduce range(0; 4) as $i (0; . * 64 + ($g[$i] // 0))) as $v
+            | [($v / 65536 | floor) % 256, ($v / 256 | floor) % 256, $v % 256][0:($g | length) - 1])
+        | add // []
+        | map(. as $b | "0123456789abcdef" | .[($b / 16 | floor):($b / 16 | floor) + 1] + .[$b % 16:$b % 16 + 1])
+        | join("")
+      end;
+    def safe: gsub("[A-Za-z0-9.-]+\\.azure\\.com"; "<azure host>");
+    [.trace.resourceSpans[]?
+      | ([.resource.attributes[]? | select(.key == "service.name") | .value.stringValue][0] // "?") as $svc
+      | .scopeSpans[]?.spans[]?
+      | {svc: $svc, id: (.spanId | b64hex), parent: ((.parentSpanId // "") | b64hex),
+         trace: (.traceId | b64hex), name: (.name | safe),
+         kind: ((.kind // "") | sub("^SPAN_KIND_"; "") | ascii_downcase),
+         start: (.startTimeUnixNano | tonumber), keys: [.attributes[]?.key]}]
+    | sort_by(.start) as $spans
+    | ($spans | map({key: .id, value: .parent}) | from_entries) as $up
+    | ($spans | map({key: .id, value: .svc}) | from_entries) as $svcs
+    | def depth($id): if ($up[$id] // "") == "" or $up[$up[$id]] == null then 0 else 1 + depth($up[$id]) end;
+    if ($spans | length) == 0 then "trace: no spans" else
+      "trace \($spans[0].trace): \($spans | length) spans, services \([$spans[].svc] | unique | join(", "))",
+      ($spans[] | ("  " * (depth(.id) + 1)) as $in
+        | "\($in)\(.svc) \"\(.name)\" \(.kind) span \(.id) parent \(
+            if .parent == "" then "none (root)"
+            elif $up[.parent] == null then "\(.parent) (not in trace)"
+            elif $svcs[.parent] != .svc then "\(.parent) (\($svcs[.parent]))"
+            else .parent end)",
+          "\($in)  keys: \(.keys | join(", "))")
+    end'
+}
+
+traces() {
+  local OPTIND opt query='{}' count=20 ids=() since='15 min ago' start end
+  while getopts q:n:t: opt; do
+    case $opt in
+      q) query=$OPTARG ;;
+      n) count=$OPTARG ;;
+      t) ids+=("$OPTARG") ;;
+      *)
+        echo 'usage: traces [-q <traceql>] [-n <count>] [<since>] | traces -t <trace id>...' >&2
+        return 2
+        ;;
+    esac
+  done
+  shift $((OPTIND - 1))
+  if ((${#ids[@]})); then
+    ids+=("$@")
+  else
+    (($# <= 1)) || {
+      echo 'usage: traces [-q <traceql>] [-n <count>] [<since>]' >&2
+      return 2
+    }
+    since=${1:-$since}
+  fi
+  [[ $count =~ ^[1-9][0-9]*$ ]] || {
+    echo 'traces: <count> is a positive integer' >&2
+    return 2
+  }
+  local id
+  for id in "${ids[@]}"; do
+    [[ $id =~ ^[0-9a-f]{1,32}$ ]] || {
+      echo "traces: $id isn't a trace id, 32 hex digits" >&2
+      return 2
+    }
+  done
+  local exec="docker exec gateway-grafana-1"
+  if ((${#ids[@]} == 0)); then
+    start=$(date -d "$since" +%s) || {
+      echo "traces: date -d can't read $since" >&2
+      return 2
+    }
+    end=$(date +%s)
+    # The query reaches curl through the remote shell and docker exec, quoted once for the shell.
+    local remote
+    remote="$exec curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode $(printf %q "q=$query") --data-urlencode limit=$count --data-urlencode start=$start --data-urlencode end=$end"
+    _clients_log laptop "ssh -n $CLIENTS_HOST \"$remote\" | jq -r '.traces[].traceID'"
+    # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
+    mapfile -t ids < <(ssh -n "$CLIENTS_HOST" "$remote" | jq -r '.traces[]?.traceID') || return
+    if ((${#ids[@]} == 0)); then
+      echo "no trace matches $query since $(date -d "@$start" -Iseconds)" | _clients_say traces
+      return 0
+    fi
+  fi
+  # One docker exec reads every trace, each body ended by a newline, so jq reads one a line.
+  # shellcheck disable=SC2089,SC2090 # The quotes are the remote shell's, the string sent as written.
+  local fetch="$exec sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/\$id && echo || exit; done' sh ${ids[*]}"
+  _clients_log laptop "ssh -n $CLIENTS_HOST \"$fetch\" | spans, parents, and attribute keys"
+  # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
+  ssh -n "$CLIENTS_HOST" "$fetch" | _clients_traces_print | _clients_say traces
   local st=("${PIPESTATUS[@]}")
   return $((st[0] ? st[0] : st[1]))
 }

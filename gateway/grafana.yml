@@ -1,0 +1,24 @@
+# Grafana (grafana/), with Tempo as its datasource, for searching the stack's traces. Its port is
+# published on gb10-2's loopback only and reached from the laptop through an SSH tunnel, `mise run
+# gateway:grafana`, at http://localhost:3002; anonymous access is its admin (grafana/Dockerfile),
+# so it holds no secret. Its state, the SQLite database, lives in a named volume, which
+# `gateway:down` keeps and `gateway:reset` drops.
+services:
+  grafana:
+    # No attestation, so an unchanged Dockerfile keeps its image id (postgres.yml).
+    build:
+      context: grafana
+      provenance: false
+      sbom: false
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:?}:3000"
+    volumes:
+      - gateway-grafana:/var/lib/grafana
+    # Tempo has no health check (tempo/Dockerfile), so Grafana waits on its start only.
+    depends_on:
+      tempo:
+        condition: service_started
+
+volumes:
+  gateway-grafana:

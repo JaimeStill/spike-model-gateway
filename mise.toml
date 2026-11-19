@@ -25,23 +25,23 @@ run = "scripts/watch.sh"
 quiet = true
 
 [tasks.agentgateway-deploy]
-description = "Deploy the gateway's compose project (agentgateway and Postgres) to gb10-2 over Tailscale SSH, idempotently, printing each command run"
+description = "Deploy the gateway's compose project (agentgateway, Postgres, and the Collector, Tempo, and Grafana) to gb10-2 over Tailscale SSH, idempotently, printing each command run"
 run = "scripts/agentgateway-deploy.sh"
 
 # The gateway's compose project on gb10-2 (gateway/compose.yml), as the deploy left it in
-# ~/gateway: each task runs gateway/compose.sh there over Tailscale SSH. Postgres's data lives in a
-# named volume, which down keeps and reset drops. A config or project change goes out with
-# `mise run agentgateway-deploy`, which brings the stack up itself.
+# ~/gateway: each task runs gateway/compose.sh there over Tailscale SSH. Postgres's data, Tempo's
+# traces, and Grafana's state live in named volumes, which down keeps and reset drops. A config or
+# project change goes out with `mise run agentgateway-deploy`, which brings the stack up itself.
 [tasks."gateway:up"]
-description = "Build and start the gateway's compose stack on gb10-2 (agentgateway and Postgres) and wait until it is up"
+description = "Build and start the gateway's compose stack on gb10-2 (agentgateway, Postgres, the Collector, Tempo, and Grafana) and wait until it is up"
 run = "ssh gb10-2 gateway/compose.sh up --detach --wait --build"
 
 [tasks."gateway:down"]
-description = "Stop the gateway's compose stack on gb10-2, keeping Postgres's volume"
+description = "Stop the gateway's compose stack on gb10-2, keeping Postgres's, Tempo's, and Grafana's volumes"
 run = "ssh gb10-2 gateway/compose.sh down"
 
 [tasks."gateway:reset"]
-description = "Stop the gateway's compose stack on gb10-2 and drop Postgres's volume"
+description = "Stop the gateway's compose stack on gb10-2 and drop Postgres's, Tempo's, and Grafana's volumes"
 run = "ssh gb10-2 gateway/compose.sh down --volumes"
 
 # The gateway's UI, published on gb10-2's loopback only (gateway/agentgateway.yml), reached from the
@@ -50,3 +50,11 @@ run = "ssh gb10-2 gateway/compose.sh down --volumes"
 [tasks."gateway:ui"]
 description = "Tunnel the gateway's UI from gb10-2's loopback to the laptop's localhost:3001 until Ctrl-C"
 run = "ssh -N -L 3001:127.0.0.1:3001 gb10-2"
+
+# Grafana, published on gb10-2's loopback only (gateway/grafana.yml), reached from the laptop
+# through an SSH tunnel as the UI is: http://localhost:3002 while it runs, its Explore page
+# searching the stack's traces in Tempo, with no login (anonymous admin). The tunnel holds the
+# terminal until Ctrl-C.
+[tasks."gateway:grafana"]
+description = "Tunnel Grafana from gb10-2's loopback to the laptop's localhost:3002 until Ctrl-C"
+run = "ssh -N -L 3002:127.0.0.1:3002 gb10-2"

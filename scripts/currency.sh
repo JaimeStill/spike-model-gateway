@@ -6,8 +6,10 @@
 # purpose, as the bench tools' Python is, is reported like any other, and its comment says why it
 # is held. Each gateway's image pin is compared with its project's latest GitHub release:
 # agentgateway's in gateway/agentgateway/deploy.env. Each compose Dockerfile's FROM line,
-# gateway/<service>/Dockerfile, is compared with the highest semantic-version tag that carries the
-# pin's variant suffix (a pin of 18.7-alpine against the newest -alpine release), listed by crane.
+# gateway/<service>/Dockerfile (Postgres's, the Collector's, Tempo's, and Grafana's), is compared
+# with the highest semantic-version tag that carries the pin's variant suffix (a pin of
+# 18.7-alpine against the newest -alpine release, a bare 3.1.1 against the newest bare release),
+# listed by crane.
 # The client helpers' go-ai release, CLIENTS_GOAI_TAG in scripts/clients-lib.sh, is compared with
 # the highest tools/infer/v* tag on go-ai's remote, and the retry test's go-ai requirement in
 # retry/go.mod with the module's latest release on the module proxy. Reads the network.

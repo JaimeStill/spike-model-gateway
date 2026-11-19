@@ -1,0 +1,23 @@
+# The OpenTelemetry Collector (otel-collector/), the stack's one OTLP ingress: agentgateway sends
+# it spans over the project's network, as `otel-collector`, and the four vLLM rows, three of them
+# on other hosts, through its OTLP gRPC port, published on gb10-2's tailnet address as
+# agentgateway's consumer port is (AGW_ADDR, which compose.sh looks up there). Its health_check
+# extension, 13133, isn't published. It forwards every span to Tempo.
+#
+# The port takes spans from any tailnet peer, unauthenticated: the spike's trust is the tailnet's,
+# and authenticated OTLP ingress is a requirement for production, not built here.
+services:
+  otel-collector:
+    # No attestation, so an unchanged Dockerfile keeps its image id and `up` leaves the container
+    # alone (postgres.yml).
+    build:
+      context: otel-collector
+      provenance: false
+      sbom: false
+    restart: unless-stopped
+    ports:
+      - "${AGW_ADDR:?}:${OTEL_GRPC_PORT:?}:4317"
+    # Tempo has no health check (tempo/Dockerfile), so the Collector waits on its start only.
+    depends_on:
+      tempo:
+        condition: service_started
