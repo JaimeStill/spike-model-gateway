@@ -580,6 +580,14 @@ Sync          coordinator:
   2026-11-18).
 - answer: every priority discrepancy is revalidated at v0.2.0 before the answer completes
   (architect, 2026-11-18).
+- answer: the helpers and retry/ move to go-ai v0.3.0 and tools/infer v0.3.0, released by go-ai's
+  acceptance during the task; the rows-up tiers rerun at v0.3.0, and the retry cases and the
+  rows-down revalidation stay proven at v0.2.0, since v0.3.0 changes neither retry nor the formats
+  (architect, 2026-11-18, review escalation 1).
+- answer: in-flight-1's retry case keeps 5 attempts against a jitter race in the test, not in go-ai;
+  its run needed 2 (architect, 2026-11-18, review escalation 2). Amends behavior 6.
+- answer: the tracing command goes into spike-model-engines' vLLM guide through the intake, not here
+  (architect, 2026-11-18, review escalation 3).
 - answer: the walkthrough was waived; the architect followed every slice live (architect,
   2026-11-18).
 - answer: the three Critical Dell firmware upgrades (BIOS 5.0.0, EC 0x02000d00, PD 0x00000519)
@@ -589,15 +597,32 @@ Sync          coordinator:
 
 ## Pending edits
 
-- coordinator · v1.ai.hosting: metrics and logs through the same Collector into the full LGTM stack
-  (architect, 2026-11-18). The Collector's `prometheus` receiver scrapes agentgateway's stats port
-  (15020) and each vLLM row's `/metrics` (queue depth, KV cache, latency histograms), and its
-  `filelog` receiver (or a per-host agent, for the rows off gb10-2) reads the containers' logs; each
-  exports OTLP to Mimir and Loki, keeping v1.observability's OTLP-only direction. Joining the
-  gateway's 503s and evictions to a row's queue and KV cache is the evidence the `/metrics`
-  admission gap needs. Unverified: whether agentgateway v1.7.0's access log carries the trace id,
-  and whether vLLM's histograms carry exemplars.
+- coordinator · experiment.hosting intake: spike-model-engines' vLLM guide
+  (`docs/engines/vllm/update.md`) gains per-row tracing, from #20: `VLLM_TRACE=on VLLM_MODEL=<row
+  id> host/engines vllm update` adds `--otlp-traces-endpoint grpc://gb10-2:4317`
+  (`VLLM_TRACE_COLLECTOR`), `--add-host gb10-2:<tailnet address>` resolved at run time, and
+  `OTEL_SERVICE_NAME=vllm-<alias>`; the same update without `VLLM_TRACE` turns it off. Its
+  STANDARDS.md wants every command run in a guide, and this spike changes only `host/` there
+  (architect, 2026-11-18, review escalation 3). Also a `host/` gap: `vllm update` compares only the
+  image and the command, so a changed collector address or alias in `--add-host` or
+  `OTEL_SERVICE_NAME` doesn't restart a traced row.
 
+- coordinator · v1.ai.hosting: metrics and logs through the same Collector into the full LGTM stack
+  (architect, 2026-11-18), on go-web-service's observability profile (its Collector, contrib
+  0.165.0, with Loki, Tempo, Mimir, and Grafana). One central Collector takes every service's
+  telemetry:
+  - traces pushed over OTLP, as agentgateway and the four rows do in this spike;
+  - metrics by its `prometheus` receiver scraping agentgateway's stats port (15020) and each vLLM
+    row's `/metrics` (queue depth, KV cache, latency histograms), exported to Mimir;
+  - container logs by Docker's `fluentd` logging driver on each service (dual logging keeps
+    `docker logs`), sent across hosts to the Collector's `fluentforward` receiver (24224), with a
+    `transform` processor mapping each container's tag to its `service.name`, so Grafana's
+    trace-to-logs link searches the name Tempo uses. A per-host `filelog` agent is the
+    alternative.
+  Joining the gateway's 503s and evictions to a row's queue and KV cache is the evidence the
+  `/metrics` admission gap needs. Unverified: whether agentgateway v1.7.0's access log carries the
+  trace id (if so, go-web-service's `json_parser` trace operators apply), and whether vLLM's
+  histograms carry exemplars; vLLM's plain-text logs carry no trace id.
 - coordinator · ai-hosting.md, Answers · experiment.hosting: add the section below after "Answer ·
   experiment.hosting.spike-model-layout". It folds in priority's and answer's roadmap summaries.
 
