@@ -4,7 +4,7 @@ The spike's last task: the clients at go-ai v0.2.0 through the gateway, go-ai's 
 against the gateway's own refusals, traces from the gateway down to each row, and the paper and the
 answer (evidence 8–11 of [`context/README.md`](../../context/README.md#the-evidence)). This finding
 holds slice 1, "Clients": behaviors 1–8, and slice 2, "Traces": behaviors 9–12, with 17 and 18
-throughout.
+throughout, then slice 4, the walkthrough.
 
 In short, after slices 1 and 2:
 
@@ -486,6 +486,147 @@ overflowed.
 - **Sampling is at 100%.** agentgateway's `randomSampling` is `"true"`, every request, and every
   row traces every request. Right for a spike's few requests; production lowers it to a ratio, or
   samples at the Collector by tail.
+
+## Slice 4 · walkthrough
+
+The architect runs the walkthrough from the repository root on the laptop, one step at a time, in
+the base config (`# overlays: none`) with every row up and traced. Every command goes through the
+helpers, so each lands in `.state/answer/commands-<date>.log`. Each step's expected result comes
+from slices 1–3. No step sends a request to Azure: nothing deploys an overlay, every row answers
+its own alias, and steps 2 and 4 read `azure_count` to show it. The task's Azure count stays at 50
+of 80. A reply carrying `x-gateway-overflow: azure`, or an `azure_count` above 0, stops the walk for
+the session to escalate.
+
+1. **Source the helpers.** This starts the day's command log and marks the walk's start, for
+   `azure_count`.
+
+   ```sh
+   source scripts/clients-lib.sh
+   W0=$(date -Iseconds)
+   ```
+
+   Expected: one line, `+ <time> laptop: source scripts/clients-lib.sh`.
+
+2. **The rows-up tier at v0.2.0.** infer's integration tier, the shorter of the two (about 25 s,
+   against go-ai's minute), from the worktree at `tools/infer/v0.2.0`, through the gateway on all
+   four aliases, with each alias's rows-up profile. A tier names each run once, so a second try
+   takes a new name. If `.state/answer/go-ai` is gone, `goai_checkout` makes it first.
+
+   ```sh
+   CLIENTS_TARGET=rows-up infer_tier walk-up-infer agent vision audio embedding
+   azure_count "$W0"
+   ```
+
+   Expected:
+   - the tier's `go test -v` output, then its three summary lines: `walk-up-infer: exit 0`,
+     `walk-up-infer: the key is not in .state/answer/clients/walk-up-infer.log`, and
+     `walk-up-infer: 19 passed, 0 failed, 1 skipped (top-level tests)`, as in slice 1's step 2;
+   - the one skip is `TestTranscribeRoute`: transcription's own route, which no row serves
+     (`grep -- '--- SKIP' .state/answer/clients/walk-up-infer.log` shows it, with the subtests'
+     skips);
+   - `azure_count`: `Azure answered 0 requests`, each alias 0, and `toward the cap of 80: 0`, 429
+     0.
+
+3. **One retry case: embedding-burst.** go-ai v0.2.0, at infer's default policy, sends 40
+   embeddings at once against the embedding route's own bucket, 34 a second. The case needs no
+   overlay: the bucket is the base config's, and the helper refuses to run unless the deployed
+   copy's first line reads `# overlays: none`. Every request goes to the embedding row.
+
+   ```sh
+   W3=$(date -Iseconds)
+   requests_shed
+   retry_case embedding-burst
+   logged "cut -f2,5,6,7 $(ls -t .state/answer/retry/embedding-burst-*.tsv | head -1) | sort | uniq -c"
+   logged "ssh -n gb10-2 'docker logs --since $W3 agentgateway 2>&1' | grep -E '[[:space:]]request ' | grep -oE '(route=[^ ]+|endpoint=[^ ]+|http.status=[0-9]+|retry_after=[^ ]+)' | paste -sd' ' | sed -E 's/ (route=)/\n\1/g' | sort | uniq -c"
+   requests_shed
+   ```
+
+   Expected:
+   - `requests_shed`: `agentgateway_requests_shed_total{bind="bind/3000"} <n>` (0 when this was
+     written);
+   - `retry_case`: `# overlays: none`, the test's per-attempt table, `--- PASS:
+     TestEmbeddingBurst`, then `embedding-burst: exit 0` and the key found in neither the log nor
+     the table;
+   - the table's count, its columns attempt, gap in ms, status, and Retry-After: `34 1 200`, the
+     burst's first attempts admitted; `6 1 429 1`, the rest refused with `Retry-After: 1`; and
+     `6 2 1000 200`, each refused call retried 1,000 ms after its 429 and answered 200 (a gap a ms
+     or two longer splits that line; the test fails any retry sooner than its Retry-After); plus
+     the header's own line. Which 6 calls are refused varies;
+   - the access log: `40 route=default/embedding endpoint=framework:8002 http.status=200`, the 34
+     and the 6 retries, and `6 route=default/embedding http.status=429 retry_after="1"`, the
+     gateway's own refusals, with no endpoint;
+   - `requests_shed`: the same `<n>` as before. A bucket's 429 isn't a shed request.
+
+4. **A trace in Grafana.** Grafana is published on gb10-2's loopback only and reached through an
+   SSH tunnel. In a second terminal, from the repository root:
+
+   ```sh
+   source scripts/clients-lib.sh
+   logged "mise run gateway:grafana"
+   ```
+
+   The tunnel holds its terminal and prints nothing. Open http://localhost:3002 (no login), then
+   Explore, with the Tempo datasource. In the first terminal, one agent request:
+
+   ```sh
+   gw_curl architect -sS -m 120 -o /dev/null -w 'agent %{http_code}\n' -H 'Content-Type: application/json' -d '{"model":"agent","messages":[{"role":"user","content":"Say OK."}],"max_tokens":32}' "$(gw_base agent)/chat/completions"
+   ```
+
+   Expected: `agent 200`.
+
+   In Explore, the TraceQL query, over the last 15 minutes:
+
+   ```text
+   { resource.service.name = "vllm-agent" && name = "llm_request" }
+   ```
+
+   Open the newest trace. Expected:
+   - three nested spans: agentgateway `POST /agent/v1/*`, the server span and root; beneath it
+     agentgateway `POST gb10-1:8000`, the client span to the row; and beneath that vllm-agent
+     `llm_request`, the row's span;
+   - the `llm_request` span's attributes include `gen_ai.latency.time_to_first_token`,
+     `gen_ai.latency.e2e`, `gen_ai.latency.time_in_queue`, and the other `gen_ai.latency.*`, with
+     `gen_ai.usage.*` and `gen_ai.request.*`, and no prompt or completion attribute
+     (`gen_ai.prompt`, `gen_ai.completion`, or a message key), as in slice 2.
+
+   Grafana shows attribute values, which the helper doesn't: record no address it shows, such as
+   the gateway span's `client.address`. The same trace from the first terminal, keys only:
+
+   ```sh
+   traces -q '{ resource.service.name = "vllm-agent" && name = "llm_request" }' -n 1
+   azure_count "$W0"
+   ```
+
+   Expected:
+   - `trace <id>: 3 spans, services agentgateway, vllm-agent`, the same id as Grafana's, then the
+     three spans indented by parent: `agentgateway "POST /agent/v1/*" server ... parent none
+     (root)`, `agentgateway "POST gb10-1:8000" client`, and `vllm-agent "llm_request" server ...
+     parent <the client span's id> (agentgateway)`, each with its duration;
+   - the `llm_request` line's keys: `gen_ai.latency.*`, `gen_ai.usage.prompt_tokens`,
+     `gen_ai.usage.completion_tokens`, `gen_ai.request.*`, and no content key;
+   - `azure_count`: 0 for the whole walk.
+
+   Then Ctrl-C in the second terminal to close the tunnel.
+
+5. **The answer, on paper.** Read [`docs/gateway.md`](../gateway.md), "Requirements for
+   v1.ai.hosting" and "Priority's gaps", and the README's "The answer"
+   ([`README.md`](../../README.md#the-answer)). Nothing runs.
+
+   Expected: the reader can name, from the documents alone:
+   - **the overflow rule:** agent and vision only, each to its own Foundry deployment while its row
+     is evicted; never audio, never embedding, and never under IL6 (requirement 8);
+   - **the embedding 429 rule:** past 34 requests a second, embedding answers 429 with
+     `Retry-After: 1` and the client waits; nothing queues or overflows (requirement 6), as step 3
+     showed;
+   - **the gaps:** admission on `/metrics`, on paper (requirement 14), and priority's gaps: the
+     fixed-hour budget window, priority ordering only the waiting queue, the queue limit counting
+     every key alike, eviction's uncapped growth, the 64 KiB retry buffer, the UI's links, and the
+     route `ai` deprecation risk.
+
+### Results
+
+The session fills this from the architect's run: each step's time and result against its Expected
+line, and the walk's Azure count, 0, leaving the task's at 50 of 80.
 
 ## Commands as run
 
