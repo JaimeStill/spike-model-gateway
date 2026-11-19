@@ -10,16 +10,16 @@
 #   gw_base <alias>   the alias's base URL on the gateway, http://gb10-2:3000/<alias>/v1, the port
 #                     read from gateway/agentgateway/deploy.env
 #   goai_checkout     a worktree of go-ai at tools/infer/v0.3.0, detached, under
-#                     .state/answer/go-ai-v0.3.0, a path of its own per release, so a pin's move
-#                     never reuses the last release's worktree; go-ai's own working tree is not
-#                     touched
+#                     .state/max-tokens-note/go-ai-v0.3.0, a path of its own per release, so a
+#                     pin's move never reuses the last release's worktree; go-ai's own working
+#                     tree is not touched
 #   infer_install     the released infer, `go install ...tools/infer/cmd/infer@v0.3.0`, into
-#                     .state/answer/bin
+#                     .state/max-tokens-note/bin
 #   goai_tier [-run <regexp>] <name> <alias>...
 #                     go-ai's integration tier, from the worktree, with each alias's role set to
 #                     its base URL on the gateway and its profile for CLIENTS_TARGET (below);
-#                     output in .state/answer/clients/<name>.log; with -run, only the tests
-#                     `go test -run <regexp>` selects
+#                     output in .state/max-tokens-note/clients/<name>.log; with -run, only the
+#                     tests `go test -run <regexp>` selects
 #   infer_tier [-run <regexp>] <name> <alias>...
 #                     infer's integration tier the same way, from the worktree's tools/infer
 #   priority_rerun <name>
@@ -74,8 +74,8 @@
 #                     .state/agentgateway/postgres-password; a deploy then sends it (below)
 #   retry_case <case> the spike's Go retry test (retry/), one case: rate-limit-agent,
 #                     embedding-burst, in-flight-1, or bulk-rate-low; output in
-#                     .state/answer/retry/<case>-<time>.log, and its per-attempt table beside it as
-#                     <case>-<time>.tsv (below)
+#                     .state/max-tokens-note/retry/<case>-<time>.log, and its per-attempt table
+#                     beside it as <case>-<time>.tsv (below)
 #   requests_shed     agentgateway's requests_shed metric, the in-flight limit's refusals, read
 #                     from its stats port on gb10-2's loopback over SSH, read-only (below)
 #   traces [-q <traceql>] [-n <count>] [<since>]
@@ -87,6 +87,17 @@
 #                     indented under its parent: the service, the span's name, kind, id,
 #                     parent, and duration in ms (its end less its start, to 0.1 ms), then its
 #                     attribute keys, never their values; read-only (below)
+#   messages_stream <alias> <max tokens> <prompt>
+#                     one streamed Messages request, stream true, through the gateway on the
+#                     alias with the architect key, the prompt as the one user message; under
+#                     .state/max-tokens-note/stream/<alias>-<max tokens>-<time>: raw.tsv, each line
+#                     of the stream with its arrival in microseconds from the send; events.tsv,
+#                     each SSE event's arrival, name, and a content_block_delta's delta type;
+#                     headers.txt, the reply's status line and response headers; and the summary
+#                     printed and logged: status, the overflow marker, the time to the first event,
+#                     to the first and last text delta, to message_delta and message_stop, the
+#                     gaps from the last text delta to those two, the total, and the verdict
+#                     (below)
 #   logged <command>  any other step, given as one string: run with bash from the root, logged as
 #                     written, and its output, stdout and stderr, appended to the log as printed;
 #                     for a command that prints no key, such as `mise run agentgateway-deploy`, a
@@ -141,8 +152,8 @@
 # or the stack changes, so the count is read after each step, not once at the end. What counts
 # toward the cap is Azure's 2xx and its 4xx other than 429; its 429s, refused without being
 # processed, are printed apart (the architect's decision after benchmark C-agent, 2026-11-16). The
-# cap is the answer task's, 80 in the task (priority's was 300); azure_count prints one step's
-# count, and the finding sums the steps.
+# cap is the task's, CLIENTS_AZURE_CAP: 20 in the max-tokens-note task (the answer task's was 80,
+# priority's 300); azure_count prints one step's count, and the finding sums the steps.
 #
 # Budgets and the request log (the priority task's behaviors 15 and 16). budget_status reads
 # agentgateway's own count, which the UI serves at /api/budgets/status, filtered by key name
@@ -195,6 +206,20 @@
 # replaced, since an outbound span is named for its host. Search finds a trace only once Tempo has
 # made it searchable, tens of seconds after it arrives; -t reads one at once.
 #
+# The timed stream (the max-tokens-note task). messages_stream measures whether a Messages stream
+# that overflows to Azure streams or arrives whole, and whether message_stop is held after the
+# text ends (docs/findings/priority.md, the --max-tokens 16 stall). The key reaches curl as
+# gw_curl's does, in the config curl reads from its stdin; curl runs with -N, so each line leaves
+# it as it arrives, and the bash loop it pipes into stamps each line with $EPOCHREALTIME, read in
+# the same subshell as the send's own stamp, taken just before curl starts. No --trace or
+# --trace-time: both print the request's headers, the key among them. -D keeps the response's
+# headers only. Each file is searched for the key after the send, as after a tier run. The
+# summary gives the same times for the deltas of any type, since a reply cut off at a few tokens
+# may hold reasoning (thinking deltas) and no text. The verdict reads the text deltas against the
+# reply's span, from the first event to message_stop: "streams" when the deltas cover at least
+# half of it, "arrives whole" when every event, the first to message_stop, lands within the last
+# tenth of the total, else "mixed"; with fewer than two text deltas, "too short to tell".
+#
 # The Postgres password's rotation. The value is created like the deploy creates it (openssl rand
 # -hex 32, 0600), and reaches psql only on its stdin, in `ALTER USER ... WITH PASSWORD` written by
 # printf, a builtin, through ssh and `docker exec -i`: never in a process's argv, printed, or
@@ -208,7 +233,7 @@
 # once (its environment changes; Postgres reads the variable only when it initializes the volume).
 #
 # The command log. Each helper call and each command it runs is appended to
-# .state/answer/commands-<YYYY-MM-DD>.log and printed to stderr as
+# .state/max-tokens-note/commands-<YYYY-MM-DD>.log and printed to stderr as
 # `+ <ISO time> <host>: <command>`, the form measure-lib.sh and the deploy script print.
 
 if ! (return 0 2>/dev/null); then
@@ -218,10 +243,14 @@ fi
 
 CLIENTS_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # Relative to the root: every command runs from there, so the log names no home directory.
-CLIENTS_STATE=.state/answer
+# The task's own folder: each task's state and log are kept apart, so an earlier task's, such as
+# .state/answer, is left as that task left it.
+CLIENTS_STATE=.state/max-tokens-note
 CLIENTS_KEYS=.state/agentgateway/keys
 CLIENTS_AZURE=.state/azure
 CLIENTS_HOST=gb10-2
+# The task's cap of Azure-answered requests (azure_count, below).
+CLIENTS_AZURE_CAP=20
 CLIENTS_GOAI_REPO=$HOME/architecture/go-ai
 # go-ai's release that carries per-role models and profiles in both tiers, infer's default retry
 # policy, and `infer models`' root column: tools/infer/v0.3.0. Its base module's code is v0.3.0's,
@@ -595,7 +624,7 @@ azure_count() {
     echo "reading the gateway log failed (ssh exit $rc); no count" | _clients_say azure_count
     return "$rc"
   }
-  awk -v since="$1" -v until="${2:-now}" -v deployments="$deployments" '
+  awk -v since="$1" -v until="${2:-now}" -v deployments="$deployments" -v cap="$CLIENTS_AZURE_CAP" '
       BEGIN { n = split(deployments, d, " "); for (i = 1; i <= n; i++) { split(d[i], kv, "="); ord[i] = kv[1]; dep[kv[1]] = kv[2] } }
       /[ \t]request / {
         answered = index($0, " overflow=\"azure\"") > 0
@@ -613,7 +642,7 @@ azure_count() {
           for (k in status) { split(k, ks, SUBSEP); if (ks[1] == a) line = line (line ? ", " : "") ks[2] " x" status[k] }
           printf "  %s (%s): %d%s%s\n", a, dep[a], per[a], (line ? ": " line : ""), (unanswered[a] ? sprintf("; %d sent with no reply from Azure", unanswered[a]) : "")
         }
-        printf "  toward the cap of 80: %d (2xx, and 4xx other than 429); 429, reported apart: %d\n", counted, limited
+        printf "  toward the cap of %d: %d (2xx, and 4xx other than 429); 429, reported apart: %d\n", cap, counted, limited
         if (limited) printf "  STOP: Azure answered 429 %d times; the task stops and escalates\n", limited
       }' <<<"$log" | _clients_say azure_count
   return "${PIPESTATUS[0]}"
@@ -928,6 +957,101 @@ traces() {
   ssh -n "$CLIENTS_HOST" "$fetch" | _clients_traces_print | _clients_say traces
   local st=("${PIPESTATUS[@]}")
   return $((st[0] ? st[0] : st[1]))
+}
+
+messages_stream() {
+  (($# == 3)) || {
+    echo 'usage: messages_stream <alias> <max tokens> <prompt>' >&2
+    return 2
+  }
+  local alias=$1 tokens=$2 prompt=$3 key=architect
+  [[ $alias != embedding && -n ${CLIENTS_ROLE[$alias]-} ]] || {
+    echo "messages_stream: no Messages route for $alias (agent, vision, audio)" >&2
+    return 2
+  }
+  [[ $tokens =~ ^[1-9][0-9]*$ ]] || {
+    echo 'messages_stream: <max tokens> is a positive integer' >&2
+    return 2
+  }
+  _clients_key_ok "$key" || return
+  local header='Authorization: Bearer '
+  [[ ${CLIENTS_KEY_IN:-bearer} != header ]] || header='x-api-key: '
+  local body url dir
+  body=$(jq -cn --arg m "$alias" --argjson n "$tokens" --arg p "$prompt" \
+    '{model: $m, max_tokens: $n, stream: true, messages: [{role: "user", content: $p}]}') || return
+  url=$(gw_base "$alias")/messages
+  # To the millisecond, and made with plain mkdir, so two sends in one second never share a folder.
+  dir=$CLIENTS_STATE/stream/$alias-$tokens-$(date +%Y%m%dT%H%M%S.%3N)
+  mkdir -p "$CLIENTS_ROOT/$CLIENTS_STATE/stream" && mkdir "$CLIENTS_ROOT/$dir" || return
+  _clients_log laptop "messages_stream $alias $tokens '$prompt'"
+  _clients_log laptop "t0=\$EPOCHREALTIME; printf 'header = \"$header%s\"\\n' \"\$(<$CLIENTS_KEYS/$key)\" | curl -K - -sN -D $dir/headers.txt -H 'content-type: application/json' -d '$body' $url | while IFS= read -r line; do t=\$EPOCHREALTIME; printf '%d\\t%s\\n' \$((\${t/./} - \${t0/./})) \"\${line%\$'\\r'}\"; done > $dir/raw.tsv"
+  (
+    { set +x; } 2>/dev/null
+    cd "$CLIENTS_ROOT" || exit
+    # The send's stamp is taken here, after the logging, so the log's own time isn't counted.
+    t0=$EPOCHREALTIME
+    # shellcheck disable=SC2059 # The format is built from a fixed header name.
+    printf "header = \"$header%s\"\n" "$(<"$CLIENTS_KEYS/$key")" |
+      curl -K - -sN -D "$dir/headers.txt" -H 'content-type: application/json' -d "$body" "$url" |
+      while IFS= read -r line || [[ -n $line ]]; do
+        t=$EPOCHREALTIME
+        # $EPOCHREALTIME is seconds and six digits of microseconds; without the point, microseconds.
+        printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"
+      done >"$dir/raw.tsv"
+    rc=${PIPESTATUS[1]}
+    t1=$EPOCHREALTIME
+    printf 'curl_exit\t%d\ntotal_us\t%d\n' "$rc" $((${t1/./} - ${t0/./})) >"$dir/total.tsv"
+    exit "$rc"
+  )
+  local rc=$?
+  # Each event's arrival and name; a content_block_delta's delta type from its data line.
+  awk -F '\t' '
+      $2 ~ /^event: / { if (ev != "") print at "\t" ev "\t" dt; at = $1; ev = substr($2, 8); dt = "" }
+      $2 ~ /^data: / && ev == "content_block_delta" && match($2, /"delta": *\{ *"type": *"[a-z_]+"/) {
+        dt = substr($2, RSTART, RLENGTH); sub(/.*"type": *"/, "", dt); sub(/"$/, "", dt)
+      }
+      END { if (ev != "") print at "\t" ev "\t" dt }' \
+    "$CLIENTS_ROOT/$dir/raw.tsv" >"$CLIENTS_ROOT/$dir/events.tsv"
+  {
+    echo "$dir: curl exit $rc"
+    awk -F '\t' -v hdr="$CLIENTS_ROOT/$dir/headers.txt" '
+        FNR == NR { if ($1 == "total_us") total = $2; next }
+        { n++; if (n == 1) first = $1 }
+        $2 == "content_block_delta" { if (!ad) fa = $1; la = $1; ad++ }
+        $2 == "content_block_delta" && $3 == "text_delta" { if (!td) ft = $1; lt = $1; td++ }
+        $2 == "message_delta" && md == "" { md = $1 }
+        $2 == "message_stop" && ms == "" { ms = $1 }
+        function s(us) { return us == "" ? "-" : sprintf("%.3f s", us / 1e6) }
+        END {
+          while ((getline line < hdr) > 0) {
+            sub(/\r$/, "", line)
+            if (line ~ /^HTTP\//) status = line
+            if (tolower(line) ~ /^x-gateway-overflow:/) ov = line
+          }
+          printf "status: %s; overflow: %s\n", (status ? status : "none"), (ov ? ov : "none")
+          printf "events: %d; text deltas: %d; deltas of any type: %d\n", n, td, ad
+          printf "first event %s; first text delta %s; last text delta %s; text span %s\n", s(first), s(ft), s(lt), (td ? s(lt - ft) : "-")
+          printf "message_delta %s; message_stop %s; total %s\n", s(md), s(ms), s(total)
+          printf "last text delta to message_delta %s, to message_stop %s\n", (td && md != "" ? s(md - lt) : "-"), (td && ms != "" ? s(ms - lt) : "-")
+          printf "any delta: first %s, last %s; last to message_delta %s, to message_stop %s\n", s(fa), s(la), (ad && md != "" ? s(md - la) : "-"), (ad && ms != "" ? s(ms - la) : "-")
+          end = (ms != "" ? ms : total)
+          if (td < 2) v = "too short to tell"
+          else if (lt - ft >= (end - first) / 2) v = "streams"
+          else if (first >= 0.9 * total) v = "arrives whole"
+          else v = "mixed"
+          printf "verdict: %s\n", v
+        }' "$CLIENTS_ROOT/$dir/total.tsv" "$CLIENTS_ROOT/$dir/events.tsv"
+    local f
+    for f in raw.tsv events.tsv headers.txt total.tsv; do
+      grep -qF -f "$CLIENTS_ROOT/$CLIENTS_KEYS/$key" "$CLIENTS_ROOT/$dir/$f" 2>/dev/null
+      case $? in
+        0) echo "THE KEY IS IN $dir/$f; delete it before anything is shared" ;;
+        1) echo "the key is not in $dir/$f" ;;
+        *) echo "THE KEY SEARCH FAILED on $dir/$f; search it before anything is shared" ;;
+      esac
+    done
+  } | _clients_say messages_stream
+  return "$rc"
 }
 
 logged() {
