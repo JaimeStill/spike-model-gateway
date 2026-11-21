@@ -5,7 +5,7 @@ The judgement calls the check can't enforce, one line each, for the standards-re
 
 The architecture pages that apply, in the architecture repository:
 
-- `principles/comments.md`
+- `principles/comments.md`: the reasoning a comment points to lives in `docs/`.
 - `principles/minimal-footprint.md`
 - `principles/rolling-currency.md`
 - `principles/validation-first.md`

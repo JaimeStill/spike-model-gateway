@@ -12,6 +12,6 @@ marathon workflow, so start from `context/README.md`.
   relative Markdown link, vets and tests the retry module, and runs lint-context and
   lint-references.
 - **Currency:** `mise run currency`, which reports every pin behind its latest.
-- **Goals:** the spike answered for experiment.hosting, which has synced; v1.ai.hosting
+- **Goals:** the spike answered for experiment.hosting; v1.ai.hosting
   (`standards-lab/roadmap/v1.ai.hosting.toml`) builds from its answer.
 - **References:** [`docs/capabilities.md`](docs/capabilities.md#references).
