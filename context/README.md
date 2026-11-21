@@ -6,11 +6,12 @@ purpose with no failover. agentgateway, an Agentic AI Foundation project, is tri
 LiteLLM, Bifrost, Agent Router, vLLM's production-stack router, and the rest are weighed on paper.
 It gives evidence for the gateway v1.ai.hosting builds. The spike decides nothing itself.
 
-The spike answers for experiment.hosting, and the coordinator's roadmap,
-`standards-lab/roadmap/index.toml`, holds its work. Its question is framed in
-`standards-lab/context/ai-hosting.md`. spike-model-layout's `docs/layout.md`, "Requirements for
-spike-model-gateway", gives the requirements. Each capability in detail, the tasks in the order
-they ran, and the repositories the spike reads are in
+The spike answered for experiment.hosting, which has synced; v1.ai.hosting
+(`standards-lab/roadmap/v1.ai.hosting.toml`) builds from its answer. The stack it settled is in
+`standards-lab/context/ai-hosting.md`, and its answer beside the other spikes' in
+`standards-lab/docs/ai-hosting.md#the-spikes-answers`. spike-model-layout's `docs/layout.md`,
+"Requirements for spike-model-gateway", gives the requirements. Each capability in detail, the
+tasks in the order they ran, and the repositories the spike reads are in
 [`docs/capabilities.md`](../docs/capabilities.md).
 
 ## The question

@@ -125,7 +125,9 @@ purpose alias.**
 
    The spike overflowed all four aliases, to gather the parity evidence
    ([`priority.md`](findings/priority.md), "Per alias: the cloud model and its parity (behavior
-   12)"); the restriction to agent and vision is the answer task's decision (goal record, R1 Q8).
+   12)"); the restriction to agent and vision is the answer task's decision (the spike's goal
+   record, `context/goals/experiment.hosting.spike-model-gateway.md` at `2f2e8c1^`, Decisions,
+   R1 Q8).
 9. **The embedding overflow marker.** Every reply an Azure deployment answers carries
    `x-gateway-overflow: azure`, and the access log records it. Embedding gets no Azure group
    (requirement 8); should a deployment give it one, as the spike's did, a client that stores

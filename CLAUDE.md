@@ -12,10 +12,6 @@ marathon workflow, so start from `context/README.md`.
   relative Markdown link, vets and tests the retry module, and runs lint-context and
   lint-references.
 - **Currency:** `mise run currency`, which reports every pin behind its latest.
-- **Goals:** the coordinator's roadmap, `standards-lab/roadmap/index.toml`, holds this spike's
-  work.
-- **References:** the repositories this spike reads are keys in the coordinator's
-  `references.toml` and `references.local.toml`. The spike reads them and never writes to them,
-  except spike-model-engines' `host/`, which experiment.hosting owns: this spike lists
-  spike-model-engines in its repos and changes `host/` through pull requests, each citing the
-  finding behind it.
+- **Goals:** the spike answered for experiment.hosting, which has synced; v1.ai.hosting
+  (`standards-lab/roadmap/v1.ai.hosting.toml`) builds from its answer.
+- **References:** [`docs/capabilities.md`](docs/capabilities.md#references).

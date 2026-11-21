@@ -117,6 +117,8 @@ The tasks, in the order they run, each with the evidence it proves:
    document with the answer (evidence 8–11). Its finding is
    [`docs/findings/answer.md`](findings/answer.md); the paper is
    [`docs/comparison.md`](comparison.md) and [`docs/gateway.md`](gateway.md).
+5. `max-tokens-note`: the timed Messages stream on overflow, `messages_stream`; its finding is
+   [`priority.md`](findings/priority.md), "Addendum 2026-11-19 · the 16-token Messages stall".
 
 ## References
 

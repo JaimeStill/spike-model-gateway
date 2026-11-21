@@ -18,8 +18,9 @@ Each candidate is then scored against the spike's six question bullets
   the links are listed under "Sources", grouped by candidate.
 - **Gaps in the record.** Where a source was unavailable or a claim couldn't be confirmed, the text
   says so. "Unconfirmed" collects those cases.
-- **No other gateway was tried live.** LiteLLM was dropped from a live trial (goal record,
-  Decisions, 2026-11-13) because of:
+- **No other gateway was tried live.** LiteLLM was dropped from a live trial (the spike's goal
+  record, `context/goals/experiment.hosting.spike-model-gateway.md` at `2f2e8c1^`, Decisions,
+  2026-11-13) because of:
   - its 2026 supply-chain compromises (two, under "Candidates") and advisories;
   - a Python runtime whose Rust port isn't production-ready;
   - single-vendor governance.
@@ -391,8 +392,8 @@ weigh. That choice is the gateway document's, not this comparison's.
 - **The production shape doesn't carry over.** It assumes Container Apps, which is not in IL6
   scope, so an IL6 deployment needs another host for the routing service, such as AKS.
 
-**No cloud overflow under IL6.** The answer task's plan round decided it (goal record, Decisions,
-R1 Q8).
+**No cloud overflow under IL6.** The answer task's plan round decided it (the spike's goal
+record, `context/goals/experiment.hosting.spike-model-gateway.md` at `2f2e8c1^`, Decisions, R1 Q8).
 
 - **Why.** Cloud models exist in the Secret cloud, but routing to them crosses the self-hosted
   boundary that IL6 workloads stay inside.
@@ -416,10 +417,9 @@ R1 Q8).
 ## A cheaper chat tier
 
 **What it means here.** Chat requests that don't need gpt-oss-120b go to a cheaper model, such as
-Gemma 4 26B-A4B, and gpt-oss-120b is kept for the tasks that need it (coordinator
-`standards-lab/roadmap/index.toml`, spike-model-gateway's summary, as first written). In this layout
-Gemma 4 26B-A4B is the vision row on gb10-2, so a cheaper chat tier shares vision's row, its cap of
-16, and its queue.
+Gemma 4 26B-A4B, and gpt-oss-120b is kept for the tasks that need it (the spike's roadmap
+summary, as first written). In this layout Gemma 4 26B-A4B is the vision row on gb10-2, so a
+cheaper chat tier shares vision's row, its cap of 16, and its queue.
 
 **Two ways to reach it.**
 

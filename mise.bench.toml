@@ -1,8 +1,7 @@
 # The bench environment: GuideLLM and its runtimes, activated with MISE_ENV=bench.
 # See docs/stack.md#the-tools
 [tools]
-# Held on 3.14: torchcodec 0.17.0, which GuideLLM 0.8.1's audio extra needs, publishes no wheel or
-# sdist for Python 3.15 (cp315) yet, so currency reports Python behind its latest until it does.
+# Held: the recorded benchmarks ran on 3.14; a new interpreter needs a re-run.
 python = "3.14.10"
 uv = "0.13.9"
 "pipx:guidellm" = { version = "0.8.1", extras = ["vision", "audio"] }
