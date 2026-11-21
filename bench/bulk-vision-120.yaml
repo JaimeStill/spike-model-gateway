@@ -1,38 +1,10 @@
-# C-vision, benchmark D's bulk run (the priority task's behaviors 13 and 14; evidence 6): the
-# vision row, NVFP4 26B-A4B (vision on gb10-2's 8000), through the gateway with the bulk key, at 20
-# concurrent for 120 s. The gateway gives each bulk request vLLM's priority 10 on the vision row,
-# and each interactive key's 0, and the row serves the lower value first (config.yaml,
-# &row-priority). The go-ai key's O-vision at 1 concurrent (interactive-vision.yaml, 90 s) runs
-# inside it on the same row, in a second terminal, started about 15 s in, once the bulk load has
-# filled the row. D reads whether the interactive run's median request latency stays at 10 s or
-# less with priority, and, against the same pair run under the priority-flat probe overlay, every
-# key at bulk's 10, how far it moves without.
-#
-# Azure: none. The vision row refuses with 503 only past 32 in flight (twice its cap of 16,
-# --max-num-queued-reqs); this run's 20 and the interactive run's 1 are 21, so the row never
-# refuses, is never evicted, and nothing overflows to gpt-5-mini while the rows are up. A row that
-# fails twice in a row for another reason, a lost connection, would be evicted for 5 s, then 5 s
-# times the evictions so far, with no cap (config.yaml, &row-health), and send the run's requests
-# to gpt-5-mini meanwhile, so azure_count is read after the pair, and any overflow
-# stops the session. bulk's request-rate bucket, 600 a minute, and its budget, 1,000,000 tokens an
-# hour, are above the run's load: about 1.9 requests a second of about 580 tokens each (the
-# agentgateway task's c-vision at 20).
-#
-# Derived from cap-vision.yaml, its requests unchanged: one synthetic 1440p JPEG beside 200
-# synthetic text tokens, exactly 100 output tokens. Adapted: one level, 20, for 120 s, where the
-# cap cell ran 16 and then 20 for 60 s each. The model is the alias, vision, given on the command
-# line with its tokenizer (google/gemma-4-26B-A4B-it) by `cell`, which sets the target, the
-# gateway's base URL, in GUIDELLM__SPEC__BACKEND__TARGET, the key named on its command line, bulk,
-# in GUIDELLM__SPEC__BACKEND__API_KEY, and the run's own seed. It needs GuideLLM's vision extra,
-# which mise.bench.toml installs. Run from the repository root.
+# Benchmark D's bulk run: the vision row at 20 concurrent with the bulk key for 120 s.
+# See docs/bench.md#bulk-vision-120
 spec:
   backend:
     kind: openai_http
     request_format: /v1/chat/completions
-    # GuideLLM checks the backend before a run with GET <target>/health, the target's /v1 cut off.
-    # Through the gateway that is /vision/health, which no route serves (404), so the check reads
-    # /v1/models instead, which the gateway answers itself and which also proves the key before any
-    # load is sent.
+    # See docs/bench.md#the-backend-check
     api_routes:
       /health: v1/models
   profile:
@@ -45,7 +17,6 @@ spec:
       resolution: 1440p
       format: jpeg
       output_tokens: 100
-  # The level stops at 120 s; the requests in flight then are counted incomplete.
   constraints:
     - kind: max_duration
       seconds: 120

@@ -1,45 +1,10 @@
-# DROPPED, NEVER RUN. The architect dropped C-vision on 2026-11-16, after C-agent breached the
-# task's Azure stop rule: under saturation a row's 503 with eviction sends nearly the whole load to
-# Azure, and C-vision would show the same at gpt-5-mini's 10 units (docs/findings/priority.md,
-# "Escalation 2"). The file is kept as the sizing it would have run with; nothing runs it.
-#
-# C-vision, benchmark C's vision cell (the priority task's behavior 9; evidence 7): the vision row,
-# NVFP4 26B-A4B (vision on gb10-2's 8000), through the gateway only, at 36 concurrent for 60 s:
-# past the 32 the row holds before it refuses (twice its cap of 16 in flight,
-# --max-num-queued-reqs), so the row answers 503, two in a row evict it for 5 s, then 5 s times
-# the evictions so far, with no cap (config.yaml, &row-health), and the gateway sends the vision
-# alias to its Azure AI Foundry deployment, gpt-5-mini, while it is out. The cell
-# reads 503s from the row, the requests Azure answered, whether a refused request reached Azure,
-# the eviction windows a minute, and the time to the row's first refusal, which vLLM #58192 delays
-# on vision (overflow_read, scripts/measure-lib.sh). Every request Azure answers counts against the
-# task's cap of 300 (azure_count, scripts/clients-lib.sh).
-#
-# Sized to Azure's capacity (the slice 2 escalation, docs/findings/priority.md): the deployment has
-# 10 units, about 10,000 tokens a minute, so each request is small and the row fills on
-# concurrency, not tokens: one synthetic 720p JPEG (GuideLLM's gradient, quality 85) beside 200
-# synthetic text tokens, exactly 100 output tokens. The image's base64 is 21 to 46 KB (1,000
-# GuideLLM 0.8.1 rows, measured on the laptop), so each body stays under the 64 KiB the gateway
-# buffers for a retry, and a refused request is retried, to Azure once the row is evicted
-# (config.yaml, &retry-503). 1080p reaches 82 KB, past it.
-#
-# The cell stops early if Azure answers 429. No GuideLLM 0.8.1 constraint can: max_errors and the
-# error-rate constraints count every errored request, and the row's 503s are errors too, with no
-# status code to tell them apart. So the session watches azure_count, which flags any 429 from
-# Azure, or the access log, and interrupts the run by hand.
-#
-# The model is the alias, vision, given on the command line with its tokenizer
-# (google/gemma-4-26B-A4B-it) by `cell`, which sets the target, the gateway's base URL, in
-# GUIDELLM__SPEC__BACKEND__TARGET, the bench key in GUIDELLM__SPEC__BACKEND__API_KEY, and the run's
-# own seed. It needs GuideLLM's vision extra, which mise.bench.toml installs. Run from the
-# repository root.
+# Benchmark C's vision cell, dropped and never run: the vision row past its queue limit.
+# See docs/bench.md#overflow-vision
 spec:
   backend:
     kind: openai_http
     request_format: /v1/chat/completions
-    # GuideLLM checks the backend before a run with GET <target>/health, the target's /v1 cut off.
-    # Through the gateway that is /vision/health, which no route serves (404), so the check reads
-    # /v1/models instead, which the gateway answers itself and which also proves the key before any
-    # load is sent.
+    # See docs/bench.md#the-backend-check
     api_routes:
       /health: v1/models
   profile:
@@ -52,7 +17,6 @@ spec:
       resolution: 720p
       format: jpeg
       output_tokens: 100
-  # The level stops at 60 s; the requests in flight then are counted incomplete.
   constraints:
     - kind: max_duration
       seconds: 60

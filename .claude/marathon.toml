@@ -1,16 +1,9 @@
-# Project kind: this spike is context (findings, the gateway document, gateway configuration, and
-# minimal scripts), checked by `mise run check`. Its goals live in the coordinator's roadmap
-# (standards-lab/context/roadmap.toml). `mise run currency` reports every mise tool pinned behind
-# its latest, those of mise.toml and of the bench environment (mise.bench.toml); each gateway task
-# adds its gateway's image pin. The engine pins stay with spike-model-engines, whose host/ this
-# spike changes only through pull requests. No gate.
+# marathon's settings for this spike, whose goals live in standards-lab/roadmap/index.toml.
 [project]
 kind = "context"
 check = "mise run check"
 currency = "mise run currency"
 
-# Remote platform and the commands that publish and merge a finished branch. The spike has no
-# CI, so the merge doesn't wait on pull-request checks.
 [remote]
 platform = "github"
 publish = "gh pr create"

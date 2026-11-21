@@ -1,11 +1,4 @@
-# The budget probe (the priority task's behavior 15): bulk's token budget lowered from 1,000,000
-# tokens an hour to 1, so once bulk has been charged any tokens in the current hour, its next
-# request is refused with 429 and a Retry-After of the seconds left in the hour; the budget is
-# Block. The request that crosses it is answered: a budget is checked before a request and charged
-# after its reply (http/budget/mod.rs) [src]. The count is kept: a changed limit keeps a budget's
-# counter, so bulk's tokens so far in the hour count against the 1. It replaces the one line of
-# bulk's amount in config.yaml's gateway apiKey policy. Applied by
-# `scripts/agentgateway-deploy.sh bulk-budget-low`, removed by a deploy without it; bulk is then
-# admitted again, its count unchanged. Its 429 is the gateway's own, so it sends nothing to Azure.
+# Probe overlay: bulk's token budget lowered to 1 token an hour.
+# See docs/agentgateway-config.md#bulk-budget-low
 #@ replace             amount: 1000000
             amount: 1

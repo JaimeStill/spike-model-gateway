@@ -3,9 +3,9 @@
 GuideLLM 0.8.1 scenarios, one file a cell, run from the repository root by the step helpers'
 `cell` ([`scripts/measure-lib.sh`](../scripts/measure-lib.sh)) from the bench environment
 ([`mise.bench.toml`](../mise.bench.toml)), one run at a time in the architect's view. Each file's
-header gives its load and the scenario it is copied from: an overhead cell's, spike-model-layout's,
-its load the layout's target, unchanged; a cap cell's, the overhead cell's, its requests unchanged
-at two levels past the target.
+section of [`docs/bench.md`](../docs/bench.md) gives its load and the scenario it is copied from:
+an overhead cell's, spike-model-layout's, its load the layout's target, unchanged; a cap cell's, the
+overhead cell's, its requests unchanged at two levels past the target.
 
 The scenarios name no model, target, or key. `cell <name> <scenario> <direct|gateway|cap> <alias>
 [<key>]` gives the alias as the model and its tokenizer on the command line, the base URL in
@@ -57,4 +57,5 @@ go-ai key) about 20 s in; D, `bulk-vision-120` with `interactive-vision` about 1
 same pair under the `priority-flat` probe overlay. A's anchors are O-audio alone, direct and
 through the gateway, and B's O-agent alone, both read the same way; `rtfx <name>...` reads audio's
 real-time factor. No cell pushes a row past its queue limit (vision 32, agent 24, audio 8), so
-none sends anything to Azure while the rows are up; each file's header gives its count.
+none sends anything to Azure while the rows are up; each file's section of
+[`docs/bench.md`](../docs/bench.md) gives its count.
