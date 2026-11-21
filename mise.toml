@@ -3,13 +3,14 @@
 task.run_auto_install = false
 
 [tools]
+"github:standards-lab/claude-plugins" = { version = "0.22.0", version_prefix = "marathon/v" }
 jq = "1.8.2"
 shellcheck = "0.11.0"
 crane = "0.22.1"
 go = "1.27.4"
 
 [tasks.check]
-description = "Shellcheck every tracked shell script, resolve every relative Markdown link, and vet and test the retry module; reads no network but the Go module proxy on a cold cache, writes nothing tracked"
+description = "Shellcheck every tracked shell script, resolve every relative Markdown link, vet and test the retry module, and run lint-context and lint-references; reads no network but the Go module proxy on a cold cache, writes nothing tracked"
 run = "scripts/check.sh"
 
 [tasks.currency]

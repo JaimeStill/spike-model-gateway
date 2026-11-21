@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Shellchecks every tracked file whose first line is a sh or bash shebang, and checks that every
-# relative link in a tracked Markdown file resolves to a tracked or present file, then vets the
-# retry test's module (retry/) and runs its tests, every live case skipping. Reads no network but
-# the Go module proxy, once, while go-ai's release isn't yet in the module cache.
+# relative link in a tracked Markdown file resolves to a tracked or present file, vets the retry
+# test's module (retry/) and runs its tests, every live case skipping, and runs lint-context and
+# lint-references. Reads no network but the Go module proxy, once, while go-ai's release isn't yet
+# in the module cache.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit
 
@@ -38,8 +39,18 @@ vet_and_test_retry_with_no_live_case() {
   (cd retry && go vet ./... && env -u RETRY_CASE go test -count=1 ./...)
 }
 
+run_lint() {
+  if ! command -v "$1" >/dev/null; then
+    echo "FAIL: $1 is not on PATH; run mise install" >&2
+    return 1
+  fi
+  "$1"
+}
+
 fail=0
 shellcheck_scripts || fail=1
 check_relative_links || fail=1
 vet_and_test_retry_with_no_live_case || fail=1
+run_lint lint-context || fail=1
+run_lint lint-references || fail=1
 exit "$fail"
