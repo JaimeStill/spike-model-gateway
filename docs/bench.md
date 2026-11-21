@@ -36,16 +36,6 @@ The audio cells' requests, shared by [overhead-audio](#overhead-audio) and
 A level stops at its `max_duration`, or at its `max_requests` where a cell sets one, whichever comes
 first; the requests or sessions in flight then are counted incomplete.
 
-## How a cell is given its model
-
-The scenarios name no model, target, or key. The model is the alias, given on the command line with
-its tokenizer by `cell` ([`scripts/measure-lib.sh`](../scripts/measure-lib.sh)), which sets the
-target, a base URL (the row's, or the gateway's), in `GUIDELLM__SPEC__BACKEND__TARGET`, for a
-gateway run the key, bench unless the command line names another, in
-`GUIDELLM__SPEC__BACKEND__API_KEY`, and the run's own seed. The vision cells need GuideLLM's vision
-extra and the audio cells its audio extra, which mise.bench.toml installs. Every cell runs from the
-repository root.
-
 ## overhead-agent
 
 O-agent, the agentgateway task's agent overhead cell (behavior 7): the agent row, gpt-oss-120b with

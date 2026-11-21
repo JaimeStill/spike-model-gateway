@@ -4,9 +4,9 @@ The spike's built capabilities in detail, the tasks it ran in order, and the rep
 
 ## Capabilities
 
-- **The gateway document and the comparison:** [`docs/gateway.md`](../docs/gateway.md) holds the
+- **The gateway document and the comparison:** [`docs/gateway.md`](gateway.md) holds the
   decision and its configuration as requirements for v1.ai.hosting, priority's gaps, and the notes
-  for the intake. [`docs/comparison.md`](../docs/comparison.md) weighs agentgateway against
+  for the intake. [`docs/comparison.md`](comparison.md) weighs agentgateway against
   LiteLLM and the other candidates on paper, every claim cited to its source.
 - **Gateway bring-up:** `mise run agentgateway-deploy`
   ([`scripts/agentgateway-deploy.sh`](../scripts/agentgateway-deploy.sh)) deploys the gateway's
@@ -24,7 +24,7 @@ The spike's built capabilities in detail, the tasks it ran in order, and the rep
   its Azure AI Foundry deployment, so Azure answers the alias, marked by an `x-gateway-overflow:
   azure` header, while the row is evicted after two 503s or failed connections. The spike's config
   overflows all four aliases; the gateway document allows agent and vision only
-  ([`docs/gateway.md`](../docs/gateway.md), requirement 8).
+  ([`docs/gateway.md`](gateway.md), requirement 8).
   The routes type Chat Completions, Messages, Responses, and embeddings, and the gateway answers
   each alias's `/v1/models` itself.
 - **Per-key priority and limits:** each key's name sets vLLM's request priority on the agent and
@@ -83,7 +83,7 @@ The spike's built capabilities in detail, the tasks it ran in order, and the rep
     generated or whole.
   - `pg_password_rotate` rotates Postgres's password, and `logged <command>` runs and logs a step
     that prints no key.
-- **Watch register:** [`docs/watch.md`](../docs/watch.md) tracks each dependency's anticipated
+- **Watch register:** [`docs/watch.md`](watch.md) tracks each dependency's anticipated
   capabilities, deprecations, and other changes. Its agentgateway entries track whether route
   `ai`, which the gateway relies on, is deprecated, and whether the `llm` section can serve several
   base URLs on one port, which would move the gateway to it. `mise run watch` is its read-only
@@ -98,24 +98,24 @@ The tasks, in the order they run, each with the evidence it proves:
 
 1. `agentgateway`: agentgateway v1.7.0 on gb10-2, with each row serving under its alias through a
    spike-model-engines `host/` pull request (evidence 1–4, 8). Its finding is
-   [`docs/findings/agentgateway.md`](../docs/findings/agentgateway.md).
+   [`docs/findings/agentgateway.md`](findings/agentgateway.md).
 2. `routing`: trialled agentgateway's `llm` section, one port per alias, in place of the inline
    `ai` route backends its UI labels "legacy". The trial passed, and the go-ai and infer tiers
    passed through it unchanged (evidence 1, 8). The gateway then realigned on route `ai`, because
    agentgateway's docs recommend the routing form for path-based LLM routing; the `llm` form is
-   under watch in [`docs/watch.md`](../docs/watch.md). Its finding is
-   [`docs/findings/routing.md`](../docs/findings/routing.md), with the realignment under
+   under watch in [`docs/watch.md`](watch.md). Its finding is
+   [`docs/findings/routing.md`](findings/routing.md), with the realignment under
    "Realignment on route `ai`".
 3. `priority`: on agentgateway alone, on the route `ai` form, with Postgres beside it in one
    compose stack: overflow to Azure AI Foundry when a row is down or full, per-key priority,
    request-rate buckets, and token budgets counting streamed usage, the request log, embedding's
    limit, and the Framework down until `/health` (evidence 5–7). Its finding is
-   [`docs/findings/priority.md`](../docs/findings/priority.md).
+   [`docs/findings/priority.md`](findings/priority.md).
 4. `answer`: the clients at go-ai's `tools/infer` releases through the gateway, go-ai's live
    retry proof, traces through an OpenTelemetry Collector, the gateway comparison, and the gateway
    document with the answer (evidence 8–11). Its finding is
-   [`docs/findings/answer.md`](../docs/findings/answer.md); the paper is
-   [`docs/comparison.md`](../docs/comparison.md) and [`docs/gateway.md`](../docs/gateway.md).
+   [`docs/findings/answer.md`](findings/answer.md); the paper is
+   [`docs/comparison.md`](comparison.md) and [`docs/gateway.md`](gateway.md).
 
 ## References
 

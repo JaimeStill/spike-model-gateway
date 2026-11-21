@@ -13,8 +13,7 @@ The scenarios name no model, target, or key. `cell <name> <scenario> <direct|gat
 `http://gb10-2:3000/<alias>/v1`), and, for a gateway or cap run only, the named key, bench unless
 another is given, in `GUIDELLM__SPEC__BACKEND__API_KEY`, read from
 `.state/agentgateway/keys/<key>` into GuideLLM's environment. Each file points GuideLLM's
-backend check at `/v1/models`, since its default, `/health` at the target's root, is a path the
-gateway doesn't route: it serves the serving endpoints alone.
+backend check at `/v1/models` ([`docs/bench.md`](../docs/bench.md#the-backend-check)).
 
 | Cell | Scenario | Alias, row | Tokenizer | Load |
 | --- | --- | --- | --- | --- |

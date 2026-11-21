@@ -1,3 +1,4 @@
+# The spike's tools and the tasks that check, report currency, deploy, and operate the stack.
 # See docs/stack.md#the-tools
 [settings]
 task.run_auto_install = false

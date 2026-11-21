@@ -115,9 +115,8 @@ The OpenTelemetry Collector, contrib distribution, as go-web-service's observabi
 it, is the stack's one OTLP ingress ([`gateway/otel-collector.yml`](../gateway/otel-collector.yml)):
 agentgateway sends it spans over the project's network, as `otel-collector`, and the four vLLM rows,
 three of them on other hosts, through its OTLP gRPC port, published on gb10-2's tailnet address as
-agentgateway's consumer port is (`AGW_ADDR`, which compose.sh looks up there). Its `health_check`
-extension, 13133, isn't published. It forwards every span to Tempo, and starts once Tempo has
-started, since Tempo has no health check.
+agentgateway's consumer port is (`AGW_ADDR`, which compose.sh looks up there). It forwards every
+span to Tempo, and starts once Tempo has started, since Tempo has no health check.
 
 The port takes spans from any tailnet peer, unauthenticated: the spike's trust is the tailnet's, and
 authenticated OTLP ingress is a requirement for production, not built here.
@@ -129,13 +128,11 @@ that is still starting costs nothing but delay.
 
 Its configuration,
 [`gateway/otel-collector/otel-collector.yaml`](../gateway/otel-collector/otel-collector.yaml), has
-one pipeline, traces. It receives OTLP over gRPC from agentgateway, on the compose network, and
-from the four vLLM rows, through the port published on gb10-2's tailnet address; batches the spans;
-and exports them to Tempo by its service name. No metrics or logs pipeline: the answer task traces
-only.
+one pipeline, traces: it receives OTLP over gRPC, batches the spans, and exports them to Tempo by
+its service name. No metrics or logs pipeline: the answer task traces only.
 
-- **Liveness** on 13133, published nowhere. The image has no shell to probe it from, so compose runs
-  no health check; a request from another container on the compose network reads it when needed.
+- **Liveness** on 13133, published nowhere; a request from another container on the compose network
+  reads it when needed.
 - **The receiver**, OTLP over gRPC only, which agentgateway's `config.tracing` and vLLM's
   `--otlp-traces-endpoint` both send. It binds every interface, since the default, localhost, is
   unreachable through the published port and from the compose network.
@@ -146,8 +143,7 @@ only.
 Tempo, the trace store, a single binary on local storage, as go-web-service's observability profile
 builds it, is fed by the Collector and read by Grafana, both as `tempo` on the project's network
 ([`gateway/tempo.yml`](../gateway/tempo.yml)). It publishes no port. Its traces live in a named
-volume, mounted at /var/tempo, which `gateway:down` keeps and `gateway:reset` drops, and its blocks
-are kept 24 h.
+volume, mounted at /var/tempo, and its blocks are kept 24 h.
 
 Its Dockerfile, [`gateway/tempo/Dockerfile`](../gateway/tempo/Dockerfile), has no HEALTHCHECK:
 since 2.10 the image is only /tempo, with no shell or wget to probe /ready with.
@@ -168,12 +164,12 @@ inside the compose network.
 ## Grafana
 
 Grafana, with Tempo as its datasource, for searching the stack's traces
-([`gateway/grafana.yml`](../gateway/grafana.yml)). Its port is published on gb10-2's loopback only
-and reached from the laptop through an SSH tunnel, `mise run gateway:grafana`, at
-http://localhost:3002. Anonymous access is its admin, as go-web-service's observability profile
-gives it ([`gateway/grafana/Dockerfile`](../gateway/grafana/Dockerfile)), so it needs no login and
-holds no secret. Its state, the SQLite database, lives in a named volume, which `gateway:down` keeps
-and `gateway:reset` drops. It starts once Tempo has started, since Tempo has no health check.
+([`gateway/grafana.yml`](../gateway/grafana.yml)), reached as
+[Operating the stack](#operating-the-stack) gives it. Anonymous access is its admin, as
+go-web-service's observability profile gives it
+([`gateway/grafana/Dockerfile`](../gateway/grafana/Dockerfile)), so it needs no login and holds no
+secret. Its state, the SQLite database, lives in a named volume. It starts once Tempo has started,
+since Tempo has no health check.
 
 The image sets `GF_PATHS_PROVISIONING=/etc/grafana/provisioning`; Grafana reads datasources/ beneath
 it at startup. It is healthy once Grafana's health endpoint answers, which it does only when its
@@ -197,11 +193,13 @@ stack up itself.
   reading the request log in Postgres. The tunnel holds the terminal until Ctrl-C.
 - **Grafana**, published on gb10-2's loopback only, is reached the same way, `mise run
   gateway:grafana`: http://localhost:3002 while it runs, its Explore page searching the stack's
-  traces in Tempo, with no login (anonymous admin). The tunnel holds the terminal until Ctrl-C.
+  traces in Tempo. The tunnel holds the terminal until Ctrl-C.
 
 ## The tools
 
-[`mise.toml`](../mise.toml) pins the tools the check, currency, and the deploy use. Tasks never
+[`mise.toml`](../mise.toml) pins the tools the check, currency, and the deploy use. marathon's
+release, `github:standards-lab/claude-plugins` at its `marathon/v` tag, provides lint-context and
+lint-references, which `mise run check` runs. Tasks never
 install a missing tool (`task.run_auto_install = false`); `mise install` is the one step that reads
 the network. crane lists an image's tags for `mise run currency`, which compares each compose
 Dockerfile's FROM pin; go builds the retry test's module ([`retry/`](../retry/)), which

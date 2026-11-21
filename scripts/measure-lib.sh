@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # The step helpers for the GuideLLM cells: the agentgateway task's overhead cells (its slice 2,
-# behavior 7) and cap cells (its slice 3, behavior 8), and the routing task's overhead cells,
-# adapted from spike-model-layout's scripts/measure-lib.sh (`cell`, `watch`, `summarize`) and kept
-# to what these cells need: no host loads or memory floors. Sourced from the repository root on the
-# laptop, then called one step at a time in the architect's view:
+# behavior 7) and cap cells (its slice 3, behavior 8), and the routing task's overhead cells.
+# Sourced from the repository root on the laptop, then called one step at a time in the architect's
+# view:
 #
 #   source scripts/measure-lib.sh
 #
@@ -90,6 +89,7 @@
 #   MEASURE_STATS_EVERY  seconds between gateway and row samples (default 5)
 #   MEASURE_CELL_CAP     a run's cap, given to timeout (default 10m)
 #
+# Adapted from spike-model-layout (88c6b2fc8774)
 # See docs/scripts.md#the-step-helpers
 
 if ! (return 0 2>/dev/null); then
@@ -248,7 +248,7 @@ cell() {
       export MISE_ENV=bench GUIDELLM__SPEC__BACKEND__TARGET=$url
       unset GUIDELLM__SPEC__BACKEND__API_KEY
       if [[ $target != direct ]]; then
-        GUIDELLM__SPEC__BACKEND__API_KEY=$(<"$key") || return
+        GUIDELLM__SPEC__BACKEND__API_KEY=$(<"$key") || exit
         export GUIDELLM__SPEC__BACKEND__API_KEY
       fi
       exec "${run[@]}"
