@@ -1,6 +1,6 @@
 # The gateway's Postgres: agentgateway's database. This FROM line is Postgres's one pin, which
 # `mise run currency` reads.
-FROM postgres:18.7-alpine
+FROM postgres:19.0-alpine
 
 # The user and database agentgateway's config.database URL names. The password isn't here: it is
 # a secret, so it comes from postgres.env at run time (postgres.yml).

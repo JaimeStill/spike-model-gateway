@@ -9,11 +9,11 @@
 #
 #   gw_base <alias>   the alias's base URL on the gateway, http://gb10-2:3000/<alias>/v1, the port
 #                     read from gateway/agentgateway/deploy.env
-#   goai_checkout     a worktree of go-ai at tools/infer/v0.3.0, detached, under
-#                     .state/max-tokens-note/go-ai-v0.3.0, a path of its own per release, so a
+#   goai_checkout     a worktree of go-ai at tools/infer/v0.3.1, detached, under
+#                     .state/max-tokens-note/go-ai-v0.3.1, a path of its own per release, so a
 #                     pin's move never reuses the last release's worktree; go-ai's own working
 #                     tree is not touched
-#   infer_install     the released infer, `go install ...tools/infer/cmd/infer@v0.3.0`, into
+#   infer_install     the released infer, `go install ...tools/infer/cmd/infer@v0.3.1`, into
 #                     .state/max-tokens-note/bin
 #   goai_tier [-run <regexp>] <name> <alias>...
 #                     go-ai's integration tier, from the worktree, with each alias's role set to
@@ -29,7 +29,7 @@
 #                     all four aliases (below)
 #   infer_at <alias> <infer argument>...
 #                     the released infer, INFER_BASE_URL at the alias's base URL, no model and no
-#                     profile; infer v0.3.0 sends each request up to 3 times by default
+#                     profile; infer v0.3.1 sends each request up to 3 times by default
 #   infer_once <alias> <infer argument>...
 #                     infer_at with `--retries 1` first, so each request is sent exactly once: for
 #                     a probe that reads one reply's status
@@ -114,7 +114,7 @@
 # in a process's argv, printed, or logged; the log shows only the expression that reads it. go-ai's
 # and infer's tiers send a role's credential from AI_<ROLE>_TOKEN or AI_<ROLE>_HEADER and print
 # neither value on any failure (go-ai's integration/doc.go and tools/infer/integration/doc.go at
-# tools/infer/v0.3.0); infer has no flag for INFER_TOKEN or INFER_HEADER. After each tier run, the
+# tools/infer/v0.3.1); infer has no flag for INFER_TOKEN or INFER_HEADER. After each tier run, the
 # helper searches its log for the key (`grep -F -f` the key file) and says whether it was found.
 #
 # The target and the profiles (the answer task). Each tier run clears every role's base URL,
@@ -122,7 +122,7 @@
 # AI_<ROLE>_PROFILE, for what answers the alias: CLIENTS_TARGET=rows-up, the rows, or rows-down,
 # the Azure deployments under the rows-down overlay. A tier refuses to run without one of the two.
 # A profile declares what the deployment refuses, so a scenario it can't serve skips, naming the
-# gap, rather than failing (go-ai's integration/doc.go at tools/infer/v0.3.0). Rows up: the agent
+# gap, rather than failing (go-ai's integration/doc.go at tools/infer/v0.3.1). Rows up: the agent
 # row's vLLM 0.34.0 profile exactly as that doc.go gives it; go-ai documents none for the vision,
 # audio, or embedding row, so they get none. Rows down: gpt-oss-120b's refusal of tool_choice
 # required on agent, gpt-5-mini's refused efforts on vision, and none on audio or embedding.
@@ -253,13 +253,12 @@ CLIENTS_HOST=gb10-2
 CLIENTS_AZURE_CAP=20
 CLIENTS_GOAI_REPO=$HOME/architecture/go-ai
 # go-ai's release that carries per-role models and profiles in both tiers, infer's default retry
-# policy, and `infer models`' root column: tools/infer/v0.3.0. Its base module's code is v0.3.0's,
-# which the retry test requires (retry/go.mod): the root package and format/ are v0.3.0's, and the
-# tag adds infer's changes. v0.3.0 is additive over v0.2.0, where the retry cases and the rows-down
-# revalidation were measured: it adds ai.Model.Native and the root column, and changes neither
-# retry, the formats, nor the profiles (both CHANGELOGs at the tags).
+# policy, and `infer models`' root column: tools/infer/v0.3.1. Its base module is v0.4.0, which the
+# retry test requires (retry/go.mod). v0.4.0 and v0.3.0 are additive over v0.2.0, where the retry
+# cases and the rows-down revalidation were measured: they change neither retry, the formats, nor
+# the profiles (both CHANGELOGs at the tags).
 # `mise run currency` reports a newer tools/infer tag on go-ai's remote.
-CLIENTS_GOAI_TAG=tools/infer/v0.3.0
+CLIENTS_GOAI_TAG=tools/infer/v0.3.1
 # Each release's worktree under its own path, named for the tag's version.
 CLIENTS_WORKTREE=$CLIENTS_STATE/go-ai-${CLIENTS_GOAI_TAG##*/}
 CLIENTS_INFER=$CLIENTS_STATE/bin/infer
@@ -288,7 +287,7 @@ declare -gA CLIENTS_DEPLOYMENT=(
 # alias with no entry gets none, its formats in the spec's form (above).
 declare -gA CLIENTS_PROFILE=(
   # The agent row's vLLM 0.34.0 serving gpt-oss-120b, exactly as go-ai's integration/doc.go at
-  # tools/infer/v0.3.0 gives it, each field backed there by a recording of that row.
+  # tools/infer/v0.3.1 gives it, each field backed there by a recording of that row.
   [rows-up:agent]='{"completions":{"refused_efforts":["none","minimal","xhigh","max"],"no_allowed_tools":true},"responses":{"refused_efforts":["none","xhigh"],"no_allowed_tools":true,"resend_reasoning_text":true},"messages":{"refused_efforts":["none","xhigh","max"]}}'
   # Azure's gpt-oss-120b refuses tool_choice required (docs/findings/priority.md, "The tiers on
   # Azure").
@@ -365,11 +364,11 @@ goai_checkout() {
 }
 
 infer_install() {
-  _clients_log laptop "GOBIN=$CLIENTS_STATE/bin go install github.com/standards-lab/go-ai/tools/infer/cmd/infer@v0.3.0 && $CLIENTS_INFER version"
+  _clients_log laptop "GOBIN=$CLIENTS_STATE/bin go install github.com/standards-lab/go-ai/tools/infer/cmd/infer@${CLIENTS_GOAI_TAG##*/} && $CLIENTS_INFER version"
   (
     cd "$CLIENTS_ROOT" || exit
     GOBIN=$CLIENTS_ROOT/$CLIENTS_STATE/bin go install \
-      github.com/standards-lab/go-ai/tools/infer/cmd/infer@v0.3.0 &&
+      github.com/standards-lab/go-ai/tools/infer/cmd/infer@${CLIENTS_GOAI_TAG##*/} &&
       "$CLIENTS_INFER" version
   )
 }
@@ -524,7 +523,7 @@ infer_at() {
   )
 }
 
-# infer's root flag, before the command (tools/infer/README.md, "Retries", at tools/infer/v0.3.0).
+# infer's root flag, before the command (tools/infer/README.md, "Retries", at tools/infer/v0.3.1).
 infer_once() {
   (($# >= 2)) || {
     echo 'usage: infer_once <alias> <infer argument>...' >&2

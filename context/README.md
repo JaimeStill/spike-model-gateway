@@ -131,7 +131,7 @@ The experiment's rules, in `ai-hosting.md`, govern every session. In short:
   request bucket and token budget lowered; and `priority-flat`, every key at bulk's priority on the
   rows. A deploy without them removes them. The deployed copy's first line names its overlays,
   `# overlays: none` without them. Each reply's Retry-After is in the access log without an overlay.
-- **The retry test:** [`retry/`](../retry/retry_test.go) is a Go module that imports go-ai v0.3.0
+- **The retry test:** [`retry/`](../retry/retry_test.go) is a Go module that imports go-ai v0.4.0
   from the module proxy and records every attempt its client sends. Its four live cases,
   `rate-limit-agent`, `embedding-burst`, `in-flight-1`, and `bulk-rate-low`, each check what go-ai
   does with one of the gateway's 429s or 503s and its `Retry-After`. `retry_case <case>` runs one
@@ -143,8 +143,8 @@ The experiment's rules, in `ai-hosting.md`, govern every session. In short:
   audio's real-time factor. [`scripts/clients-lib.sh`](../scripts/clients-lib.sh) runs the client
   steps through the gateway, each with a key read from its file, keeping its state and command log
   under `.state/max-tokens-note/`:
-  - `goai_checkout` makes a worktree of go-ai at `tools/infer/v0.3.0`, and `infer_install`
-    installs the released infer v0.3.0.
+  - `goai_checkout` makes a worktree of go-ai at `tools/infer/v0.3.1`, and `infer_install`
+    installs the released infer v0.3.1.
   - `goai_tier` and `infer_tier` run go-ai's and infer's integration tiers, with each alias's
     profile for `CLIENTS_TARGET` (`rows-up` or `rows-down`). `priority_rerun` reruns the tests
     priority's finding lists as failing on Azure, and `audio_rerun` reruns go-ai's two audio tests
