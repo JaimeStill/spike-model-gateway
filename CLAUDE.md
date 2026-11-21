@@ -5,16 +5,15 @@ workstations' vLLM rows (gb10-1 the agent, gb10-2 vision, the Framework audio an
 how access to the model APIs is restricted without the tailnet. The repository is managed with the
 marathon workflow, so start from `context/README.md`.
 
-- **Rules:** sessions are guided where the architect is learning. Read `context/README.md`,
-  "Rules", and the experiment's rules in `standards-lab/context/ai-hosting.md`, "Experiment:
-  experiment.hosting", before any host step.
+- **Rules:** sessions are guided where the architect is learning. Read the experiment's rules,
+  `standards-lab/docs/ai-hosting.md#experiment-rules`, before any host step.
 - **Standards:** `STANDARDS.md`, with pointers into the architecture repository.
-- **Check:** `mise run check`, which shellchecks every tracked shell script and resolves every
-  relative Markdown link.
+- **Check:** `mise run check`, which shellchecks every tracked shell script, resolves every
+  relative Markdown link, vets and tests the retry module, and runs lint-context and
+  lint-references.
 - **Currency:** `mise run currency`, which reports every pin behind its latest.
-- **Goals:** this spike's tasks live in the coordinator's roadmap,
-  `standards-lab/context/roadmap.toml`, under `experiment.hosting.spike-model-gateway`. Its goal
-  record is `context/goals/experiment.hosting.spike-model-gateway.md`.
+- **Goals:** the coordinator's roadmap, `standards-lab/roadmap/index.toml`, holds this spike's
+  work.
 - **References:** the repositories this spike reads are keys in the coordinator's
   `references.toml` and `references.local.toml`. The spike reads them and never writes to them,
   except spike-model-engines' `host/`, which experiment.hosting owns: this spike lists
