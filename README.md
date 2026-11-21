@@ -89,7 +89,8 @@ proves it and the running demo or test that reproduces it. The helpers are
 8. **Clients at go-ai v0.3.0.** go-ai's and infer's whole tiers passed through the gateway on all
    four aliases at `tools/infer/v0.2.0`, and again at `tools/infer/v0.3.0` (26 and 19 passed, 0
    failed, each time). The rest was measured at v0.2.0; v0.3.0 changes neither
-   retry nor the formats. On Azure, every fix go-ai claimed for priority's discrepancies passed,
+   retry nor the formats. The helpers now pin `tools/infer/v0.3.1` (go-ai v0.4.0), which add no
+   gateway-visible change and have not been re-measured through the gateway. On Azure, every fix go-ai claimed for priority's discrepancies passed,
    and each declared gap skipped before sending. go-ai's live retry proof (its design finding 17):
    it retries the gateway's 429 and 503 and honours `Retry-After`; in the rate-limit case it needed
    one attempt more than the first `Retry-After` implied, which reads as rounded down. Proven by
