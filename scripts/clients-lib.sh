@@ -235,6 +235,8 @@
 # The command log. Each helper call and each command it runs is appended to
 # .state/max-tokens-note/commands-<YYYY-MM-DD>.log and printed to stderr as
 # `+ <ISO time> <host>: <command>`, the form measure-lib.sh and the deploy script print.
+#
+# See docs/scripts.md#the-client-helpers
 
 if ! (return 0 2>/dev/null); then
   echo 'clients-lib.sh is sourced, not run: source scripts/clients-lib.sh' >&2
@@ -242,32 +244,19 @@ if ! (return 0 2>/dev/null); then
 fi
 
 CLIENTS_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-# Relative to the root: every command runs from there, so the log names no home directory.
-# The task's own folder: each task's state and log are kept apart, so an earlier task's, such as
-# .state/answer, is left as that task left it.
 CLIENTS_STATE=.state/max-tokens-note
 CLIENTS_KEYS=.state/agentgateway/keys
 CLIENTS_AZURE=.state/azure
 CLIENTS_HOST=gb10-2
-# The task's cap of Azure-answered requests (azure_count, below).
 CLIENTS_AZURE_CAP=20
 CLIENTS_GOAI_REPO=$HOME/architecture/go-ai
-# go-ai's release that carries per-role models and profiles in both tiers, infer's default retry
-# policy, and `infer models`' root column: tools/infer/v0.3.1. Its base module is v0.4.0, which the
-# retry test requires (retry/go.mod). v0.4.0 and v0.3.0 are additive over v0.2.0, where the retry
-# cases and the rows-down revalidation were measured: they change neither retry, the formats, nor
-# the profiles (both CHANGELOGs at the tags).
-# `mise run currency` reports a newer tools/infer tag on go-ai's remote.
 CLIENTS_GOAI_TAG=tools/infer/v0.3.1
-# Each release's worktree under its own path, named for the tag's version.
 CLIENTS_WORKTREE=$CLIENTS_STATE/go-ai-${CLIENTS_GOAI_TAG##*/}
 CLIENTS_INFER=$CLIENTS_STATE/bin/infer
 
-# The consumer port, deploy.env's AGW_PORT.
 # shellcheck disable=SC1091 # check.sh runs shellcheck without -x; deploy.env is assignments.
 source "$CLIENTS_ROOT/gateway/agentgateway/deploy.env"
 
-# Each alias's role in go-ai's tiers.
 declare -gA CLIENTS_ROLE=(
   [agent]=AGENT
   [vision]=VISION
@@ -275,7 +264,6 @@ declare -gA CLIENTS_ROLE=(
   [embedding]=EMBEDDING
 )
 
-# Each alias's Azure AI Foundry deployment, its overflow (config.yaml's `<alias>-azure` provider).
 declare -gA CLIENTS_DEPLOYMENT=(
   [agent]=gpt-oss-120b
   [vision]=gpt-5-mini
@@ -283,26 +271,15 @@ declare -gA CLIENTS_DEPLOYMENT=(
   [embedding]=text-embedding-3-small
 )
 
-# Each alias's profile for each target, keyed <target>:<alias>, as AI_<ROLE>_PROFILE takes it; an
-# alias with no entry gets none, its formats in the spec's form (above).
 declare -gA CLIENTS_PROFILE=(
-  # The agent row's vLLM 0.34.0 serving gpt-oss-120b, exactly as go-ai's integration/doc.go at
-  # tools/infer/v0.3.1 gives it, each field backed there by a recording of that row.
   [rows-up:agent]='{"completions":{"refused_efforts":["none","minimal","xhigh","max"],"no_allowed_tools":true},"responses":{"refused_efforts":["none","xhigh"],"no_allowed_tools":true,"resend_reasoning_text":true},"messages":{"refused_efforts":["none","xhigh","max"]}}'
-  # Azure's gpt-oss-120b refuses tool_choice required (docs/findings/priority.md, "The tiers on
-  # Azure").
   [rows-down:agent]='{"completions":{"no_tool_choice_required":true}}'
-  # Azure's gpt-5-mini refuses effort none ("Per alias"), and lists minimal through high as its
-  # supported values, so each format's efforts above high are declared refused too.
   [rows-down:vision]='{"completions":{"refused_efforts":["none","xhigh","max"]},"responses":{"refused_efforts":["none","xhigh"]}}'
 )
 
-# The tests docs/findings/priority.md lists as failing on Azure, rows down, as `go test -run`
-# selections of top-level tests (above): go-ai's tier, then infer's.
 CLIENTS_PRIORITY_GOAI_FAILED='^(TestFunctionCallRoundTrip|TestStreamFunctionCall|TestReasoningRoundTrip|TestStreamReasoningRoundTrip|TestToolChoice|TestChatUnknownModelIsAPIError|TestStreamText|TestChatIncompleteAtMaxOutputTokens|TestAudioInResponsesRefused|TestTranscribeChat)$'
 CLIENTS_PRIORITY_INFER_FAILED='^(TestChatReasoningEffort|TestChatImage|TestChatIncompleteAtMaxTokens|TestTranscribeChat)$'
 
-# Each alias's row, as host:port, as measure-lib.sh's MEASURE_ROW.
 declare -gA CLIENTS_ROW=(
   [agent]=gb10-1:8000
   [vision]=gb10-2:8000
@@ -324,8 +301,6 @@ _clients_log() {
     tee -a "$CLIENTS_ROOT/$CLIENTS_STATE/commands-$(date +%F).log" >&2
 }
 
-# Copies its input to stdout, and each non-empty line to the day's log as
-# `= <time> <helper>: <line>`.
 _clients_say() {
   local line
   while IFS= read -r line || [[ -n $line ]]; do
@@ -336,7 +311,6 @@ _clients_say() {
   done
 }
 
-# The credential's variable expression for the log, and its value for the environment.
 # shellcheck disable=SC2016 # The expression is logged as written, never expanded.
 _clients_shown() {
   if [[ ${CLIENTS_KEY_IN:-bearer} == header ]]; then
@@ -373,9 +347,6 @@ infer_install() {
   )
 }
 
-# Runs one tier: go-ai's (dir .) or infer's (dir tools/infer), in the worktree, verbose, with the
-# go-ai key as each named alias's credential, its profile for CLIENTS_TARGET, and every other role
-# unset, so it skips.
 _clients_tier() {
   local kind=$1 sub=$2 run='' alias rc
   shift 2
@@ -390,7 +361,6 @@ _clients_tier() {
   fi
   local name=${1-}
   shift
-  # go test's -run, passed as one argument, and shown in the log single-quoted.
   local run_arg=() run_shown=''
   if [[ -n $run ]]; then
     run_arg=(-run "$run")
@@ -435,11 +405,10 @@ _clients_tier() {
   (
     { set +x; } 2>/dev/null
     cd "$CLIENTS_ROOT/$CLIENTS_WORKTREE/$sub" || exit
-    # Every role's variables from the caller's shell cleared, so only the named roles run.
     for v in "${CLIENTS_ROLE[@]}" TRANSCRIPTION; do
       unset "AI_${v}_BASE_URL" "AI_${v}_TOKEN" "AI_${v}_HEADER" "AI_${v}_MODEL" "AI_${v}_PROFILE"
     done
-    key=$(<"$CLIENTS_ROOT/$CLIENTS_KEYS/go-ai")
+    key=$(<"$CLIENTS_ROOT/$CLIENTS_KEYS/go-ai") || return
     for alias in "$@"; do
       export "AI_${CLIENTS_ROLE[$alias]}_BASE_URL=$(gw_base "$alias")"
       if [[ $cred == HEADER ]]; then
@@ -459,7 +428,6 @@ _clients_tier() {
   rc=$?
   {
     echo "$name: exit $rc"
-    # grep's 1 is "not found"; any other failure is no answer, and says so.
     grep -qF -f "$CLIENTS_ROOT/$CLIENTS_KEYS/go-ai" "$CLIENTS_ROOT/$out" 2>/dev/null
     case $? in
       0) echo "$name: THE KEY IS IN $out; delete it before anything is shared" ;;
@@ -507,23 +475,21 @@ infer_at() {
   (
     { set +x; } 2>/dev/null
     cd "$CLIENTS_ROOT" || exit
-    # The retry settings too, so infer keeps its default, 3 attempts, unless a flag says otherwise.
     unset INFER_TOKEN INFER_HEADER INFER_MODEL INFER_PROFILE \
       INFER_RETRIES INFER_RETRY_BASE_DELAY INFER_RETRY_MAX_DELAY
-    key=$(<"$CLIENTS_KEYS/go-ai")
+    key=$(<"$CLIENTS_KEYS/go-ai") || return
     if [[ $cred == INFER_HEADER ]]; then
       export INFER_HEADER="x-api-key: $key"
     else
       export INFER_TOKEN=$key
     fi
     unset key
-    INFER_BASE_URL=$(gw_base "$alias")
+    INFER_BASE_URL=$(gw_base "$alias") || return
     export INFER_BASE_URL
     exec "$CLIENTS_INFER" "$@"
   )
 }
 
-# infer's root flag, before the command (tools/infer/README.md, "Retries", at tools/infer/v0.3.1).
 infer_once() {
   (($# >= 2)) || {
     echo 'usage: infer_once <alias> <infer argument>...' >&2
@@ -564,8 +530,6 @@ az_curl() {
     echo "no key or account at $CLIENTS_AZURE/key and $CLIENTS_AZURE/account.env; set up the account first" >&2
     return 2
   fi
-  # The account's name is read from account.env as an assignment, not sourced, in the subshell
-  # below; the log shows the expression.
   local name_expr="\$(sed -n 's/^AZURE_ACCOUNT=//p' $CLIENTS_AZURE/account.env | tr -d \\\"\\')"
   _clients_log laptop "printf 'header = \"api-key: %s\"\\nurl = \"https://%s.services.ai.azure.com/openai/v1/$path\"\\n' \"\$(<$CLIENTS_AZURE/key)\" \"$name_expr\" | curl -K - $*"
   (
@@ -592,9 +556,8 @@ row_burst() {
     echo 'row_burst: <count> and <max tokens> are positive integers' >&2
     return 2
   }
-  # Each request names the row's one served name, its alias, and asks for exactly <max tokens>.
   local body
-  body=$(printf '{"model":"%s","messages":[{"role":"user","content":"Count upward from 1, one number a line."}],"max_tokens":%d,"ignore_eos":true}' "$alias" "$tokens")
+  body=$(printf '{"model":"%s","messages":[{"role":"user","content":"Count upward from 1, one number a line."}],"max_tokens":%d,"ignore_eos":true}' "$alias" "$tokens") || return
   logged "for i in \$(seq $count); do curl -s -o /dev/null -w '%{http_code}\\n' -H 'content-type: application/json' -d '$body' http://${CLIENTS_ROW[$alias]}/v1/chat/completions & done | sort | uniq -c"
 }
 
@@ -615,8 +578,6 @@ azure_count() {
     deployments+="$a=${CLIENTS_DEPLOYMENT[$a]} "
   done
   _clients_log laptop "ssh -n $CLIENTS_HOST '$remote' | the request lines with overflow=\"azure\" or gen_ai.provider.name=azure, counted per route and status"
-  # The log is read whole before it is counted, so a log that wasn't read gives no count, rather
-  # than counts of nothing that read as nothing sent to Azure. It is held, never printed.
   # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
   log=$(ssh -n "$CLIENTS_HOST" "$remote") || {
     rc=$?
@@ -656,7 +617,6 @@ budget_status() {
     echo "budget_status: $1 isn't a key name" >&2
     return 2
   }
-  # -f: an error reply fails the call rather than reaching jq as a body with no budgets in it.
   local remote="curl -fsS --max-time 5 'http://127.0.0.1:$AGW_UI_PORT/api/budgets/status${1:+?apiKeyName=$1}'"
   _clients_log laptop "ssh -n $CLIENTS_HOST \"$remote\" | jq -r '.budgets[] | one line each'"
   # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
@@ -685,7 +645,6 @@ request_log() {
   output_tokens as output, total_tokens as total, duration_ms, has_payload
   from request_logs order by completed_at desc limit $count;
 select count(*) as payload_rows from request_log_payloads;"
-  # ON_ERROR_STOP: psql reading a script on stdin exits 0 after a failed statement without it.
   _clients_log laptop "ssh $CLIENTS_HOST 'docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -v ON_ERROR_STOP=1 -P pager=off' <<< \"${query//$'\n'/ }\""
   ssh "$CLIENTS_HOST" 'docker exec -i gateway-postgres-1 psql -U agentgateway -d agentgateway -v ON_ERROR_STOP=1 -P pager=off' \
     <<<"$query" | _clients_say request_log
@@ -698,8 +657,6 @@ audio_rerun() {
     return 2
   }
   local name=$1 live since t rc=0
-  # The deployed copy's first line names its overlays; anything but rows-down would send the warm-up
-  # to the audio row, and the tests' audio with it.
   _clients_log laptop "ssh -n $CLIENTS_HOST head -1 '~/gateway/agentgateway/config.yaml'"
   # shellcheck disable=SC2088 # The tilde expands on gb10-2.
   live=$(ssh -n "$CLIENTS_HOST" head -1 '~/gateway/agentgateway/config.yaml') || return
@@ -709,10 +666,8 @@ audio_rerun() {
       _clients_say audio_rerun
     return 2
   }
-  since=$(date -Iseconds)
+  since=$(date -Iseconds) || return
   for t in TestAudioInResponsesRefused TestTranscribeChat; do
-    # Two small text-only requests, each retried, so the row is evicted when the test starts;
-    # Azure answers each 400, which evicts nothing.
     for _ in 1 2; do
       gw_curl architect -sS -D - -o /dev/null -H 'Content-Type: application/json' \
         -d '{"model":"audio","messages":[{"role":"user","content":"Reply with the word ready."}],"max_completion_tokens":16}' \
@@ -748,14 +703,14 @@ pg_password_rotate() {
   (
     { set +x; } 2>/dev/null
     cd "$CLIENTS_ROOT" || exit
-    pw=$(<"$next")
+    pw=$(<"$next") || return
     [[ $pw =~ ^[0-9a-f]{64}$ ]] || {
       echo "$next isn't 64 hex characters; nothing was changed"
       exit 2
     }
+    rc=0
     # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
-    out=$(printf "ALTER USER agentgateway WITH PASSWORD '%s';\n" "$pw" | ssh "$CLIENTS_HOST" "$remote" 2>&1)
-    rc=$?
+    out=$(printf "ALTER USER agentgateway WITH PASSWORD '%s';\n" "$pw" | ssh "$CLIENTS_HOST" "$remote" 2>&1) || rc=$?
     [[ -z $out ]] || printf '%s\n' "${out//$pw/<new password>}"
     exit "$rc"
   ) | _clients_say pg_password_rotate
@@ -788,8 +743,6 @@ retry_case() {
       ;;
   esac
   _clients_key_ok "$key" || return
-  # The deployed copy's first line names its overlays: the case's own, or none for embedding-burst,
-  # whose bucket is the deployed config's.
   _clients_log laptop "ssh -n $CLIENTS_HOST head -1 '~/gateway/agentgateway/config.yaml'"
   # shellcheck disable=SC2088 # The tilde expands on gb10-2.
   live=$(ssh -n "$CLIENTS_HOST" head -1 '~/gateway/agentgateway/config.yaml') || return
@@ -804,11 +757,10 @@ retry_case() {
     return 2
   }
   local stamp out table
-  stamp=$(date +%Y%m%dT%H%M%S)
+  stamp=$(date +%Y%m%dT%H%M%S) || return
   out=$CLIENTS_STATE/retry/$c-$stamp.log
   table=$CLIENTS_STATE/retry/$c-$stamp.tsv
   mkdir -p "$CLIENTS_ROOT/$CLIENTS_STATE/retry"
-  # Paths relative to retry/, where go test runs the test, so the log names no home directory.
   local env="RETRY_CASE=$c RETRY_KEY_FILE=../$CLIENTS_KEYS/$key RETRY_KEY_IN=${CLIENTS_KEY_IN:-bearer}"
   env+=" RETRY_AGENT_BASE_URL=$(gw_base agent) RETRY_EMBEDDING_BASE_URL=$(gw_base embedding)"
   env+=" RETRY_TABLE=../$table"
@@ -846,7 +798,6 @@ requests_shed() {
     echo 'usage: requests_shed' >&2
     return 2
   }
-  # -f: an error reply fails the call rather than reaching grep as metrics with no line in them.
   local remote='curl -fsS --max-time 5 http://127.0.0.1:15020/metrics'
   _clients_log laptop "ssh -n $CLIENTS_HOST '$remote' | grep requests_shed"
   ssh -n "$CLIENTS_HOST" "$remote" | grep -E '^(# (HELP|TYPE) )?[a-z_]*requests_shed' |
@@ -855,8 +806,6 @@ requests_shed() {
   return $((st[0] ? st[0] : st[1]))
 }
 
-# A trace's spans, one JSON value from /api/v2/traces/<id> a line on stdin, printed as the header
-# describes. b64hex reads Tempo's base64 id as hex, and keeps an id already in hex.
 _clients_traces_print() {
   jq -r '
     def b64hex:
@@ -936,10 +885,9 @@ traces() {
       echo "traces: date -d can't read $since" >&2
       return 2
     }
-    end=$(date +%s)
-    # The query reaches curl through the remote shell and docker exec, quoted once for the shell.
+    end=$(date +%s) || return
     local remote
-    remote="$exec curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode $(printf %q "q=$query") --data-urlencode limit=$count --data-urlencode start=$start --data-urlencode end=$end"
+    remote="$exec curl -fsS --max-time 10 -G http://tempo:3200/api/search --data-urlencode $(printf %q "q=$query") --data-urlencode limit=$count --data-urlencode start=$start --data-urlencode end=$end" || return
     _clients_log laptop "ssh -n $CLIENTS_HOST \"$remote\" | jq -r '.traces[].traceID'"
     # shellcheck disable=SC2029 # The command is built on the laptop, with no secret in it.
     mapfile -t ids < <(ssh -n "$CLIENTS_HOST" "$remote" | jq -r '.traces[]?.traceID') || return
@@ -948,7 +896,6 @@ traces() {
       return 0
     fi
   fi
-  # One docker exec reads every trace, each body ended by a newline, so jq reads one a line.
   # shellcheck disable=SC2089,SC2090 # The quotes are the remote shell's, the string sent as written.
   local fetch="$exec sh -c 'for id; do curl -fsS --max-time 10 http://tempo:3200/api/v2/traces/\$id && echo || exit; done' sh ${ids[*]}"
   _clients_log laptop "ssh -n $CLIENTS_HOST \"$fetch\" | spans, parents, and attribute keys"
@@ -978,23 +925,20 @@ messages_stream() {
   local body url dir
   body=$(jq -cn --arg m "$alias" --argjson n "$tokens" --arg p "$prompt" \
     '{model: $m, max_tokens: $n, stream: true, messages: [{role: "user", content: $p}]}') || return
-  url=$(gw_base "$alias")/messages
-  # To the millisecond, and made with plain mkdir, so two sends in one second never share a folder.
-  dir=$CLIENTS_STATE/stream/$alias-$tokens-$(date +%Y%m%dT%H%M%S.%3N)
+  url=$(gw_base "$alias")/messages || return
+  dir=$CLIENTS_STATE/stream/$alias-$tokens-$(date +%Y%m%dT%H%M%S.%3N) || return
   mkdir -p "$CLIENTS_ROOT/$CLIENTS_STATE/stream" && mkdir "$CLIENTS_ROOT/$dir" || return
   _clients_log laptop "messages_stream $alias $tokens '$prompt'"
   _clients_log laptop "t0=\$EPOCHREALTIME; printf 'header = \"$header%s\"\\n' \"\$(<$CLIENTS_KEYS/$key)\" | curl -K - -sN -D $dir/headers.txt -H 'content-type: application/json' -d '$body' $url | while IFS= read -r line; do t=\$EPOCHREALTIME; printf '%d\\t%s\\n' \$((\${t/./} - \${t0/./})) \"\${line%\$'\\r'}\"; done > $dir/raw.tsv"
   (
     { set +x; } 2>/dev/null
     cd "$CLIENTS_ROOT" || exit
-    # The send's stamp is taken here, after the logging, so the log's own time isn't counted.
     t0=$EPOCHREALTIME
     # shellcheck disable=SC2059 # The format is built from a fixed header name.
     printf "header = \"$header%s\"\n" "$(<"$CLIENTS_KEYS/$key")" |
       curl -K - -sN -D "$dir/headers.txt" -H 'content-type: application/json' -d "$body" "$url" |
       while IFS= read -r line || [[ -n $line ]]; do
         t=$EPOCHREALTIME
-        # $EPOCHREALTIME is seconds and six digits of microseconds; without the point, microseconds.
         printf '%d\t%s\n' $((${t/./} - ${t0/./})) "${line%$'\r'}"
       done >"$dir/raw.tsv"
     rc=${PIPESTATUS[1]}
@@ -1003,7 +947,6 @@ messages_stream() {
     exit "$rc"
   )
   local rc=$?
-  # Each event's arrival and name; a content_block_delta's delta type from its data line.
   awk -F '\t' '
       $2 ~ /^event: / { if (ev != "") print at "\t" ev "\t" dt; at = $1; ev = substr($2, 8); dt = "" }
       $2 ~ /^data: / && ev == "content_block_delta" && match($2, /"delta": *\{ *"type": *"[a-z_]+"/) {

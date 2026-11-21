@@ -89,6 +89,8 @@
 # Settings, each an environment variable read when a helper runs:
 #   MEASURE_STATS_EVERY  seconds between gateway and row samples (default 5)
 #   MEASURE_CELL_CAP     a run's cap, given to timeout (default 10m)
+#
+# See docs/scripts.md#the-step-helpers
 
 if ! (return 0 2>/dev/null); then
   echo 'measure-lib.sh is sourced, not run: source scripts/measure-lib.sh' >&2
@@ -96,17 +98,13 @@ if ! (return 0 2>/dev/null); then
 fi
 
 MEASURE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-# Relative to the root: every command runs from there, so the log names no home directory.
 MEASURE_STATE=.state/priority
 MEASURE_KEYS=.state/agentgateway/keys
 MEASURE_GATEWAY_HOST=gb10-2
 
-# The consumer port, deploy.env's AGW_PORT.
 # shellcheck disable=SC1091 # check.sh runs shellcheck without -x; deploy.env is assignments.
 source "$MEASURE_ROOT/gateway/agentgateway/deploy.env"
 
-# Each alias's row, as host:port, and the tokenizer GuideLLM counts its tokens with (spike-model-
-# layout's, for the model each row serves).
 declare -gA MEASURE_ROW=(
   [agent]=gb10-1:8000
   [vision]=gb10-2:8000
@@ -120,14 +118,11 @@ declare -gA MEASURE_TOKENIZER=(
   [embedding]=ibm-granite/granite-embedding-english-r2
 )
 
-# Appends `+ <time> <host>: <command>` to the day's log and prints it to stderr.
 _measure_log() {
   printf '+ %s %s: %s\n' "$(date -Iseconds)" "$1" "$2" |
     tee -a "$MEASURE_ROOT/$MEASURE_STATE/commands-$(date +%F).log" >&2
 }
 
-# Copies its input to stdout, and each non-empty line to the day's log as
-# `= <time> <helper>: <line>`.
 _measure_say() {
   local line
   while IFS= read -r line || [[ -n $line ]]; do
@@ -136,6 +131,51 @@ _measure_say() {
       printf '= %s %s: %s\n' "$(date -Iseconds)" "$1" "$line" \
         >>"$MEASURE_ROOT/$MEASURE_STATE/commands-$(date +%F).log"
   done
+}
+
+_measure_seed_of_name() {
+  local sum
+  sum=$(printf %s "$1" | cksum) || return
+  echo "${sum%% *}"
+}
+
+_measure_sample_row() {
+  local pid=$1 dir=$2 alias=$3 line
+  printf 'epoch\ttime\trunning\twaiting\n' >"$dir/row-metrics.tsv"
+  while kill -0 "$pid" 2>/dev/null; do
+    line=$(curl -sS --max-time 3 "http://${MEASURE_ROW[$alias]}/metrics" 2>/dev/null |
+      awk '/^vllm:num_requests_running[{ ]/ { r += $NF; n++ }
+        /^vllm:num_requests_waiting[{ ]/ { w += $NF; n++ }
+        END { if (n) printf "%g|%g", r, w }') || line=
+    [[ -n $line ]] || line='-|-'
+    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$(date +%T)" "${line%%|*}" "${line#*|}" \
+      >>"$dir/row-metrics.tsv"
+    sleep "${MEASURE_STATS_EVERY:-5}"
+  done
+}
+
+_measure_sample_gateway() {
+  local pid=$1 dir=$2 line
+  printf 'epoch\ttime\tcpu\tmemory\n' >"$dir/gateway-stats.tsv"
+  while kill -0 "$pid" 2>/dev/null; do
+    line=$(ssh -n "$MEASURE_GATEWAY_HOST" \
+      "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" 2>/dev/null) ||
+      line='-|-'
+    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$(date +%T)" "${line%%|*}" "${line#*|}" \
+      >>"$dir/gateway-stats.tsv"
+    sleep "${MEASURE_STATS_EVERY:-5}"
+  done
+}
+
+_measure_wait_through_interrupts() {
+  local pid=$1 rc
+  wait "$pid"
+  rc=$?
+  while kill -0 "$pid" 2>/dev/null; do
+    wait "$pid"
+    rc=$?
+  done
+  return "$rc"
 }
 
 cell() {
@@ -158,7 +198,6 @@ cell() {
   case $target in
     direct)
       url=http://${MEASURE_ROW[$alias]}/v1
-      # A direct run goes past the gateway, which alone takes a key.
       if (($# == 5)); then
         echo "cell: a direct run sends no key; drop <key>" >&2
         return 2
@@ -182,13 +221,8 @@ cell() {
   fi
   mkdir -p "$MEASURE_ROOT/$dir"
 
-  # Each run its own seed, from its name, so a run's synthetic prompts and images are its own:
-  # GuideLLM's default seed, 42, would send each run the last one's, and the row's prefix cache
-  # would serve the gateway run and the second direct run what the first direct run sent. The audio
-  # cell's clips come from a dataset, the same in every run, which no seed changes.
   local seed
-  seed=$(printf %s "$name" | cksum)
-  seed=${seed%% *}
+  seed=$(_measure_seed_of_name "$name") || return
   local -a run=(timeout "${MEASURE_CELL_CAP:-10m}" mise exec -- guidellm run
     -c "bench/$scenario.yaml"
     --backend "kind=openai_http,model=$alias"
@@ -205,69 +239,28 @@ cell() {
   [[ $target != cap ]] ||
     _measure_log laptop "every ${MEASURE_STATS_EVERY:-5} s while it runs: curl -sS --max-time 3 http://${MEASURE_ROW[$alias]}/metrics, the sums of vllm:num_requests_running and vllm:num_requests_waiting >> $dir/row-metrics.tsv"
   local since
-  since=$(date +%s)
+  since=$(date +%s) || return
 
-  # The run, the terminal's view of it, and the sampler, in one foreground subshell, so Ctrl-C
-  # reaches them all; timeout puts GuideLLM in a process group of its own, so the trap passes the
-  # interrupt on to it, and timeout stops GuideLLM.
   (
     { set +x; } 2>/dev/null
     cd "$MEASURE_ROOT" || exit
-    # The key enters this inner subshell's environment only, and GuideLLM's from it.
     (
       export MISE_ENV=bench GUIDELLM__SPEC__BACKEND__TARGET=$url
       unset GUIDELLM__SPEC__BACKEND__API_KEY
       if [[ $target != direct ]]; then
-        GUIDELLM__SPEC__BACKEND__API_KEY=$(<"$key")
+        GUIDELLM__SPEC__BACKEND__API_KEY=$(<"$key") || return
         export GUIDELLM__SPEC__BACKEND__API_KEY
       fi
       exec "${run[@]}"
     ) >"$dir/guidellm.log" 2>&1 &
     pid=$!
     trap 'kill -TERM "$pid" 2>/dev/null' INT TERM
-    # GuideLLM's own output, followed in the terminal until it exits.
     tail -n +1 -f --pid="$pid" "$dir/guidellm.log" &
 
-    # The row sampler, on a cap run only, in the background beside the gateway sampler: the row's
-    # requests running and waiting, read from its own /metrics, direct from the laptop (the rows
-    # stay reachable directly), at each interval, until GuideLLM exits. Each is the sum over the
-    # row's engines of vLLM's gauge. A failed read is a row of dashes.
-    if [[ $target == cap ]]; then
-      printf 'epoch\ttime\trunning\twaiting\n' >"$dir/row-metrics.tsv"
-      while kill -0 "$pid" 2>/dev/null; do
-        line=$(curl -sS --max-time 3 "http://${MEASURE_ROW[$alias]}/metrics" 2>/dev/null |
-          awk '/^vllm:num_requests_running[{ ]/ { r += $NF; n++ }
-            /^vllm:num_requests_waiting[{ ]/ { w += $NF; n++ }
-            END { if (n) printf "%g|%g", r, w }') || line=
-        [[ -n $line ]] || line='-|-'
-        printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$(date +%T)" "${line%%|*}" "${line#*|}" \
-          >>"$dir/row-metrics.tsv"
-        sleep "${MEASURE_STATS_EVERY:-5}"
-      done &
-    fi
-
-    # The gateway sampler, on a gateway run only: the container's CPU (100% is one core) and
-    # memory, one `docker stats --no-stream` on gb10-2 at each interval, until GuideLLM exits. A
-    # failed read is a row of dashes, so a gap shows. summarize keeps the samples inside the
-    # benchmark's time.
-    if [[ $target != direct ]]; then
-      printf 'epoch\ttime\tcpu\tmemory\n' >"$dir/gateway-stats.tsv"
-      while kill -0 "$pid" 2>/dev/null; do
-        line=$(ssh -n "$MEASURE_GATEWAY_HOST" \
-          "docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' agentgateway" 2>/dev/null) ||
-          line='-|-'
-        printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$(date +%T)" "${line%%|*}" "${line#*|}" \
-          >>"$dir/gateway-stats.tsv"
-        sleep "${MEASURE_STATS_EVERY:-5}"
-      done
-    fi
-    # A wait an interrupt cut short is waited again, for GuideLLM's own status.
-    wait "$pid"
+    [[ $target != cap ]] || _measure_sample_row "$pid" "$dir" "$alias" &
+    [[ $target == direct ]] || _measure_sample_gateway "$pid" "$dir"
+    _measure_wait_through_interrupts "$pid"
     rc=$?
-    while kill -0 "$pid" 2>/dev/null; do
-      wait "$pid"
-      rc=$?
-    done
     wait
     exit "$rc"
   )
@@ -280,7 +273,6 @@ cell() {
       124) echo "$name: exit 124, the ${MEASURE_CELL_CAP:-10m} cap hit" ;;
       *) echo "$name: exit $rc" ;;
     esac
-    # grep's 1 is "not found"; any other failure is no answer, and says so.
     if [[ $target != direct ]]; then
       grep -rqF -f "$MEASURE_ROOT/$key" "$MEASURE_ROOT/$dir" 2>/dev/null
       case $? in
@@ -294,8 +286,6 @@ cell() {
   return "$rc"
 }
 
-# The figures of one benchmark in a result JSON, one line each, every time in ms (GuideLLM keeps
-# request latency in seconds); an embedding run has latency alone, its TTFT and ITL being 0.
 # shellcheck disable=SC2016 # jq's variables.
 _MEASURE_JQ='
 def r: . * 100 | round / 100;
@@ -318,10 +308,8 @@ summarize() {
     else
       jq -r "$_MEASURE_JQ" "$dir/result.json"
       if [[ -f $dir/gateway-stats.tsv ]]; then
-        start=$(jq '[.benchmarks[].start_time] | min' "$dir/result.json")
-        end=$(jq '[.benchmarks[].end_time] | max' "$dir/result.json")
-        # Samples inside the benchmark's time only; GuideLLM's start-up before it is idle. Memory
-        # is docker's usage before the slash, in MiB.
+        start=$(jq '[.benchmarks[].start_time] | min' "$dir/result.json") || return
+        end=$(jq '[.benchmarks[].end_time] | max' "$dir/result.json") || return
         awk -F'\t' -v s="$start" -v e="$end" '
           function mib(v,  n) { n = v + 0
             if (v ~ /GiB/) n *= 1024; else if (v ~ /KiB/) n /= 1024; else if (v !~ /MiB/) n /= 1048576
@@ -340,15 +328,6 @@ summarize() {
   } | _measure_say summarize
 }
 
-# A cap run's requests as the gateway logged them, read after the run: the access log lines of the
-# alias's route between two epochs, each kept as its time (docker's, UTC), status, path, the
-# `retry_after` and `overflow` fields config.yaml adds, empty when the reply had neither header;
-# `retry.attempt`, empty when the request wasn't retried; and `key_name`, the key it was sent with.
-# The rest of each line, the caller's address and the endpoint among it, is left out. Each alias
-# has its own route, so a line is the alias's by the route the access log names,
-# `route=default/<alias>`, and the run's by its key, `key_name="<key>"`: a line of another key,
-# such as the other run of benchmark D's pair on the same alias, is left out, and a line with no
-# key_name, logged before config.yaml added it or refused 401, is kept.
 _measure_requests() {
   local name=$1 alias=$2 key_name=$3 since=$4 until=$5
   local out=$MEASURE_STATE/cells/$name/gateway-requests.tsv st
@@ -370,7 +349,6 @@ _measure_requests() {
         printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", $1, st, p, ra, of, rt, kn }'
     st=${PIPESTATUS[0]}
   } >"$MEASURE_ROOT/$out"
-  # A log that wasn't read would otherwise pass as a run the gateway logged no request of.
   if ((st != 0)); then
     echo "$name: reading the gateway log failed (ssh exit $st); $out is not a reading" |
       _measure_say cell
@@ -380,11 +358,6 @@ _measure_requests() {
     "$(($(wc -l <"$MEASURE_ROOT/$out") - 1))" | _measure_say cell
 }
 
-# A cap run's levels, each benchmark of its result.json in turn: every reply's status, as GuideLLM
-# saw it (2xx for each successful request; an errored one's status read from its error) and as the
-# gateway logged it, with any Retry-After; the row's running and waiting requests (median, max)
-# from the samples inside the level's time; then latency growth from the first level to the
-# second. The gateway's /models lines, GuideLLM's backend check, are left out of its counts.
 # shellcheck disable=SC2016 # jq's variables.
 _MEASURE_CAP_JQ='
 .benchmarks[] | .config.strategy.streams as $n
@@ -407,8 +380,8 @@ _measure_cap_levels() {
   local dir=$1 n s e statuses iso_s iso_e
   while IFS=$'\t' read -r n s e statuses; do
     echo "  level $n: GuideLLM replies ${statuses:-none}"
-    iso_s=$(date -u -d "@${s%.*}" +%Y-%m-%dT%H:%M:%S)
-    iso_e=$(date -u -d "@$((${e%.*} + 1))" +%Y-%m-%dT%H:%M:%S)
+    iso_s=$(date -u -d "@${s%.*}" +%Y-%m-%dT%H:%M:%S) || return
+    iso_e=$(date -u -d "@$((${e%.*} + 1))" +%Y-%m-%dT%H:%M:%S) || return
     if [[ -f $dir/gateway-requests.tsv ]]; then
       awk -F'\t' -v s="$iso_s" -v e="$iso_e" '
         NR > 1 && substr($1, 1, 19) >= s && substr($1, 1, 19) < e && $3 !~ /\/models$/ {
@@ -430,10 +403,6 @@ _measure_cap_levels() {
   jq -r "$_MEASURE_GROWTH_JQ" "$dir/result.json"
 }
 
-# Behavior 7's reading, per figure: the two direct runs, their spread |d1 - d2|, the gateway run,
-# and what it adds over the direct runs' mean, g - (d1 + d2) / 2; "within" when that is no larger
-# than the spread, "beyond" when it is. Medians and p95s of TTFT, ITL, and request latency, all in
-# ms; an embedding run, latency alone.
 # shellcheck disable=SC2016 # jq's variables.
 _MEASURE_COMPARE_JQ='
 def r: . * 100 | round / 100;
@@ -477,16 +446,14 @@ overflow_read() {
     return 2
   fi
   _measure_log laptop "overflow_read $name"
-  start=$(jq '[.benchmarks[].start_time] | min' "$dir/result.json")
-  end=$(jq '[.benchmarks[].end_time] | max' "$dir/result.json")
+  start=$(jq '[.benchmarks[].start_time] | min' "$dir/result.json") || return
+  end=$(jq '[.benchmarks[].end_time] | max' "$dir/result.json") || return
   [[ $start =~ ^[0-9]+(\.[0-9]+)?$ && $end =~ ^[0-9]+(\.[0-9]+)?$ ]] || {
     echo "overflow_read: no benchmark start and end times in $MEASURE_STATE/cells/$name/result.json" >&2
     return 1
   }
-  iso_s=$(date -u -d "@${start%.*}" +%Y-%m-%dT%H:%M:%S)
-  iso_e=$(date -u -d "@$((${end%.*} + 1))" +%Y-%m-%dT%H:%M:%S)
-  # The lines inside the benchmark, the gateway's /models lines (GuideLLM's backend check) left out,
-  # in time order; docker's RFC 3339 times, all UTC, sort as text.
+  iso_s=$(date -u -d "@${start%.*}" +%Y-%m-%dT%H:%M:%S) || return
+  iso_e=$(date -u -d "@$((${end%.*} + 1))" +%Y-%m-%dT%H:%M:%S) || return
   tail -n +2 "$dir/gateway-requests.tsv" | sort |
     awk -F'\t' -v s="$iso_s" -v e="$iso_e" -v secs="$(( ${end%.*} - ${start%.*} ))" '
       substr($1, 1, 19) < s || substr($1, 1, 19) >= e || $3 ~ /\/models$/ { next }
@@ -513,21 +480,14 @@ overflow_read() {
           windows, secs, (secs ? windows * 60 / secs : 0)
         printf "  first refusal: %s\n", (first ? first : "none")
       }' | while IFS= read -r line; do
-      # The first refusal'"'"'s time, as seconds from the benchmark'"'"'s start.
       if [[ $line == '  first refusal: '* && $line != *none ]]; then
         t=${line#'  first refusal: '}
-        line="  first refusal: $(awk -v a="$(date -u -d "$t" +%s.%N)" -v b="$start" 'BEGIN { printf "%.1f", a - b }') s after the benchmark's start ($t)"
+        line="  first refusal: $(awk -v a="$(date -u -d "$t" +%s.%N)" -v b="$start" 'BEGIN { printf "%.1f", a - b }') s after the benchmark's start ($t)" || return
       fi
       printf '%s\n' "$line"
     done | { echo "$name: benchmark C"; cat; } | _measure_say overflow_read
 }
 
-# Audio's real-time factor (benchmark A; evidence 5), spike-model-layout's reading, from its
-# bench/levels.jq: each successful request's RTFx is its clip's seconds, GuideLLM's
-# input_metrics.audio_seconds, over its request time, request_end_time - request_start_time; the
-# level's figure is their median, interpolated linearly between the two nearest ranks, beside the
-# minimum and how many reach the floor of 5. A request with no clip is left out. The median, not the
-# mean, is what the floor is judged by: audio's RTFx median at 5 or more.
 # shellcheck disable=SC2016 # jq's variables.
 _MEASURE_RTFX_JQ='
 def r: . * 100 | round / 100;
@@ -557,7 +517,6 @@ rtfx() {
     }
   done
   _measure_log laptop "rtfx $*"
-  # A run jq can't read fails the call, rather than leaving a name with no figure under it.
   {
     local rc=0
     for n in "$@"; do

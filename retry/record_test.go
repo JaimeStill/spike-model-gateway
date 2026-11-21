@@ -27,6 +27,8 @@
 // answers 200 (but bulk-rate-low's refused call), and each retry starts no sooner than the refused
 // attempt's Retry-After after its reply, when it gave one. The table, with no secret in it, is
 // for cross-checking each attempt against the gateway's access log.
+//
+// See docs/retry.md
 package retry
 
 import (
@@ -50,40 +52,24 @@ import (
 	"github.com/standards-lab/go-ai/protocol"
 )
 
-// inFlightMarker is the body of agentgateway's in-flight refusal, 503 "request limit exceeded"
-// (probes/in-flight-1.yaml); a row's 503 doesn't hold it.
 const inFlightMarker = "request limit exceeded"
 
-// inferDefault is infer's default retry policy at tools/infer/v0.2.0: 3 attempts, the first wait
-// at most 500 ms, every wait and the longest Retry-After honored at most 30 s
-// (tools/infer/README.md, "Retries").
 var inferDefault = ai.RetryPolicy{MaxAttempts: 3, BaseDelay: 500 * time.Millisecond, MaxDelay: 30 * time.Second}
 
-// attempt is one request the transport sent, and its reply.
 type attempt struct {
 	call       string
-	n          int // the attempt's number within its call, from 1
+	n          int
 	start      time.Time
-	reply      time.Time // when the reply's header arrived, or the transport failed
-	status     int       // 0 when the transport failed
+	reply      time.Time
+	status     int
 	header     http.Header
-	marker     bool // a refused reply's body holds inFlightMarker
+	marker     bool
 	retryAfter string
-	err        string // the transport's failure
+	err        string
 }
 
-// gatewayRateHeaders are the headers agentgateway's local rate limit adds to every reply on a
-// limited route, its 429s among them: x-ratelimit-limit, x-ratelimit-remaining, and
-// x-ratelimit-reset, by these exact names (the recorded tables under .state/answer/retry/). A row
-// sends none. Azure OpenAI sends x-ratelimit-* too, but only names with a -requests or -tokens
-// suffix (x-ratelimit-limit-requests, x-ratelimit-remaining-tokens, and the rest), and none of
-// these three (learn.microsoft.com, "Manage Azure OpenAI in Microsoft Foundry Models quota",
-// "Rate limit response headers", read 2026-11-19), so a prefix alone marks no reply as the
-// gateway's.
 var gatewayRateHeaders = []string{"X-Ratelimit-Limit", "X-Ratelimit-Remaining", "X-Ratelimit-Reset"}
 
-// rateLimited reports whether the reply carries every one of gatewayRateHeaders, by exact name:
-// the gateway's local rate limit, not a row's or Azure's.
 func (a *attempt) rateLimited() bool {
 	for _, name := range gatewayRateHeaders {
 		if len(a.header.Values(name)) == 0 {
@@ -93,7 +79,6 @@ func (a *attempt) rateLimited() bool {
 	return true
 }
 
-// attempts is the log every recorder of a case writes to, in the order the replies arrived.
 type attempts struct {
 	mu   sync.Mutex
 	list []*attempt
@@ -111,7 +96,6 @@ func (l *attempts) add(a *attempt) {
 	l.list = append(l.list, a)
 }
 
-// calls returns each call's attempts in the order they started, by call name.
 func (l *attempts) calls() map[string][]*attempt {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -125,15 +109,12 @@ func (l *attempts) calls() map[string][]*attempt {
 	return m
 }
 
-// callKey names a request's call in its context, which go-ai passes to every attempt.
 type callKey struct{}
 
 func withCall(ctx context.Context, call string) context.Context {
 	return context.WithValue(ctx, callKey{}, call)
 }
 
-// recorder is an http.RoundTripper that records every attempt in log, then calls onReply, when
-// set, with it.
 type recorder struct {
 	base    http.RoundTripper
 	log     *attempts
@@ -151,8 +132,6 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 		a.status = resp.StatusCode
 		a.header = resp.Header.Clone()
 		a.retryAfter = resp.Header.Get("Retry-After")
-		// A refused reply's body is short, read whole for the marker and handed on unchanged; a
-		// 2xx's, maybe a stream, is left alone.
 		if resp.StatusCode/100 != 2 {
 			body, rerr := io.ReadAll(resp.Body)
 			resp.Body.Close()
@@ -170,19 +149,14 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
-// address is an IPv4 address, or an IPv6 one in brackets, as a dial error names the host it
-// reached: gb10-2's tailnet address, which nothing here prints.
 var address = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}\b|\[[0-9A-Fa-f]*:[0-9A-Fa-f:.]*(%[\w.-]+)?\]`)
 
-// scrub is err's text with each IP address replaced by <addr>, for t.Log and the table.
 func scrub(err error) string {
 	return address.ReplaceAllString(err.Error(), "<addr>")
 }
 
-// cases is every live case, by RETRY_CASE's value.
 var cases = []string{"rate-limit-agent", "embedding-burst", "in-flight-1", "bulk-rate-low"}
 
-// TestMain refuses a RETRY_CASE that names no case, which would otherwise skip every test and pass.
 func TestMain(m *testing.M) {
 	if c := os.Getenv("RETRY_CASE"); c != "" && !slices.Contains(cases, c) {
 		fmt.Fprintf(os.Stderr, "RETRY_CASE is %q, not a case: %s\n", c, strings.Join(cases, ", "))
@@ -191,8 +165,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// live skips the test unless RETRY_CASE names its case, and returns the base URL variable's value
-// for alias.
 func live(t *testing.T, name, alias string) string {
 	t.Helper()
 	if os.Getenv("RETRY_CASE") != name {
@@ -206,8 +178,6 @@ func live(t *testing.T, name, alias string) string {
 	return base
 }
 
-// newClient returns a Chat Completions client of baseURL under policy, sending through a recorder
-// into log, with the key RETRY_KEY_FILE holds.
 func newClient(t *testing.T, baseURL string, log *attempts, policy ai.RetryPolicy, onReply func(*attempt)) *ai.Client {
 	t.Helper()
 	path := os.Getenv("RETRY_KEY_FILE")
@@ -216,7 +186,6 @@ func newClient(t *testing.T, baseURL string, log *attempts, policy ai.RetryPolic
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		// The error names the path, never the key.
 		t.Fatalf("reading the key: %v", err)
 	}
 	key := strings.TrimSpace(string(raw))
@@ -241,7 +210,6 @@ func newClient(t *testing.T, baseURL string, log *attempts, policy ai.RetryPolic
 	return c
 }
 
-// chat is a short chat request to the alias.
 func chat(alias, text string, maxTokens int) *protocol.Request {
 	return &protocol.Request{
 		Model: alias,
@@ -253,8 +221,6 @@ func chat(alias, text string, maxTokens int) *protocol.Request {
 	}
 }
 
-// writeTable logs the per-attempt table, and writes it to RETRY_TABLE when set. It holds no
-// header value but Retry-After and x-ratelimit-*, and no request, so no key.
 func writeTable(t *testing.T, log *attempts) {
 	t.Helper()
 	var b strings.Builder
@@ -284,10 +250,6 @@ func writeTable(t *testing.T, log *attempts) {
 	}
 }
 
-// checkCall checks one call's attempts: each refused attempt is the gateway's own, a 429 with
-// x-ratelimit-limit, -remaining, and -reset (rateLimited) or a 503 with the body marker; each
-// retry waited at least the refused attempt's Retry-After from its reply; and, when answered, the
-// last attempt is a 200.
 func checkCall(t *testing.T, call string, as []*attempt, answered bool) {
 	t.Helper()
 	if len(as) == 0 {
