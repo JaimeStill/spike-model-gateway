@@ -1,9 +1,9 @@
 # The agentgateway configuration
 
-The reasoning behind [`gateway/agentgateway/config.yaml`](../gateway/agentgateway/config.yaml) and
-its probe overlays, [`gateway/agentgateway/probes/`](../gateway/agentgateway/probes/), one section
-per part of the config and per YAML anchor; each part of the config points at its section with a
-`See` line. The requirements the configuration runs, and the findings that prove them, are in
+This page gives the reasoning behind
+[`gateway/agentgateway/config.yaml`](../gateway/agentgateway/config.yaml) and its probe overlays,
+[`gateway/agentgateway/probes/`](../gateway/agentgateway/probes/), one section per part of the
+config and per YAML anchor. Each part of the config points at its section with a `See` line. The requirements the configuration runs, and the findings that prove them, are in
 [`gateway.md`](gateway.md).
 
 **Sources.** agentgateway at the `v1.7.0` tag: its docs (`schema/config.md`, `schema/cel.md`,
@@ -75,8 +75,8 @@ deploy refuses one.
 
 ## Tracing
 
-Traces (the answer task's behavior 10): a span per request, exported over OTLP gRPC to the compose
-project's OpenTelemetry Collector, reached by its service name on the project's network
+agentgateway traces each request (the answer task's behavior 10): it exports a span over OTLP gRPC
+to the compose project's OpenTelemetry Collector, reached by its service name on the project's network
 ([`gateway/otel-collector.yml`](../gateway/otel-collector.yml)), which forwards it to Tempo.
 `randomSampling` starts a trace for every request that arrives without one; one that arrives with a
 sampled traceparent is traced under it, `clientSampling`'s default. agentgateway sends the
@@ -393,9 +393,9 @@ headers too (`crates/agentgateway/src/proxy/mod.rs`, ProxyError's response;
 It is the first entry of the route's own `localRateLimit` (`&key-rates`), its condition always true,
 so every request's bucket is this one, ahead of the per-key entries (the first entry whose condition
 holds is the request's); the config's check refuses an entry with no condition anywhere but last. A
-top-level policy attached to route default/agent, the probe's form before the per-key buckets, no
-longer applies: the route's inline `localRateLimit` takes its place, and every reply carried the
-go-ai key's bucket, x-ratelimit-limit 1200 (the answer task, 2026-11-18). The vision and audio
+top-level policy attached to route default/agent doesn't apply: the route's inline
+`localRateLimit` takes its place, so every reply carried the go-ai key's bucket, x-ratelimit-limit
+1200 (the answer task, 2026-11-18). The vision and audio
 routes alias `&key-rates`, so the probe limits each of them too, each route with a bucket of its
 own; the retry case sends to agent alone. Its 429 is the gateway's own, so it evicts nothing and
 sends nothing to Azure; each reply's Retry-After is in the access log without an overlay

@@ -1,8 +1,8 @@
 # The scripts
 
-The reasoning behind the scripts in [`scripts/`](../scripts/) that their names and headers don't
-carry, one section per script; each script's header says what it does and how it is run, and
-points at its section with a `See` line. [`gateway/compose.sh`](../gateway/compose.sh) points at
+This page gives the reasoning behind the scripts in [`scripts/`](../scripts/) that their names and
+headers don't carry, one section per script. Each script's header says what it does and how it is
+run, and points at its section with a `See` line. [`gateway/compose.sh`](../gateway/compose.sh) points at
 [`stack.md`](stack.md) instead.
 
 ## The deploy

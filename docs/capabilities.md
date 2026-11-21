@@ -1,6 +1,7 @@
 # Capabilities, path, and references
 
-The spike's built capabilities in detail, the tasks it ran in order, and the repositories it reads.
+This page details the spike's built capabilities, the tasks it ran in order, and the repositories
+it reads, for the map and the evidence in [`context/README.md`](../context/README.md).
 
 ## Capabilities
 

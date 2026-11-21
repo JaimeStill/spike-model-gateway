@@ -3,9 +3,9 @@
 GuideLLM 0.8.1 scenarios, one file a cell, run from the repository root by the step helpers'
 `cell` ([`scripts/measure-lib.sh`](../scripts/measure-lib.sh)) from the bench environment
 ([`mise.bench.toml`](../mise.bench.toml)), one run at a time in the architect's view. Each file's
-section of [`docs/bench.md`](../docs/bench.md) gives its load and the scenario it is copied from:
-an overhead cell's, spike-model-layout's, its load the layout's target, unchanged; a cap cell's, the
-overhead cell's, its requests unchanged at two levels past the target.
+section of [`docs/bench.md`](../docs/bench.md) gives its load and the scenario it is copied from.
+An overhead cell copies spike-model-layout's scenario at the layout's target load; a cap cell copies
+its overhead cell's requests at two levels past the target.
 
 The scenarios name no model, target, or key. `cell <name> <scenario> <direct|gateway|cap> <alias>
 [<key>]` gives the alias as the model and its tokenizer on the command line, the base URL in

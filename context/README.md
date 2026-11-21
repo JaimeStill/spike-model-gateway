@@ -41,9 +41,8 @@ The answer is in the top-level [`README.md`](../README.md#the-answer).
    GuideLLM cells sent direct, in one session. Finding:
    [`agentgateway.md`](../docs/findings/agentgateway.md),
    [`routing.md`](../docs/findings/routing.md).
-2. **Keys and routes.** Keys are issued by the gateway, and a missing or revoked key is refused. No
-   vLLM management route is open to a consumer key. The network path to the rows is production's
-   concern, for the networking and platform teams. Finding:
+2. **Keys and routes.** The gateway issues the keys, and refuses a missing or revoked one. No vLLM
+   management route is open to a consumer key. Finding:
    [`agentgateway.md`](../docs/findings/agentgateway.md).
 3. **Caps.** At each cap (agent 12, vision 16, audio 4, embedding 128): what queues, and what
    returns 429 or 503 with Retry-After, against go-ai's retry set. Finding:
@@ -84,7 +83,8 @@ The answer is in the top-level [`README.md`](../README.md#the-answer).
   configured in [`gateway/agentgateway/config.yaml`](../gateway/agentgateway/config.yaml), reasoning
   in [`docs/agentgateway-config.md`](../docs/agentgateway-config.md).
 - **Traces** (built): [`docs/stack.md`](../docs/stack.md#the-collector).
-- **Probe overlays** (built): [`gateway/agentgateway/probes/`](../gateway/agentgateway/probes/).
+- **Probe overlays** (built): [`gateway/agentgateway/probes/`](../gateway/agentgateway/probes/),
+  reasoning in [`docs/agentgateway-config.md`](../docs/agentgateway-config.md#probe-overlays).
 - **Retry test** (built): [`retry/`](../retry/), reasoning in [`docs/retry.md`](../docs/retry.md).
 - **Step helpers** (built): [`scripts/`](../scripts/), reasoning in
   [`docs/scripts.md`](../docs/scripts.md); the GuideLLM cells in [`bench/`](../bench/README.md),

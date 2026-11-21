@@ -1,8 +1,8 @@
 # The gateway's stack
 
-The reasoning behind the gateway's compose project, [`gateway/`](../gateway/), and the mise tasks
-that operate it, one section per service; each compose file, Dockerfile, and service configuration
-points at its section with a `See` line. agentgateway's own configuration is in
+This page gives the reasoning behind the gateway's compose project, [`gateway/`](../gateway/), and
+the mise tasks that operate it, one section per service. Each compose file, Dockerfile, and service
+configuration points at its section with a `See` line. agentgateway's own configuration is in
 [`agentgateway-config.md`](agentgateway-config.md).
 
 ## The compose project
@@ -46,8 +46,7 @@ latest GitHub release.
 ## agentgateway
 
 [`gateway/agentgateway.yml`](../gateway/agentgateway.yml) runs agentgateway from the image
-deploy.env pins (`AGW_IMAGE`, read from the project's .env, which the deploy copies from
-deploy.env), as the deploy ran it before the compose project. Two exceptions to the compose
+deploy.env pins (`AGW_IMAGE`, read from the project's .env). It makes two exceptions to the compose
 convention, both recorded in [`findings/priority.md`](findings/priority.md):
 
 - The image is pulled, not built: agentgateway's image pin stays in deploy.env, where the deploy
@@ -65,7 +64,7 @@ makes `up` create the container again.
 
 The service's settings:
 
-- **A fixed container name**, as the deploy gave it before: the step helpers read
+- **A fixed container name**, `agentgateway`: the step helpers read
   `docker stats agentgateway` and `docker logs agentgateway` on gb10-2.
 - **The deploying user**, so the container reads the config it owns and writes nothing as root.
 - **Ports.** The consumer port on gb10-2's tailnet address, and the UI's on its loopback, reached
@@ -108,6 +107,10 @@ from postgres.env at run time. The image is healthy once the server accepts TCP 
 agentgateway database; agentgateway starts only then, since it connects to its database once, at
 start. The probe goes over TCP, not the socket, because the first start's initialization runs a
 temporary server on the socket alone, which would report ready before the real server starts.
+
+Postgres won't start on a volume an earlier major version initialized, so a deploy that moves the
+image to a new major version, as from 18 to 19, needs `mise run gateway:reset` first, which drops
+the volume. The volume's request log and budget counts are spike data, not worth keeping.
 
 ## The Collector
 
@@ -199,9 +202,8 @@ stack up itself.
 
 [`mise.toml`](../mise.toml) pins the tools the check, currency, and the deploy use. marathon's
 release, `github:standards-lab/claude-plugins` at its `marathon/v` tag, provides lint-context and
-lint-references, which `mise run check` runs. Tasks never
-install a missing tool (`task.run_auto_install = false`); `mise install` is the one step that reads
-the network. crane lists an image's tags for `mise run currency`, which compares each compose
+lint-references, which `mise run check` runs. Tasks never install a missing tool
+(`task.run_auto_install = false`); `mise install` is the one step that reads the network. crane lists an image's tags for `mise run currency`, which compares each compose
 Dockerfile's FROM pin; go builds the retry test's module ([`retry/`](../retry/)), which
 `mise run check` vets and tests. `mise run currency` reports every pin behind its latest: the mise
 tools of mise.toml and of the bench environment, agentgateway's image in deploy.env, and each

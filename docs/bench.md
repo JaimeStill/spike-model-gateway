@@ -1,7 +1,7 @@
 # The benchmark cells
 
-The load, sizing, and derivation of each GuideLLM scenario in [`bench/`](../bench/), one section
-per file; each file's header points at its section with a `See` line. How the cells are run and
+This page gives the load, sizing, and derivation of each GuideLLM scenario in [`bench/`](../bench/),
+one section per file. Each file's header points at its section with a `See` line. How the cells are run and
 read is in [`bench/README.md`](../bench/README.md).
 
 ## The backend check

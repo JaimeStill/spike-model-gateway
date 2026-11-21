@@ -1,7 +1,7 @@
 # The retry test
 
-The reasoning behind the Go retry test, [`retry/`](../retry/): what each case expects of the
-gateway and why each check reads a refusal as the gateway's own. The package comment in
+This page gives the reasoning behind the Go retry test, [`retry/`](../retry/): what each case
+expects of the gateway, and why each check reads a refusal as the gateway's own. The package comment in
 [`retry/record_test.go`](../retry/record_test.go) gives the environment each case runs with, and
 `retry_case` in [`scripts/clients-lib.sh`](../scripts/clients-lib.sh) runs one case.
 
