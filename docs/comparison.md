@@ -317,7 +317,7 @@ page documents a client-directed flow through `/.auth/login/<provider>`.
 
 **The production shape.** Production has no tailnet. A containerized service on Azure Container
 Apps will route inference between Azure AI Foundry and the self-hosted stack, by request and
-availability (`standards-lab/context/ai-hosting.md`, "Experiment: experiment.hosting").
+availability (`standards-lab/context/ai-hosting.md`, "Production").
 
 **What Azure Container Apps provides** ([ingress][aca-ingress]):
 
@@ -416,9 +416,10 @@ R1 Q8).
 ## A cheaper chat tier
 
 **What it means here.** Chat requests that don't need gpt-oss-120b go to a cheaper model, such as
-Gemma 4 26B-A4B, and gpt-oss-120b is kept for the tasks that need it (coordinator `roadmap.toml`,
-spike-model-gateway's summary, as first written). In this layout Gemma 4 26B-A4B is the vision row
-on gb10-2, so a cheaper chat tier shares vision's row, its cap of 16, and its queue.
+Gemma 4 26B-A4B, and gpt-oss-120b is kept for the tasks that need it (coordinator
+`standards-lab/roadmap/index.toml`, spike-model-gateway's summary, as first written). In this layout
+Gemma 4 26B-A4B is the vision row on gb10-2, so a cheaper chat tier shares vision's row, its cap of
+16, and its queue.
 
 **Two ways to reach it.**
 

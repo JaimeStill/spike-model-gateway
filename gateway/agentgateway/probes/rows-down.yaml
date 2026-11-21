@@ -1,17 +1,5 @@
-# The row-down probe (the priority task's behavior 7, and the tiers' overflow run, behavior 10):
-# every row's provider points at a closed port on its own host, 8009, which no row or service
-# listens on, so each connection to a row is refused while the rows themselves keep running. A
-# refused connection is unhealthy to each row's health policy (config.yaml, &row-health); after two
-# in a row the row is evicted, and each alias is answered by its Azure AI Foundry deployment under
-# the alias, as when a row is really down. The row's host stays its own, so nothing fails over
-# between hosts. The overlay replaces each row provider's hostOverride, a key YAML can't hold twice,
-# with a `replace` directive. Applied by `scripts/agentgateway-deploy.sh rows-down`, removed by a
-# deploy without it, which returns each alias to its row once the row's eviction ends (5 s, longer
-# after repeated evictions).
-#
-# Every request sent while it is applied reaches Azure and counts against the task's cap of
-# Azure-answered requests: 300 in the priority task, 80 in the answer task (scripts/clients-lib.sh,
-# azure_count).
+# Probe overlay: every row's provider pointed at a closed port, 8009.
+# See docs/agentgateway-config.md#rows-down
 #@ replace           hostOverride: gb10-1:8000
           hostOverride: gb10-1:8009
 #@ replace           hostOverride: gb10-2:8000

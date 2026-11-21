@@ -25,7 +25,7 @@ purpose alias.**
   (agent, vision, audio, embedding), whose `/models` lists that alias alone. go-ai and the infer
   CLI work through it with only the base URL and key changed
   ([`agentgateway.md`](findings/agentgateway.md), "Behavior 3"; [`answer.md`](findings/answer.md),
-  "Step 2 · rows up (behavior 3)", and at the clients' pin, go-ai v0.3.0, "At v0.3.0"). One thing
+  "Step 2 · rows up (behavior 3)", and at go-ai v0.3.0, "At v0.3.0"). One thing
   doesn't come through: the served model's `root` (requirement 1, "`root` through the gateway").
 - **Access control without the tailnet.** Gateway-issued keys that reach the serving endpoints
   only. Making the gateway the only network path to the rows is production's concern, for the

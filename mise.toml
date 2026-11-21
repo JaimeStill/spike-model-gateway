@@ -1,17 +1,17 @@
-# Tasks never install a missing tool; `mise install` is the one step that reads the network.
+# The spike's tools and the tasks that check, report currency, deploy, and operate the stack.
+# See docs/stack.md#the-tools
 [settings]
 task.run_auto_install = false
 
 [tools]
+"github:standards-lab/claude-plugins" = { version = "0.22.0", version_prefix = "marathon/v" }
 jq = "1.8.2"
 shellcheck = "0.11.0"
-# Lists an image's tags for `mise run currency`, which compares each compose Dockerfile's FROM pin.
 crane = "0.22.1"
-# The retry test's module (retry/), which `mise run check` vets and tests.
 go = "1.27.4"
 
 [tasks.check]
-description = "Shellcheck every tracked shell script, resolve every relative Markdown link, and vet and test the retry module; reads no network but the Go module proxy on a cold cache, writes nothing tracked"
+description = "Shellcheck every tracked shell script, resolve every relative Markdown link, vet and test the retry module, and run lint-context and lint-references; reads no network but the Go module proxy on a cold cache, writes nothing tracked"
 run = "scripts/check.sh"
 
 [tasks.currency]
@@ -28,10 +28,7 @@ quiet = true
 description = "Deploy the gateway's compose project (agentgateway, Postgres, and the Collector, Tempo, and Grafana) to gb10-2 over Tailscale SSH, idempotently, printing each command run"
 run = "scripts/agentgateway-deploy.sh"
 
-# The gateway's compose project on gb10-2 (gateway/compose.yml), as the deploy left it in
-# ~/gateway: each task runs gateway/compose.sh there over Tailscale SSH. Postgres's data, Tempo's
-# traces, and Grafana's state live in named volumes, which down keeps and reset drops. A config or
-# project change goes out with `mise run agentgateway-deploy`, which brings the stack up itself.
+# See docs/stack.md#operating-the-stack
 [tasks."gateway:up"]
 description = "Build and start the gateway's compose stack on gb10-2 (agentgateway, Postgres, the Collector, Tempo, and Grafana) and wait until it is up"
 run = "ssh gb10-2 gateway/compose.sh up --detach --wait --build"
@@ -44,17 +41,10 @@ run = "ssh gb10-2 gateway/compose.sh down"
 description = "Stop the gateway's compose stack on gb10-2 and drop Postgres's, Tempo's, and Grafana's volumes"
 run = "ssh gb10-2 gateway/compose.sh down --volumes"
 
-# The gateway's UI, published on gb10-2's loopback only (gateway/agentgateway.yml), reached from the
-# laptop through an SSH tunnel: http://localhost:3001/ui while it runs, its Logs and Analytics pages
-# reading the request log in Postgres. The tunnel holds the terminal until Ctrl-C.
 [tasks."gateway:ui"]
 description = "Tunnel the gateway's UI from gb10-2's loopback to the laptop's localhost:3001 until Ctrl-C"
 run = "ssh -N -L 3001:127.0.0.1:3001 gb10-2"
 
-# Grafana, published on gb10-2's loopback only (gateway/grafana.yml), reached from the laptop
-# through an SSH tunnel as the UI is: http://localhost:3002 while it runs, its Explore page
-# searching the stack's traces in Tempo, with no login (anonymous admin). The tunnel holds the
-# terminal until Ctrl-C.
 [tasks."gateway:grafana"]
 description = "Tunnel Grafana from gb10-2's loopback to the laptop's localhost:3002 until Ctrl-C"
 run = "ssh -N -L 3002:127.0.0.1:3002 gb10-2"

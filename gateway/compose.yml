@@ -1,19 +1,6 @@
-# The gateway's stack on gb10-2: agentgateway in front of the four rows, the Postgres it keeps its
-# state in, and its traces: the OpenTelemetry Collector that agentgateway and the rows send spans
-# to, Tempo, which stores them, and Grafana, which searches them. It follows go-web-service's
-# compose convention (~/architecture's go-web-service/compose/README.md): this file names the
-# project and includes one file per service group, and each service but agentgateway builds from
-# its own Dockerfile, whose FROM line is its one pin; the three trace services are its
-# observability profile's, at its pins, though here they always run.
-#
-# It runs from ~/gateway on gb10-2, where scripts/agentgateway-deploy.sh copies this directory's
-# compose files and build contexts, gateway/compose.sh, deploy.env as the project's .env, the
-# rendered config, and Postgres's env file, then runs
-# `gateway/compose.sh up --detach --wait --build`. compose.sh sets the values read at run time on
-# gb10-2 (the tailnet addresses, the user, the config section's hash), so none is written down.
-# Every service restarts with the host unless it was stopped (`restart: unless-stopped`).
-# `mise run gateway:up`, `gateway:down`, and `gateway:reset` act on the deployed project over
-# SSH; down keeps the named volumes, Postgres's, Tempo's, and Grafana's, and reset drops them.
+# The gateway's compose project on gb10-2: agentgateway, Postgres, and its traces' services.
+# See docs/stack.md#the-compose-project
+# See docs/stack.md#operating-the-stack
 name: gateway
 
 include:

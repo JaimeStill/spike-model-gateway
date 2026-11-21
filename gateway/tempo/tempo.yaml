@@ -1,6 +1,5 @@
-# The gateway's Tempo (gateway/tempo.yml), go-web-service's configuration with only the receiver
-# the Collector sends to. Its HTTP API, on 3200, serves Grafana and the session's trace reads
-# (scripts/clients-lib.sh, traces), both from inside the compose network; no port is published.
+# The gateway's Tempo: go-web-service's configuration with only the Collector's receiver.
+# See docs/stack.md#tempo
 server:
   http_listen_port: 3200
 
@@ -8,17 +7,9 @@ distributor:
   receivers:
     otlp:
       protocols:
-        # Tempo 3 binds receivers to localhost by default; the Collector reaches this one over the
-        # compose network.
         grpc:
           endpoint: 0.0.0.0:4317
 
-# Tempo 3 replaced the ingester with the live-store, which the single-binary target feeds
-# directly (no Kafka). Its defaults cut blocks every 30s and hold them for 20m, so nothing here
-# overrides them.
-
-# Block retention is a compaction setting; the single-binary target runs both the scheduler that
-# plans compaction jobs and the worker that runs them, and each reads its own copy.
 backend_scheduler:
   provider:
     compaction:
@@ -29,7 +20,6 @@ backend_worker:
   compaction:
     block_retention: 24h
 
-# Local storage, in the named volume gateway/tempo.yml mounts at /var/tempo.
 storage:
   trace:
     backend: local

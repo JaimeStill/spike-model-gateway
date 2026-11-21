@@ -1,27 +1,10 @@
-# O-agent, the agentgateway task's agent overhead cell (behavior 7): the agent row, gpt-oss-120b
-# with FP8 KV (gpt-oss-120b-agent-fp8 on gb10-1's 8000), at the agent's target of 4 sessions for
-# 110 s, run three times, direct, then through the gateway, then direct. Copied from
-# spike-model-layout's bench/vllm-layout-agent.yaml, its sessions and level length unchanged:
-# GuideLLM's multi-turn synthetic conversation, 4 turns, the first 8,192 prompt tokens and the next
-# three 512 each, every turn exactly 512 output tokens, each turn sent when the last one's reply
-# ends. Adapted: one level, 4, where layout swept 4 and 12; the model is the alias, agent, given on
-# the command line with its tokenizer (openai/gpt-oss-120b) by `cell`, which sets the target, a
-# base URL, in GUIDELLM__SPEC__BACKEND__TARGET, and for a gateway run the key in
-# GUIDELLM__SPEC__BACKEND__API_KEY; and the backend check reads /v1/models (below). Run from the
-# repository root.
-#
-# The priority task's benchmark B runs it with the go-ai key inside bulk-vision-150.yaml, and
-# alone, direct and through the gateway, as B's anchors. Azure: none. Its 4 sessions stay under
-# the agent row's queue limit of 24 (twice its cap of 12, --max-num-queued-reqs), so the row never
-# refuses with 503 and nothing overflows to gpt-oss-120b while the rows are up.
+# O-agent: the agent row at its target of 4 sessions, direct and through the gateway.
+# See docs/bench.md#overhead-agent
 spec:
   backend:
     kind: openai_http
     request_format: /v1/chat/completions
-    # GuideLLM checks the backend before a run with GET <target>/health, the target's /v1 cut off.
-    # Through the gateway that is /agent/health, which no route serves (404), so the check reads
-    # /v1/models instead, direct and through the gateway alike; through the gateway it also proves
-    # the key before any load is sent.
+    # See docs/bench.md#the-backend-check
     api_routes:
       /health: v1/models
   profile:
@@ -33,7 +16,6 @@ spec:
       first_prompt_tokens: 8192
       prompt_tokens: 512
       output_tokens: 512
-  # The level stops at 110 s; the sessions in flight then are counted incomplete.
   constraints:
     - kind: max_duration
       seconds: 110

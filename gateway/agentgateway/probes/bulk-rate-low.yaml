@@ -1,11 +1,5 @@
-# The per-key bucket probe (the priority task's behavior 14): bulk's request-rate bucket on the
-# agent, vision, and audio routes lowered from 600 requests a minute to 2, so bulk's third request
-# within a minute is answered 429 with Retry-After by the gateway, while another key's bucket, 1,200
-# a minute, keeps answering on the same alias. Each route's bucket is its own, so bulk has 2 a
-# minute on each. It replaces the two lines of bulk's entry in config.yaml's &key-rates, which the
-# vision and audio routes alias. A rule's buckets start full when a reload changes it. Applied by
-# `scripts/agentgateway-deploy.sh bulk-rate-low`, removed by a deploy without it. Its 429 is the
-# gateway's own, so it evicts nothing and sends nothing to Azure.
+# Probe overlay: bulk's request-rate bucket lowered to 2 a minute.
+# See docs/agentgateway-config.md#bulk-rate-low
 #@ replace         maxTokens: 600
         maxTokens: 2
 #@ replace         tokensPerFill: 600

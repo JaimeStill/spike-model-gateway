@@ -1,40 +1,10 @@
-# C-embed, benchmark A's embedding run (the priority task's behavior 17; evidence 5): the embedding
-# row, granite (embedding on the Framework's 8002), through the gateway only, with the bench key,
-# 160 requests in flight for 90 s, held by the embedding route's global limit of 34 requests a
-# second (gateway/agentgateway/config.yaml): the gateway admits a burst of 34 and then 34 a second,
-# and answers the rest 429 with Retry-After itself. The go-ai key's O-audio (overhead-audio.yaml, 4
-# streams, 30 s or 64 requests) starts inside it, in a second terminal, about 20 s in, once the
-# load has settled, and is read with `rtfx` beside its anchors, O-audio alone direct and through
-# the gateway. A reads whether the bucket's burst of 34 lets audio hold its RTFx median at 5 or
-# more; a miss escalates to a paced bucket. Derived from cap-embed.yaml, its requests unchanged:
-# 512 synthetic tokens to /v1/embeddings, each sent as the last one's reply arrives. Adapted: one
-# level, 160, for 90 s, where the cap cell ran 128 and then 160 for 60 s each.
-#
-# Azure: none. The 429 is the gateway's own, answered before any backend, so it never reaches the
-# row or evicts it; the embedding row has no queue limit, so it never answers 503, and nothing
-# fails over to text-embedding-3-small unless the row's connection fails twice in a row. Audio's 4
-# streams stay under its queue limit of 8. So the run sends nothing to Azure while the rows are up;
-# azure_count after the pair shows none.
-#
-# Load: a refused request returns at once, and each of the 160 is sent again as its 429 arrives, so
-# the gateway answers far more 429s than 34 a second, about 160 a round trip, each an access log
-# line and a request log row in Postgres. The gateway's CPU in this run is its 429s' as much as its
-# forwarding's. Run with `cap`, the cell also reads the row's running and waiting counts and every
-# reply's status and Retry-After from the access log. The bench key's budget only audits, so the
-# run's 1,570,000 or so tokens refuse nothing.
-#
-# The model is the alias, embedding, given on the command line with its tokenizer
-# (ibm-granite/granite-embedding-english-r2) by `cell`, which sets the target, the gateway's base
-# URL, in GUIDELLM__SPEC__BACKEND__TARGET, the key, bench by default, in
-# GUIDELLM__SPEC__BACKEND__API_KEY, and the run's own seed. Run from the repository root.
+# Benchmark A's embedding run: 160 in flight, held to 34 a second by the route's limit.
+# See docs/bench.md#limited-embed
 spec:
   backend:
     kind: openai_http
     request_format: /v1/embeddings
-    # GuideLLM checks the backend before a run with GET <target>/health, the target's /v1 cut off.
-    # Through the gateway that is /embedding/health, which no route serves (404), so the check
-    # reads /v1/models instead, which the gateway answers itself and which also proves the key
-    # before any load is sent.
+    # See docs/bench.md#the-backend-check
     api_routes:
       /health: v1/models
   profile:
@@ -43,7 +13,6 @@ spec:
   data:
     - kind: synthetic_text
       prompt_tokens: 512
-  # The level stops at 90 s; the requests in flight then are counted incomplete.
   constraints:
     - kind: max_duration
       seconds: 90

@@ -53,6 +53,7 @@
 # as written, and what gateway/compose.sh looks up there (each tailnet address, the user) expands
 # there, so the consumer port is published on gb10-2's tailnet address with no address written
 # down or printed. Needs no root.
+# See docs/scripts.md#the-deploy
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -60,231 +61,234 @@ host=gb10-2
 # shellcheck disable=SC1091 # check.sh runs shellcheck without -x; deploy.env is assignments.
 source gateway/agentgateway/deploy.env
 
-# Prints the command given, then runs it on gb10-2, where it expands.
+config=gateway/agentgateway/config.yaml
+state=.state/agentgateway
+keys=$state/keys
+top_key='^([A-Za-z][A-Za-z0-9]*):'
+comment_secret='^[[:space:]]*#.*@@secret:[a-z0-9-]+@@|[[:space:]]#.*@@secret:[a-z0-9-]+@@'
+marker='^(.*)sha256:@@([a-z0-9-]+)@@(.*)$'
+secret='^(.*)@@secret:([a-z0-9-]+)@@(.*)$'
+project=(compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env
+  otel-collector.yml otel-collector tempo.yml tempo grafana.yml grafana)
+declare -A hashes secrets
+lines=()
+rendered=
+pg_env=
+
 on_host() {
   printf '+ %s %s: %s\n' "$(date -Iseconds)" "$host" "$1" >&2
   # shellcheck disable=SC2029 # The command is built to expand on gb10-2.
   ssh "$host" "$1"
 }
 
-# Prints the command given, as run on the laptop.
 on_laptop() {
   printf '+ %s laptop: %s\n' "$(date -Iseconds)" "$1" >&2
 }
 
-config=gateway/agentgateway/config.yaml
-state=.state/agentgateway
-keys=$state/keys
-
-# Keys. config.yaml commits each key's name only, as the marker `keyHash: sha256:@@<name>@@`; the
-# names are read from the markers, so adding an entry is all it takes to issue a key; a name listed
-# twice is one key. A missing key is created on this machine, 0600 in a 0700 directory, and an
-# existing one is reused, so a re-run changes nothing. Only names are printed: no key or hash
-# reaches the terminal or the command log.
-umask 077
-mkdir -p "$keys"
-chmod 700 "$state" "$keys"
-mapfile -t names < <(grep -oP '^\s*- keyHash: sha256:@@\K[a-z0-9-]+(?=@@\s*$)' "$config" | sort -u)
-if ((${#names[@]} == 0)); then
-  echo "agentgateway: no key markers in $config" >&2
-  exit 1
-fi
-declare -A hashes
-for name in "${names[@]}"; do
-  if [[ -e $keys/$name ]]; then
-    echo "key $name: existing"
-  else
-    openssl rand -hex 32 >"$keys/$name"
-    echo "key $name: created"
-  fi
-  key=$(<"$keys/$name")
-  # agentgateway's hash of a presented key: sha256 of its exact characters, no newline, as lowercase
-  # hex (APIKeyHash::from_raw_key). printf is a builtin, so the key is never in a process's argv.
-  hash=$(printf %s "$key" | sha256sum)
-  hashes[$name]=${hash%% *}
-done
-
-# Secrets, as the header lists them. Postgres's password is created like a key, once, and reused;
-# Postgres reads it only when it first initializes its volume, so it must not change after, except
-# through pg_password_rotate (scripts/clients-lib.sh), which changes it in Postgres first; the next
-# deploy then sends the new one.
-declare -A secrets
-if [[ -e $state/postgres-password ]]; then
-  echo "secret postgres-password: existing"
-else
-  openssl rand -hex 32 >"$state/postgres-password"
-  echo "secret postgres-password: created"
-fi
-secrets[postgres-password]=$(<"$state/postgres-password")
-if [[ -s .state/azure/key ]]; then
-  secrets[azure-key]=$(<.state/azure/key)
-  echo "secret azure-key: read"
-fi
-if [[ -s .state/azure/account.env ]]; then
-  # Read as assignments, not sourced: each value is the line's text after `=`, quotes stripped.
-  while IFS='=' read -r var value; do
-    value=${value%\"} value=${value#\"} value=${value%\'} value=${value#\'}
-    [[ $var != AZURE_ACCOUNT ]] || secrets[azure-account]=$value
-  done <.state/azure/account.env
-  [[ -z ${secrets[azure-account]+set} ]] || echo "secret azure-account: read"
-fi
-# A value is substituted into YAML and a URL as it is, so it may hold only these characters.
-for name in "${!secrets[@]}"; do
-  if [[ ! ${secrets[$name]} =~ ^[A-Za-z0-9._-]+$ ]]; then
-    echo "agentgateway: secret $name holds a character other than A-Z, a-z, 0-9, ., _ or -; nothing was sent" >&2
+hash_each_key_creating_missing() {
+  local names name key hash
+  umask 077
+  mkdir -p "$keys"
+  chmod 700 "$state" "$keys"
+  mapfile -t names < <(grep -oP '^\s*- keyHash: sha256:@@\K[a-z0-9-]+(?=@@\s*$)' "$config" | sort -u)
+  if ((${#names[@]} == 0)); then
+    echo "agentgateway: no key markers in $config" >&2
     exit 1
   fi
-done
+  for name in "${names[@]}"; do
+    if [[ -e $keys/$name ]]; then
+      echo "key $name: existing"
+    else
+      openssl rand -hex 32 >"$keys/$name"
+      echo "key $name: created"
+    fi
+    key=$(<"$keys/$name") || return
+    hash=$(printf %s "$key" | sha256sum) || return
+    hashes[$name]=${hash%% *}
+  done
+}
 
-# The overlays, applied to config.yaml's lines in memory, as the header describes; any refusal
-# stops the deploy before anything is sent.
+read_secrets_creating_postgres_password() {
+  local var value
+  if [[ -e $state/postgres-password ]]; then
+    echo "secret postgres-password: existing"
+  else
+    openssl rand -hex 32 >"$state/postgres-password"
+    echo "secret postgres-password: created"
+  fi
+  secrets[postgres-password]=$(<"$state/postgres-password") || return
+  if [[ -s .state/azure/key ]]; then
+    secrets[azure-key]=$(<.state/azure/key) || return
+    echo "secret azure-key: read"
+  fi
+  if [[ -s .state/azure/account.env ]]; then
+    while IFS='=' read -r var value; do
+      value=${value%\"} value=${value#\"} value=${value%\'} value=${value#\'}
+      [[ $var != AZURE_ACCOUNT ]] || secrets[azure-account]=$value
+    done <.state/azure/account.env
+    [[ -z ${secrets[azure-account]+set} ]] || echo "secret azure-account: read"
+  fi
+}
+
+refuse_secret_unsafe_in_yaml_or_url() {
+  local name
+  for name in "${!secrets[@]}"; do
+    if [[ ! ${secrets[$name]} =~ ^[A-Za-z0-9._-]+$ ]]; then
+      echo "agentgateway: secret $name holds a character other than A-Z, a-z, 0-9, ., _ or -; nothing was sent" >&2
+      exit 1
+    fi
+  done
+}
+
 overlay_fail() {
   echo "agentgateway: overlay $1: $2; nothing was sent" >&2
   exit 1
 }
-mapfile -t lines <"$config"
-top_key='^([A-Za-z][A-Za-z0-9]*):'
-for overlay in "$@"; do
-  file=gateway/agentgateway/probes/$overlay.yaml
-  [[ $overlay =~ ^[a-z0-9-]+$ && -f $file ]] || overlay_fail "$overlay" "no $file"
-  mapfile -t body <"$file"
-  body+=('#@ end')
-  mode='' anchor='' section=()
-  for raw in "${body[@]}"; do
-    if [[ $raw == '#@ '* ]]; then
-      # The section read so far is placed before the next one is read.
-      case $mode in
-        append)
-          for l in "${section[@]}"; do
-            [[ $l =~ $top_key ]] || continue
-            for have in "${lines[@]}"; do
-              [[ $have != "${BASH_REMATCH[1]}:"* ]] ||
-                overlay_fail "$overlay" "top-level ${BASH_REMATCH[1]} is in the config already"
-            done
-          done
-          lines+=("${section[@]}")
-          ;;
-        after | replace)
-          at=() i=
-          for i in "${!lines[@]}"; do
-            [[ ${lines[i]} != "$anchor" ]] || at+=("$i")
-          done
-          ((${#at[@]} == 1)) ||
-            overlay_fail "$overlay" "${#at[@]} lines equal \"$anchor\"; one is needed"
-          # after keeps the anchor line, replace drops it.
-          keep=$((at[0] + 1))
-          [[ $mode == after ]] || keep=${at[0]}
-          lines=("${lines[@]:0:keep}" "${section[@]}" "${lines[@]:at[0]+1}")
-          ;;
-      esac
-      section=()
-      case $raw in
-        '#@ append') mode=append ;;
-        '#@ after '*) mode=after anchor=${raw#'#@ after '} ;;
-        '#@ replace '*) mode=replace anchor=${raw#'#@ replace '} ;;
-        '#@ end') mode= ;;
-        *) overlay_fail "$overlay" "unknown directive \"$raw\"" ;;
-      esac
-    elif [[ -n $mode ]]; then
-      section+=("$raw")
-    elif [[ -n ${raw//[[:space:]]/} && $raw != '#'* ]]; then
-      overlay_fail "$overlay" "a line before its first directive isn't a comment"
-    fi
-  done
-  echo "overlay $overlay: applied"
-done
 
-# A secret marker in a comment, checked on the copy's lines before any is rendered: a whole-line
-# comment, or a ` #` comment after a value. The line is named by its number in the copy before
-# its overlays header, which is config.yaml's own number when no overlay applies, and printed as
-# committed, so it holds the marker's name and no secret.
-comment_secret='^[[:space:]]*#.*@@secret:[a-z0-9-]+@@|[[:space:]]#.*@@secret:[a-z0-9-]+@@'
-refused=0
-for i in "${!lines[@]}"; do
-  if [[ ${lines[i]} =~ $comment_secret ]]; then
-    printf 'agentgateway: line %d of the copy (%s, overlays: %s) holds a secret marker in a comment: %s\n' \
-      $((i + 1)) "$config" "${*:-none}" "${lines[i]}" >&2
-    refused=1
-  fi
-done
-if ((refused)); then
-  echo "agentgateway: a comment would carry its secret to gb10-2 in clear text; nothing was sent" >&2
-  exit 1
-fi
+place_overlay_section() {
+  local overlay=$1 mode=$2 anchor=$3 l have at=() i keep
+  shift 3
+  case $mode in
+    append)
+      for l in "$@"; do
+        [[ $l =~ $top_key ]] || continue
+        for have in "${lines[@]}"; do
+          [[ $have != "${BASH_REMATCH[1]}:"* ]] ||
+            overlay_fail "$overlay" "top-level ${BASH_REMATCH[1]} is in the config already"
+        done
+      done
+      lines+=("$@")
+      ;;
+    after | replace)
+      for i in "${!lines[@]}"; do
+        [[ ${lines[i]} != "$anchor" ]] || at+=("$i")
+      done
+      ((${#at[@]} == 1)) ||
+        overlay_fail "$overlay" "${#at[@]} lines equal \"$anchor\"; one is needed"
+      keep=$((at[0] + 1))
+      [[ $mode == after ]] || keep=${at[0]}
+      lines=("${lines[@]:0:keep}" "$@" "${lines[@]:at[0]+1}")
+      ;;
+  esac
+}
 
-# The copy sent to gb10-2: config.yaml, its overlays applied, with each key marker replaced by its
-# key's hash and each secret marker by its value. It is written only under .state/, which is
-# untracked, and removed on exit, as is Postgres's env file. Replaced in bash, not by sed, so no
-# hash or secret is in a command's argv either.
-rendered=$(mktemp "$state/config.rendered.XXXXXX.yaml")
-pg_env=$(mktemp "$state/postgres.XXXXXX.env")
-trap 'rm -f "$rendered" "$pg_env"' EXIT
-marker='^(.*)sha256:@@([a-z0-9-]+)@@(.*)$'
-secret='^(.*)@@secret:([a-z0-9-]+)@@(.*)$'
-{
-  printf '# overlays: %s\n' "${*:-none}"
-  for line in "${lines[@]}"; do
-    if [[ $line =~ $marker && -n ${hashes[${BASH_REMATCH[2]}]+set} ]]; then
-      line="${BASH_REMATCH[1]}sha256:${hashes[${BASH_REMATCH[2]}]}${BASH_REMATCH[3]}"
-    fi
-    # A line may name more than one secret; the last is replaced first. One with no value stays,
-    # and the check below refuses it.
-    while [[ $line =~ $secret && -n ${secrets[${BASH_REMATCH[2]}]+set} ]]; do
-      line="${BASH_REMATCH[1]}${secrets[${BASH_REMATCH[2]}]}${BASH_REMATCH[3]}"
+apply_overlays() {
+  local overlay file body mode anchor section raw
+  mapfile -t lines <"$config"
+  for overlay in "$@"; do
+    file=gateway/agentgateway/probes/$overlay.yaml
+    [[ $overlay =~ ^[a-z0-9-]+$ && -f $file ]] || overlay_fail "$overlay" "no $file"
+    mapfile -t body <"$file"
+    body+=('#@ end')
+    mode='' anchor='' section=()
+    for raw in "${body[@]}"; do
+      if [[ $raw == '#@ '* ]]; then
+        place_overlay_section "$overlay" "$mode" "$anchor" "${section[@]}"
+        section=()
+        case $raw in
+          '#@ append') mode=append ;;
+          '#@ after '*) mode=after anchor=${raw#'#@ after '} ;;
+          '#@ replace '*) mode=replace anchor=${raw#'#@ replace '} ;;
+          '#@ end') mode= ;;
+          *) overlay_fail "$overlay" "unknown directive \"$raw\"" ;;
+        esac
+      elif [[ -n $mode ]]; then
+        section+=("$raw")
+      elif [[ -n ${raw//[[:space:]]/} && $raw != '#'* ]]; then
+        overlay_fail "$overlay" "a line before its first directive isn't a comment"
+      fi
     done
-    printf '%s\n' "$line"
+    echo "overlay $overlay: applied"
   done
-} >"$rendered"
-printf 'POSTGRES_PASSWORD=%s\n' "${secrets[postgres-password]}" >"$pg_env"
-# A marker left over, or a keyHash that isn't a full hash, would deploy a key list that admits no
-# one under that name, or a secret that isn't one; stop before anything is sent. Only the
-# markers' names are printed.
-if left=$(grep -oP '@@\K[a-z0-9:-]+(?=@@)' "$rendered" | sort -u | paste -sd' ') && [[ -n $left ]]; then
-  echo "agentgateway: markers with no value in the rendered config: $left; nothing was sent" >&2
-  exit 1
-fi
-# One grep, not two piped: under pipefail, the first one's SIGPIPE when -q stops reading early
-# would fail the pipeline and pass a bad keyHash.
-if grep -qP '^\s*- keyHash:(?! sha256:[0-9a-f]{64}\s*$)' "$rendered"; then
-  echo "agentgateway: a keyHash that isn't a full hash is in the rendered config; nothing was sent" >&2
-  exit 1
-fi
+}
 
-on_host 'mkdir -p ~/gateway/agentgateway'
+refuse_secret_marker_in_comment() {
+  local i refused=0
+  for i in "${!lines[@]}"; do
+    if [[ ${lines[i]} =~ $comment_secret ]]; then
+      printf 'agentgateway: line %d of the copy (%s, overlays: %s) holds a secret marker in a comment: %s\n' \
+        $((i + 1)) "$config" "${*:-none}" "${lines[i]}" >&2
+      refused=1
+    fi
+  done
+  if ((refused)); then
+    echo "agentgateway: a comment would carry its secret to gb10-2 in clear text; nothing was sent" >&2
+    exit 1
+  fi
+}
 
-# The compose project, as gateway/ holds it, with deploy.env as the project's .env, the values its
-# compose files read; the rendered config and Postgres's env file follow, each its own copy. The
-# trace services' build contexts go whole, each directory as the image copies it.
-project=(compose.yml agentgateway.yml postgres.yml postgres/Dockerfile compose.sh agentgateway/deploy.env
-  otel-collector.yml otel-collector tempo.yml tempo grafana.yml grafana)
-on_laptop "tar -C gateway --transform 's,^agentgateway/deploy.env\$,.env,' -cf - ${project[*]} | ssh $host 'tar -C ~/gateway -xf -'"
-tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - "${project[@]}" |
-  ssh "$host" 'tar -C ~/gateway -xf -'
+render_copy_in_bash() {
+  local line
+  rendered=$(mktemp "$state/config.rendered.XXXXXX.yaml") || return
+  pg_env=$(mktemp "$state/postgres.XXXXXX.env") || return
+  trap 'rm -f "$rendered" "$pg_env"' EXIT
+  {
+    printf '# overlays: %s\n' "${*:-none}"
+    for line in "${lines[@]}"; do
+      if [[ $line =~ $marker && -n ${hashes[${BASH_REMATCH[2]}]+set} ]]; then
+        line="${BASH_REMATCH[1]}sha256:${hashes[${BASH_REMATCH[2]}]}${BASH_REMATCH[3]}"
+      fi
+      while [[ $line =~ $secret && -n ${secrets[${BASH_REMATCH[2]}]+set} ]]; do
+        line="${BASH_REMATCH[1]}${secrets[${BASH_REMATCH[2]}]}${BASH_REMATCH[3]}"
+      done
+      printf '%s\n' "$line"
+    done
+  } >"$rendered"
+  printf 'POSTGRES_PASSWORD=%s\n' "${secrets[postgres-password]}" >"$pg_env"
+}
 
-on_laptop "ssh $host 'umask 077 && cat > ~/gateway/postgres.env' < $state/postgres.<tmp>.env"
-ssh "$host" 'umask 077 && cat > ~/gateway/postgres.env' <"$pg_env"
+refuse_unrendered_marker_or_partial_hash() {
+  local left
+  if left=$(grep -oP '@@\K[a-z0-9:-]+(?=@@)' "$rendered" | sort -u | paste -sd' ') && [[ -n $left ]]; then
+    echo "agentgateway: markers with no value in the rendered config: $left; nothing was sent" >&2
+    exit 1
+  fi
+  if grep -qP '^\s*- keyHash:(?! sha256:[0-9a-f]{64}\s*$)' "$rendered"; then
+    echo "agentgateway: a keyHash that isn't a full hash is in the rendered config; nothing was sent" >&2
+    exit 1
+  fi
+}
 
-on_laptop "ssh $host 'cat > ~/gateway/agentgateway/config.yaml.next' < $state/config.rendered.<tmp>.yaml"
-ssh "$host" 'cat > ~/gateway/agentgateway/config.yaml.next' <"$rendered"
+send_project_and_copy() {
+  on_host 'mkdir -p ~/gateway/agentgateway'
 
-on_host "docker image inspect $AGW_IMAGE >/dev/null 2>&1 || docker pull $AGW_IMAGE"
+  on_laptop "tar -C gateway --transform 's,^agentgateway/deploy.env\$,.env,' -cf - ${project[*]} | ssh $host 'tar -C ~/gateway -xf -'"
+  tar -C gateway --transform 's,^agentgateway/deploy.env$,.env,' -cf - "${project[@]}" |
+    ssh "$host" 'tar -C ~/gateway -xf -'
 
-# The copy is validated as the container reads it: as the deploying user, its directory mounted
-# read-only. Validation parses the config and connects to nothing, Postgres included.
-on_host "docker run --rm --user \"\$(id -u):\$(id -g)\" --volume \"\$HOME/gateway/agentgateway:/config:ro\" \
+  on_laptop "ssh $host 'umask 077 && cat > ~/gateway/postgres.env' < $state/postgres.<tmp>.env"
+  ssh "$host" 'umask 077 && cat > ~/gateway/postgres.env' <"$pg_env"
+
+  on_laptop "ssh $host 'cat > ~/gateway/agentgateway/config.yaml.next' < $state/config.rendered.<tmp>.yaml"
+  ssh "$host" 'cat > ~/gateway/agentgateway/config.yaml.next' <"$rendered"
+}
+
+validate_copy_as_container_reads_it_and_move_into_place() {
+  on_host "docker image inspect $AGW_IMAGE >/dev/null 2>&1 || docker pull $AGW_IMAGE"
+  on_host "docker run --rm --user \"\$(id -u):\$(id -g)\" --volume \"\$HOME/gateway/agentgateway:/config:ro\" \
 $AGW_IMAGE -f /config/config.yaml.next --validate-only"
-# agentgateway follows config.yaml across the rename that moves a new copy into place.
-on_host 'mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml'
+  on_host 'mv ~/gateway/agentgateway/config.yaml.next ~/gateway/agentgateway/config.yaml'
+}
 
-# The container `docker run` created before the compose project holds the name and the ports
-# compose's agentgateway takes; it carries no compose project label. Removed once, on the first
-# compose deploy.
-owner=$(on_host "docker container inspect agentgateway \
---format '{{index .Config.Labels \"com.docker.compose.project\"}}' 2>/dev/null || echo absent")
-case $owner in
-  gateway | absent) ;;
-  *) on_host 'docker rm --force agentgateway' ;;
-esac
+remove_container_from_before_compose() {
+  local owner
+  owner=$(on_host "docker container inspect agentgateway \
+--format '{{index .Config.Labels \"com.docker.compose.project\"}}' 2>/dev/null || echo absent") || return
+  case $owner in
+    gateway | absent) ;;
+    *) on_host 'docker rm --force agentgateway' ;;
+  esac
+}
 
+hash_each_key_creating_missing
+read_secrets_creating_postgres_password
+refuse_secret_unsafe_in_yaml_or_url
+apply_overlays "$@"
+refuse_secret_marker_in_comment "$@"
+render_copy_in_bash "$@"
+refuse_unrendered_marker_or_partial_hash
+send_project_and_copy
+validate_copy_as_container_reads_it_and_move_into_place
+remove_container_from_before_compose
 on_host 'gateway/compose.sh up --detach --wait --build'
 on_host 'gateway/compose.sh ps --format "{{.Name}} {{.Image}} {{.Status}}"'
