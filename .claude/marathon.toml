@@ -1,4 +1,4 @@
-# marathon's settings for this spike, whose goals live in standards-lab/roadmap/index.toml.
+# marathon's settings for this spike.
 [project]
 kind = "context"
 check = "mise run check"

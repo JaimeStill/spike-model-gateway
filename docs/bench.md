@@ -24,8 +24,8 @@ The audio cells' requests, shared by [overhead-audio](#overhead-audio) and
   following speech segment in {LANGUAGE} into {LANGUAGE} text. ... Only output the transcription,
   with no newlines."), once a request: 73 of it, one a clip, where layout's footprint-l3.yaml's 32
   stopped the zip at its 32nd clip. Source 1 is hf-internal-testing/librispeech_asr_dummy, 73
-  clips from LibriSpeech's clean validation split, about 9 MB fetched once from Hugging Face (the
-  laptop's cache already holds it). Each level reads both sources from their start.
+  clips from LibriSpeech's clean validation split, about 9 MB fetched once from Hugging Face. Each
+  level reads both sources from their start.
 - **The columns.** Only the prompt and the clip: LibriSpeech's own text column is the reference
   transcript, which the mapper's defaults would otherwise send as the prompt.
 - **The encoding.** Every clip is re-encoded as 16 kHz mono WAV, as layout's cells sent it; the

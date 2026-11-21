@@ -5,10 +5,7 @@ The judgement calls the check can't enforce, one line each, for the standards-re
 
 The architecture pages that apply, in the architecture repository:
 
-- `principles/comments.md`: every comment is one of the five kinds, in Go source, tests, scripts,
-  and every configuration file (TOML, YAML, `.gitignore`, `.env`, Dockerfiles, compose); a script's
-  header is its package documentation, and a configuration file's header is a short description
-  plus `See` lines to the docs/ page that holds its reasoning.
+- `principles/comments.md`: the reasoning a comment points to lives in `docs/`.
 - `principles/minimal-footprint.md`
 - `principles/rolling-currency.md`
 - `principles/validation-first.md`

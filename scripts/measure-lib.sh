@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# The step helpers for the GuideLLM cells: the agentgateway task's overhead cells (its slice 2,
-# behavior 7) and cap cells (its slice 3, behavior 8), and the routing task's overhead cells.
+# The step helpers for the GuideLLM cells: the overhead cells and the cap cells.
 # Sourced from the repository root on the laptop, then called one step at a time in the architect's
 # view:
 #

@@ -7,9 +7,9 @@ expects of the gateway, and why each check reads a refusal as the gateway's own.
 
 ## infer's policy
 
-`inferDefault` is infer's default retry policy, as at tools/infer/v0.2.0: 3 attempts, the first
-wait at most 500 ms, every wait and the longest Retry-After honored at most 30 s (go-ai's
-tools/infer/README.md, "Retries").
+`inferDefault` is infer's default retry policy, as at tools/infer/v0.3.1 (unchanged since v0.2.0,
+where the cases were measured): 3 attempts, the first wait at most 500 ms, every wait and the
+longest Retry-After honored at most 30 s (go-ai's tools/infer/README.md, "Retries").
 
 ## The gateway's refusals
 

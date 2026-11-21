@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# The client steps through the gateway, each with a gateway-issued key: go-ai's integration tier
-# and infer's, the released infer CLI, and curl, for the routing task's behavior checks and probes
-# (and the agentgateway and priority tasks' before it), and the answer task's Go retry test.
+# The client steps through the gateway, each with a gateway-issued key: go-ai's and infer's
+# integration tiers, the released infer CLI, curl, and the Go retry test.
 # Sourced from the repository root on the laptop, then
 # called one step at a time in the architect's view:
 #
@@ -151,9 +150,8 @@
 # lasts as long as the container, which compose recreates only when the config's `config` section
 # or the stack changes, so the count is read after each step, not once at the end. What counts
 # toward the cap is Azure's 2xx and its 4xx other than 429; its 429s, refused without being
-# processed, are printed apart (the architect's decision after benchmark C-agent, 2026-11-16). The
-# cap is the task's, CLIENTS_AZURE_CAP: 20 in the max-tokens-note task (the answer task's was 80,
-# priority's 300); azure_count prints one step's count, and the finding sums the steps.
+# processed, are printed apart. The cap is the task's, CLIENTS_AZURE_CAP; azure_count prints one
+# step's count, and the finding sums the steps.
 #
 # Budgets and the request log (the priority task's behaviors 15 and 16). budget_status reads
 # agentgateway's own count, which the UI serves at /api/budgets/status, filtered by key name
@@ -165,21 +163,19 @@
 # caller's address and an overflow's endpoint, the Azure account's host. The UI itself is reached
 # through an SSH tunnel, `mise run gateway:ui`, at http://localhost:3001/ui.
 #
-# The audio rerun (the priority task's behavior 10, rerun after the review, 2026-11-17). go-ai's
-# two audio tests send a body past the 64 KiB the gateway buffers for a retry, so each is sent
-# once: while the audio row isn't evicted, it gets the row's 503 (a failed connection under
-# rows-down), not Azure's answer. A small text-only request is retried, so its failed attempts
-# evict the row and its last attempt reaches Azure, which answers 400 (gpt-audio-mini requires
-# audio); two are sent, so the row is evicted whatever its state. An eviction lasts 5 s times the
-# evictions so far (config.yaml, &row-health), and `go test` takes seconds to start, so each test
-# runs alone, right after its own warm-up. About 6 Azure requests in all: 4 warm-up 400s and the
-# 2 tests'. The helper refuses to run unless the deployed copy's first line names rows-down.
+# The audio rerun (the priority task's behavior 10). go-ai's two audio tests send a body past the
+# 64 KiB the gateway buffers for a retry, so each is sent once: while the audio row isn't evicted,
+# it gets the row's 503 (a failed connection under rows-down), not Azure's answer. A small text-only
+# request is retried, so its failed attempts evict the row and its last attempt reaches Azure, which
+# answers 400 (gpt-audio-mini requires audio); two are sent, so the row is evicted whatever its
+# state. An eviction lasts 5 s times the evictions so far (config.yaml, &row-health), and `go test`
+# takes seconds to start, so each test runs alone, right after its own warm-up. About 6 Azure
+# requests in all: 4 warm-up 400s and the 2 tests'. The helper refuses to run unless the deployed
+# copy's first line names rows-down.
 #
 # The priority rerun. The tests are those docs/findings/priority.md lists as failing on Azure, in
 # "The tiers on Azure" and "Per alias", rows down: top-level names, since one `go test -run` can't
-# select a subtest of one test beside another whole, so a test's passing subtests run too. Each
-# name was checked at tools/infer/v0.2.0 with `git grep 'func <Test>('`: none was renamed or moved
-# out of its tier.
+# select a subtest of one test beside another whole, so a test's passing subtests run too.
 #
 # The retry test (the answer task). retry_case runs retry/'s one test for the case, in a go test
 # of its own, with RETRY_CASE naming it, so its test runs and the others skip; each case expects
